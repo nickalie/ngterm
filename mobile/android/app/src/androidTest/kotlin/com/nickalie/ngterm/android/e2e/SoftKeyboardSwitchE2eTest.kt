@@ -21,12 +21,9 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.Until
 import com.nickalie.ngterm.android.MainActivity
 import com.nickalie.ngterm.android.R
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -59,7 +56,6 @@ class SoftKeyboardSwitchE2eTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val arguments = InstrumentationRegistry.getArguments()
     private val device = UiDevice.getInstance(instrumentation)
-    private val testPackage = instrumentation.context.packageName
     private val compose = createAndroidComposeRule<MainActivity>()
 
     /** The stack's address, or the skip, before anything starts. */
@@ -83,45 +79,8 @@ class SoftKeyboardSwitchE2eTest {
             }
         }
 
-    /**
-     * The test's keyboards on for the test, and the device's own input method back after it; the device's animations
-     * off meanwhile, so a key is tapped where it rests, not where it slides in from.
-     */
-    private val keyboards =
-        object : ExternalResource() {
-            private var before: String? = null
-            private val scales = mutableMapOf<String, String>()
-
-            override fun before() {
-                ANIMATION_SCALES.forEach { name ->
-                    scales[name] = shell("settings get global $name").trim()
-                    shell("settings put global $name 0")
-                }
-                before = shell("settings get secure default_input_method").trim().takeIf { it.contains('/') }
-                // a test APK installed a moment ago may not be listed as input methods yet: until it is, try again
-                val keyboard = QaKeyboard.id(testPackage)
-                val deadline = System.currentTimeMillis() + KEY_WAIT_MS
-                while (current() != keyboard && System.currentTimeMillis() < deadline) {
-                    val answers =
-                        listOf(keyboard, QaVoiceTyping.id(testPackage)).map { shell("ime enable $it") } +
-                            shell("ime set $keyboard")
-                    Log.i(TAG, "keyboards: ${answers.joinToString(" | ") { it.trim() }}")
-                    if (current() != keyboard) Thread.sleep(RETRY_MS)
-                }
-                assertTrue("the test keyboard is the device's input method (now ${current()})", current() == keyboard)
-            }
-
-            private fun current() = shell("settings get secure default_input_method").trim()
-
-            override fun after() {
-                before?.let { shell("ime set $it") } ?: shell("ime reset")
-                shell("ime disable ${QaVoiceTyping.id(testPackage)}")
-                shell("ime disable ${QaKeyboard.id(testPackage)}")
-                scales.forEach { (name, value) ->
-                    shell(if (value == "null") "settings delete global $name" else "settings put global $name $value")
-                }
-            }
-        }
+    /** The test's keyboards on for the test, the device's own back after it. */
+    private val keyboards = QaKeyboards(instrumentation)
 
     /** A screenshot and the terminal's text as a step fails, kept where the script collects them. */
     private val evidence =
@@ -155,15 +114,15 @@ class SoftKeyboardSwitchE2eTest {
         typeAndExpectTheAnswer(2)
 
         // again, with a word half typed as the keyboard goes: it lands, and the rest follows it
-        tapKeys("ex")
+        keyboards.tapKeys("ex")
         toVoiceTypingAndBack()
         typeAndExpectTheAnswer(3, typed = "pr")
 
         // the system's own switch (the keyboard picker): to the other input method and back
-        shell("ime set ${QaVoiceTyping.id(testPackage)}")
-        awaitKey(QaVoiceTyping.BACK)
-        shell("ime set ${QaKeyboard.id(testPackage)}")
-        awaitKey(QaKeyboard.keyDescription("e"))
+        shell("ime set ${keyboards.voiceTyping}")
+        keyboards.awaitKey(QaVoiceTyping.BACK)
+        shell("ime set ${keyboards.keyboard}")
+        keyboards.awaitKey(QaKeyboard.keyDescription("e"))
         typeAndExpectTheAnswer(4)
         screenshot("after-switches")
 
@@ -243,14 +202,14 @@ class SoftKeyboardSwitchE2eTest {
         compose.waitForIdle()
         val bounds = compose.onNode(terminal()).fetchSemanticsNode().boundsInWindow
         device.click(bounds.center.x.toInt(), bounds.center.y.toInt())
-        awaitKey(QaKeyboard.keyDescription("e"))
+        keyboards.awaitKey(QaKeyboard.keyDescription("e"))
     }
 
     /** The mic key to the voice-typing stand-in, and its key back to the keyboard. */
     private fun toVoiceTypingAndBack() {
-        tapKey(QaKeyboard.keyDescription(QaKeyboard.VOICE))
-        tapKey(QaVoiceTyping.BACK)
-        awaitKey(QaKeyboard.keyDescription("e"))
+        keyboards.tapKey(QaKeyboard.keyDescription(QaKeyboard.VOICE))
+        keyboards.tapKey(QaVoiceTyping.BACK)
+        keyboards.awaitKey(QaKeyboard.keyDescription("e"))
     }
 
     /** Types `expr 7000 + <step>` (after [typed], what is already on the line) and Enter, and waits for its answer. */
@@ -258,14 +217,14 @@ class SoftKeyboardSwitchE2eTest {
         step: Int,
         typed: String = "expr",
     ) {
-        tapKeys(typed)
-        tapKey(QaKeyboard.keyDescription(QaKeyboard.SPACE))
-        tapKeys("7000")
-        tapKey(QaKeyboard.keyDescription(QaKeyboard.SPACE))
-        tapKeys("+")
-        tapKey(QaKeyboard.keyDescription(QaKeyboard.SPACE))
-        tapKeys("$step")
-        tapKey(QaKeyboard.keyDescription(QaKeyboard.ENTER))
+        keyboards.tapKeys(typed)
+        keyboards.tapKey(QaKeyboard.keyDescription(QaKeyboard.SPACE))
+        keyboards.tapKeys("7000")
+        keyboards.tapKey(QaKeyboard.keyDescription(QaKeyboard.SPACE))
+        keyboards.tapKeys("+")
+        keyboards.tapKey(QaKeyboard.keyDescription(QaKeyboard.SPACE))
+        keyboards.tapKeys("$step")
+        keyboards.tapKey(QaKeyboard.keyDescription(QaKeyboard.ENTER))
         val answer = "${ANSWER_BASE + step}"
         val came =
             runCatching {
@@ -273,22 +232,6 @@ class SoftKeyboardSwitchE2eTest {
             }.isSuccess
         Log.i(TAG, "step $step: terminal now:\n${terminalText()}")
         assertTrue("step $step: the shell never answered $answer; the terminal shows:\n${terminalText()}", came)
-    }
-
-    private fun tapKeys(keys: String) = keys.forEach { tapKey(QaKeyboard.keyDescription(it.toString())) }
-
-    private fun tapKey(description: String) {
-        val key = device.wait(Until.findObject(By.desc(description)), KEY_WAIT_MS)
-        assertNotNull("the key $description on the soft keyboard", key)
-        device.waitForIdle()
-        key.click()
-    }
-
-    private fun awaitKey(description: String) {
-        assertNotNull(
-            "the key $description on the soft keyboard",
-            device.wait(Until.findObject(By.desc(description)), KEY_WAIT_MS),
-        )
     }
 
     private fun terminal(): SemanticsMatcher = hasContentDescription(text(R.string.terminal_description))
@@ -338,11 +281,8 @@ class SoftKeyboardSwitchE2eTest {
 
         /** Where screenshots go on the device; scripts/test-android-e2e.sh collects them. */
         const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
-        const val KEY_WAIT_MS = 10_000L
         const val ANSWER_WAIT_MS = 10_000L
         const val CONNECT_WAIT_MS = 60_000L
         const val ASK_WAIT_MS = 5_000L
-        const val RETRY_MS = 500L
-        val ANIMATION_SCALES = listOf("window_animation_scale", "transition_animation_scale", "animator_duration_scale")
     }
 }

@@ -80,6 +80,19 @@ pub struct LeadNotice {
 }
 
 impl LeadNotice {
+    /// What follows a reserved prefix in `title`, this build's or an agterm origin's zmx client's.
+    fn body(title: &str) -> Option<&str> {
+        title
+            .strip_prefix(Self::PREFIX)
+            .or_else(|| title.strip_prefix(crate::remote::peer::agterm::ROLE_TITLE_PREFIX))
+    }
+
+    /// Whether `title` is under a reserved prefix: a role report, well-formed or not, never a program's own title.
+    #[must_use]
+    pub fn is_reserved(title: &str) -> bool {
+        Self::body(title).is_some()
+    }
+
     /// The reserved title prefix of the attach contract's role report, which the session server's attach clients
     /// write (`ngterm_session::server::lead::role_title`).
     pub const PREFIX: &'static str = "ngterm-live-role;";
@@ -89,9 +102,7 @@ impl LeadNotice {
     /// for a pane attached from one ([`crate::remote::peer::agterm::ROLE_TITLE_PREFIX`]).
     #[must_use]
     pub fn parse(title: &str) -> Option<Self> {
-        let body = title
-            .strip_prefix(Self::PREFIX)
-            .or_else(|| title.strip_prefix(crate::remote::peer::agterm::ROLE_TITLE_PREFIX))?;
+        let body = Self::body(title)?;
         let fields: Vec<&str> = body.split(':').collect();
         let [nonce, role, generation] = fields.as_slice() else {
             return None;
@@ -256,6 +267,25 @@ mod tests {
             "agterm-live-role;n1:leader:7",
         ] {
             assert_eq!(LeadNotice::parse(title), None, "{title}");
+        }
+    }
+
+    #[test]
+    fn a_title_under_either_reserved_prefix_is_a_report_even_malformed() {
+        for title in [
+            "ngterm-live-role;n1:leader:7",
+            "zmx-role;n1:follower:2",
+            "zmx-role;n1:leader",
+        ] {
+            assert!(LeadNotice::is_reserved(title), "{title}");
+        }
+        for title in [
+            "vim README.md",
+            "my zmx-role;n1:leader:7",
+            "zmx-role",
+            "agterm-live-role;n1:leader:7",
+        ] {
+            assert!(!LeadNotice::is_reserved(title), "{title}");
         }
     }
 

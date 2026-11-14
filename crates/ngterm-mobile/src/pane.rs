@@ -9,7 +9,8 @@
 //! - **Leadership.** The attach tail carries a `LeadAttachment`: the first attach and every automatic one claim
 //!   nothing (they lead only a session nobody leads), [`crate::MobileCore::take_lead`] claims, as does a chat action
 //!   on a pane that does not lead ([`crate::chat::input`], which weighs `Panes::standing`). The attach client's
-//!   role reports arrive as titles under `LeadNotice::PREFIX`: filtered through the pane's `LeadState` into
+//!   role reports arrive as titles under a reserved prefix (`LeadNotice::is_reserved`: this build's, or agterm's
+//!   zmx's for a pane attached from one): filtered through the pane's `LeadState` into
 //!   [`MobileEvent::PaneLead`], never shown as a title. A follower is covered; an unowned pane attaches again.
 //! - **How an attach ends** ([`PaneEnd`]): a *lost* link covers the pane, and it attaches again into a fresh terminal
 //!   once its machine is connected (at once on reconnect; on the reconnect backoff when only the channel went);
@@ -855,7 +856,7 @@ impl<C: Connection> Panes<C> {
     fn pane_event(&mut self, index: usize, event: PaneEvent, events: &mut Vec<MobileEvent>) -> Option<bool> {
         let shown = &mut self.shown[index];
         match event {
-            PaneEvent::Title(title) if title.starts_with(LeadNotice::PREFIX) => {
+            PaneEvent::Title(title) if LeadNotice::is_reserved(&title) => {
                 let notice = LeadNotice::parse(&title)?;
                 let lead = shown.lead.as_mut()?;
                 if !lead.apply(&notice) {

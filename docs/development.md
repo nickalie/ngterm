@@ -951,7 +951,7 @@ scripts/build-android.sh check assembleDebug   # lint, JVM/screenshot tests and 
 scripts/build-android.sh :app:koverHtmlReportDebugJvm :app:koverXmlReportDebugJvm # one module's debug JVM coverage
 scripts/build-android.sh :koverHtmlReportDebugJvm :koverXmlReportDebugJvm   # both modules, aggregated
 scripts/build-android.sh installGithubDebug    # onto the device or emulator adb sees
-scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux; python3 runs its fake agent)
+scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd, and typing into a session of conformance's stand-in agterm Mac (Linux; python3 runs its fake agent and the stand-in)
 scripts/test-mobile-e2e.sh --coverage DIR   # the headless app's e2e line coverage into DIR, as CI's headless-e2e job (cargo-llvm-cov)
 scripts/test-android-e2e.sh [TEST...]  # the app on the device adb sees, against a real ngterm-headless behind a private sshd, and conformance's stand-in agterm Mac on a second port (Linux)
 ```

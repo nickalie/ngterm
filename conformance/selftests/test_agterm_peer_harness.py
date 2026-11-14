@@ -2,8 +2,12 @@
 account's, and the stand-in agterm answers as upstream does (`fake_agterm`), run as the ssh session would run it."""
 
 import json
+import os
+import pty
+import select
 import subprocess
 import sys
+import time
 import uuid
 
 import pytest
@@ -126,3 +130,92 @@ def test_a_refused_stream_exits_with_its_reason_on_stderr(tmp_path):
     directory = _machine(tmp_path, [], [])
     result = _run(directory, "agtermctl", "zmx", "present", "NOPE")
     assert (result.returncode, result.stdout, result.stderr) == (1, "", "Error: no such session\n")
+
+
+class _Attach:
+    """One `zmx attach` of `daemon` on a pty of its own, as a viewer's ssh runs it."""
+
+    def __init__(self, directory, daemon, nonce, claim=False):
+        self.master, slave = pty.openpty()
+        env = {"PATH": "/usr/bin:/bin", "ZMX_MANAGED": nonce, **({"ZMX_MANAGED_CLAIM": "1"} if claim else {})}
+        self.process = subprocess.Popen(
+            [sys.executable, "-I", fake_agterm.__file__, str(directory), "zmx", "attach", daemon, "/bin/sh"],
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            env=env,
+            start_new_session=True,
+        )
+        os.close(slave)
+        self.output = ""
+
+    def read(self, needle=None, seconds=20.0):
+        """What it printed so far: read until it holds `needle`, or for `seconds` when none is given."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline and (needle is None or needle not in self.output):
+            ready, _, _ = select.select([self.master], [], [], 0.05)
+            if ready:
+                try:
+                    self.output += os.read(self.master, 4096).decode(errors="replace")
+                except OSError:
+                    break
+        assert needle is None or needle in self.output, f"no {needle!r} in {self.output!r}"
+        return self.output
+
+    def type(self, text):
+        os.write(self.master, text.encode())
+
+    def close(self):
+        self.process.kill()
+        self.process.wait(timeout=10)
+        os.close(self.master)
+
+
+@pytest.fixture
+def attach(tmp_path):
+    daemon = f"agterm-{uuid.uuid4().hex}"
+    directory = _machine(tmp_path, [_session("build", daemon)], [daemon])
+    opened = []
+
+    def start(nonce, claim=False):
+        opened.append(_Attach(directory, daemon, nonce, claim))
+        return opened[-1]
+
+    yield start
+    for one in opened:
+        if one.process.poll() is None:
+            one.close()
+
+
+def test_a_managed_attach_follows_the_apps_window_and_what_it_types_is_dropped(attach):
+    viewer = attach("n1")
+    viewer.read("agterm$ ")
+    assert viewer.output.startswith("\x1b]2;zmx-role;n1:follower:1\x1b\\"), viewer.output
+
+    viewer.type("echo typed-$((6*7))\r")
+
+    typed = viewer.read(seconds=1.0)
+    assert "typed" not in typed, f"a follower's input reached the pane or was echoed: {typed!r}"
+
+
+def test_a_claiming_attach_leads_and_its_typed_line_runs(attach):
+    viewer = attach("n2", claim=True)
+    viewer.read("agterm$ ")
+    assert viewer.output.startswith("\x1b]2;zmx-role;n2:leader:2\x1b\\"), viewer.output
+
+    viewer.type("echo typed-$((6*7))\r")
+
+    viewer.read("typed-42")
+
+
+def test_a_follower_is_told_when_the_leader_leaves_and_the_next_attach_leads_without_a_claim(attach):
+    leader = attach("n1", claim=True)
+    leader.read("zmx-role;n1:leader:2")
+    follower = attach("n2")
+    follower.read("zmx-role;n2:follower:2")
+
+    leader.close()
+
+    follower.read("zmx-role;n2:unowned:3")
+    attach("n3").read("zmx-role;n3:leader:4")
+

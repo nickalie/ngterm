@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.e2e
 
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Base64
 import android.util.Log
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import com.nickalie.ngterm.android.MainActivity
@@ -45,8 +47,9 @@ import java.io.File
  * machine; the agterm one lists its live session from agterm's own CLI (the machine has no `ngtermctl`), and its card,
  * its sessions screen and the attached session's bar say "agterm", the last two showing what agterm lacks on a tap or a
  * long press. Every menu of the agterm session (the machine's list, the attached list, the bar) has Chat view off with
- * "agterm has no chat view"; the session attaches through agterm's bundled zmx (its shell's prompt reaches the
- * terminal) and ends through agterm's CLI. The ngterm machine beside it shows no badge and keeps Chat view in its
+ * "agterm has no chat view"; the session attaches through agterm's bundled zmx, where agterm's own window leads the
+ * pane: it is covered with Take control, and once taken the shell's prompt reaches the terminal and a line typed on
+ * the soft keyboard (the test APK's own, [QaKeyboards]) runs there; it ends through agterm's CLI. The ngterm machine beside it shows no badge and keeps Chat view in its
  * session's menus. The stand-in's pane runs no agent, so the missing Show chat switch of an agterm agent pane is
  * `ChatModeTest`'s (its agterm case), not this test's.
  *
@@ -58,6 +61,7 @@ import java.io.File
  * No live agterm or ngterm.
  */
 @RunWith(AndroidJUnit4::class)
+@SdkSuppress(minSdkVersion = Build.VERSION_CODES.P)
 class AgtermPeerE2eTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val arguments = InstrumentationRegistry.getArguments()
@@ -84,6 +88,8 @@ class AgtermPeerE2eTest {
             }
         }
 
+    private val keyboards = QaKeyboards(instrumentation)
+
     private val evidence =
         object : TestWatcher() {
             override fun failed(
@@ -100,6 +106,7 @@ class AgtermPeerE2eTest {
         RuleChain
             .outerRule(stack)
             .around(freshInstall)
+            .around(keyboards)
             .around(compose)
             .around(evidence)
 
@@ -141,16 +148,25 @@ class AgtermPeerE2eTest {
         // the machine list's menu of its session offers no chat view, and says why
         assertEveryMenuHasNoChatView(SESSION)
 
-        // attached through agterm's zmx: its shell's prompt reaches the terminal
+        // attached through agterm's zmx, where agterm's own window leads the pane: covered, with Take control
         compose.onNodeWithText(SESSION).performClick()
         awaitTerminal()
         notNowToNotifications()
+        val takeControl = text(R.string.session_take_control)
+        val offered = runCatching { awaitText(takeControl) }.isSuccess
+        screenshot("covered")
+        assertTrue("the pane agterm's window leads never offered $takeControl", offered)
+        compose.onNodeWithText(takeControl).performClick()
+        compose.waitUntil(CONNECT_WAIT_MS) { nodes(hasText(takeControl)) == 0 }
+
+        // this device leads now: agterm's shell prompts in the terminal
         val prompted =
             runCatching {
                 compose.waitUntil(CONNECT_WAIT_MS) { "attached agterm-" in terminalText() && PROMPT in terminalText() }
             }.isSuccess
         Log.i(TAG, "terminal:\n${terminalText()}")
         assertTrue("agterm's shell never showed in the pane; it shows:\n${terminalText()}", prompted)
+        typedLineRunsInAgtermsShell()
 
         // the bar carries the badge with its note, and its menu has no chat view
         showsTheNoteOnTapAndLongPress("agterm session's bar", heading = SESSION)
@@ -170,6 +186,29 @@ class AgtermPeerE2eTest {
         compose.waitUntil(CONNECT_WAIT_MS) { nodes(hasText(SESSION)) == 0 }
         awaitText(NGTERM_SESSION)
         screenshot("ended")
+    }
+
+    /** A line typed on the soft keyboard runs in agterm's shell: its answer, which the line never holds, shows. */
+    private fun typedLineRunsInAgtermsShell() {
+        compose.waitForIdle()
+        val bounds = compose.onNode(terminal()).fetchSemanticsNode().boundsInWindow
+        device.click(bounds.center.x.toInt(), bounds.center.y.toInt())
+        keyboards.awaitKey(QaKeyboard.keyDescription("e"))
+        listOf("expr", "7000", "+", "1").forEachIndexed { index, word ->
+            if (index > 0) keyboards.tapKey(QaKeyboard.keyDescription(QaKeyboard.SPACE))
+            keyboards.tapKeys(word)
+        }
+        keyboards.tapKey(QaKeyboard.keyDescription(QaKeyboard.ENTER))
+        val answered =
+            runCatching {
+                compose.waitUntil(ANSWER_WAIT_MS) { terminalText().lines().any { it.trim() == ANSWER } }
+            }.isSuccess
+        Log.i(TAG, "typed: terminal now:\n${terminalText()}")
+        screenshot("typed")
+        assertTrue("agterm's shell never answered $ANSWER; the terminal shows:\n${terminalText()}", answered)
+        // the keyboard away, for the bar and its menus
+        device.pressBack()
+        compose.waitForIdle()
     }
 
     private fun signIn() {
@@ -363,9 +402,13 @@ class AgtermPeerE2eTest {
         const val PROMPT = "agterm$"
         const val AGTERM = "agterm"
 
+        /** What `expr 7000 + 1`, typed into agterm's shell, answers. */
+        const val ANSWER = "7001"
+
         const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
         const val CONNECT_WAIT_MS = 60_000L
         const val NOTE_WAIT_MS = 5_000L
+        const val ANSWER_WAIT_MS = 10_000L
         const val ASK_WAIT_MS = 5_000L
         const val SYSTEM_BACKS = 2
     }

@@ -10,9 +10,14 @@ built from upstream's own sources and fixtures, never from this build's code:
   reason on stderr (`ZmxCommands.swift` `Present`);
 - `agtermctl restore mode`, `session new|duplicate|close` and `session overlay run-job`, each `--json` answered as a
   `ControlResponse`;
-- `zmx attach DAEMON COMMAND...`: attaches a live daemon, else creates it running COMMAND, as zmx does; a client that
-  opted into explicit leadership (`ZMX_MANAGED`) reports its role as a `zmx-role;<nonce>:<role>:<generation>` title
-  (`ZmxLead.swift`).
+- `zmx attach DAEMON COMMAND...`: attaches a live daemon, else creates it running COMMAND, as zmx does, under the
+  explicit leadership of agterm's zmx (`scripts/zmx-patches/0001-explicit-leadership.patch`, `ZmxLead.swift`). The
+  app's own window is attached to every daemon it lists and leads it, so a client that opted in (`ZMX_MANAGED`)
+  follows unless it claims (`ZMX_MANAGED_CLAIM`) or no client leads; it is told its role as a
+  `zmx-role;<nonce>:<role>:<generation>` title before anything else. The leader gets the pane's shell; a follower's
+  terminal is raw and what it sends is dropped, and it is told `unowned` once the leader has left. Short of zmx: each
+  leader runs a shell of its own, a leader that lost the lead to a claim is not told, and an unmanaged client leads
+  at once (zmx's takes the lead with its first key).
 
 Run as `python -I fake_agterm.py MACHINE_DIR PROGRAM ARGS...`. The machine's `state.json` holds what the app shows;
 every invocation is logged to `calls.jsonl`, each stream's received frames to `present/<session>.received.jsonl`, and
@@ -22,11 +27,14 @@ printed by the `agtermctl` wrapper from `listing.json` (`save_state`), without s
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import select
 import sys
 import threading
 import time
+import tty
 import uuid
 from pathlib import Path
 
@@ -39,6 +47,9 @@ SUPPORTED_KINDS = [
 ]
 PING_SECONDS = 5.0
 PUSH_POLL = 0.05
+# the leader of a daemon no client has claimed: the app's own window
+WINDOW = "window"
+LEAD_POLL = 0.2
 LOGGED_VARIABLES = (
     "ZMX_SESSION", "ZMX_SESSION_PREFIX", "ZMX_NO_DETACH_KEY", "ZMX_DIR", "ZMX_MANAGED", "ZMX_MANAGED_CLAIM", "HOME",
 )
@@ -259,6 +270,62 @@ def present(machine: Machine, state, session_id: str) -> int:
     return 0
 
 
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _lead(machine: Machine, daemon: str, take: bool = False) -> dict:
+    """The daemon's lead in `leads.json`, `{"leader": WINDOW | pid | None, "generation": n}`, after a leader that
+    exited has left it unowned; with `take`, this process leads it."""
+    with open(machine.directory / "leads.lock", "w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        path = machine.directory / "leads.json"
+        leads = json.loads(path.read_text()) if path.exists() else {}
+        lead = leads.get(daemon, {"leader": WINDOW, "generation": 1})
+        before = dict(lead)
+        if isinstance(lead["leader"], int) and not _alive(lead["leader"]):
+            lead = {"leader": None, "generation": lead["generation"] + 1}
+        if take:
+            lead = {"leader": os.getpid(), "generation": lead["generation"] + 1}
+        if lead != before or daemon not in leads:
+            leads[daemon] = lead
+            _write_json(path, leads)
+        return lead
+
+
+def _tell(nonce: str, role: str, generation: int) -> None:
+    sys.stdout.write(f"\x1b]2;zmx-role;{nonce}:{role}:{generation}\x1b\\")
+    sys.stdout.flush()
+
+
+def _follow(machine: Machine, daemon: str, nonce: str) -> int:
+    """A managed follower: its terminal raw as zmx's client sets it, everything it sends dropped, told when the leader
+    leaves; until its viewer hangs up."""
+    stdin = sys.stdin.fileno()
+    if os.isatty(stdin):
+        tty.setraw(stdin)
+    sys.stdout.write(f"attached {daemon}\r\nagterm$ ")
+    sys.stdout.flush()
+    told = "follower"
+    while True:
+        ready, _, _ = select.select([stdin], [], [], LEAD_POLL)
+        if ready:
+            if not os.read(stdin, 4096):
+                return 0
+            continue
+        lead = _lead(machine, daemon)
+        role = "unowned" if lead["leader"] is None else "follower"
+        if role != told:
+            told = role
+            _tell(nonce, role, lead["generation"])
+
+
 def zmx(machine: Machine, argv: list[str]) -> int:
     machine.log("zmx", argv)
     if len(argv) < 2 or argv[0] != "attach":
@@ -270,8 +337,12 @@ def zmx(machine: Machine, argv: list[str]) -> int:
         # zmx creates a missing daemon running the command; the viewer's command is its create-only guard
         os.execv(command[0], command)
     nonce = os.environ.get("ZMX_MANAGED")
+    leads = not nonce or "ZMX_MANAGED_CLAIM" in os.environ or _lead(machine, daemon)["leader"] is None
+    lead = _lead(machine, daemon, take=leads)
     if nonce:
-        sys.stdout.write(f"\x1b]2;zmx-role;{nonce}:leader:1\x07")
+        _tell(nonce, "leader" if leads else "follower", lead["generation"])
+    if not leads:
+        return _follow(machine, daemon, nonce)
     sys.stdout.write(f"attached {daemon}\r\n")
     sys.stdout.flush()
     os.execve("/bin/sh", ["/bin/sh", "-i"], {**os.environ, "PS1": "agterm$ ", "ENV": ""})

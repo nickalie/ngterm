@@ -942,3 +942,64 @@ fn shown_panes_gate_the_bridge_on_the_endpoint_and_keep_old_peer_pastes_plain() 
         }
     }
 }
+
+/// An agterm Mac's listing of the session, as its `agtermctl zmx tree` answers.
+fn agterm_listing() -> Script {
+    use ngterm_core::remote::peer::{AGTERM_ANSWER, RemotePeer, daemon_name};
+    let remote = serde_json::json!({
+        "endpoint": {"executable": "/Applications/agterm.app/Contents/MacOS/zmx", "socketDirectory": "/tmp/z"},
+        "sessions": [{
+            "id": SESSION, "name": "main", "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
+            "workspaceName": "work", "cwd": "/repo",
+            "panes": [{"pane": "left", "daemon": daemon_name(RemotePeer::Agterm, pane_uuid())}],
+        }],
+    });
+    let body = serde_json::json!({"ok": true, "result": {"remote": remote}});
+    Script::ok(&format!("{AGTERM_ANSWER}\n{body}"))
+}
+
+/// The lead words of an attach command sent to agterm's zmx.
+fn zmx_lead_of(command: &str) -> LeadAttachment {
+    let at = command.find("ZMX_MANAGED=").expect("a managed zmx attach") + "ZMX_MANAGED=".len();
+    LeadAttachment {
+        nonce: command[at..].chars().take_while(char::is_ascii_hexdigit).collect(),
+        claim: command.contains("ZMX_MANAGED_CLAIM=1"),
+    }
+}
+
+/// A role report as agterm's zmx client titles it.
+fn zmx_role_title(nonce: &str, role: &str, generation: u32) -> Vec<u8> {
+    format!("\x1b]2;zmx-role;{nonce}:{role}:{generation}\x1b\\").into_bytes()
+}
+
+#[test]
+fn a_pane_the_agterm_window_leads_is_covered_and_take_lead_claims_it_through_zmx() {
+    let mut fixture = Fixture::connected_with(vec![agterm_listing()]);
+    let _pane = fixture.show();
+    let first = fixture.attach();
+    let lead = zmx_lead_of(&first.command);
+    assert!(!lead.claim, "the first attach claims nothing");
+    fixture.attached();
+    assert_eq!(fixture.lead(), (None, false));
+
+    // agterm's own window leads: zmx drops what this pane types, so it must offer Take control
+    send(&first.peer, &zmx_role_title(&lead.nonce, "follower", 1));
+    let reported = fixture.next(|event| match event {
+        MobileEvent::PaneLead { role, covered, .. } => Some((role, covered)),
+        MobileEvent::PaneTitle { title, .. } => panic!("zmx's role report shown as the title {title:?}"),
+        _ => None,
+    });
+    assert_eq!(reported, (Some(PaneRole::Follower), true));
+
+    fixture
+        .core
+        .take_lead(MACHINE.to_owned(), SESSION.to_owned(), PANE.to_owned())
+        .unwrap();
+    let second = fixture.attach();
+    let claim = zmx_lead_of(&second.command);
+    assert!(claim.claim, "take control claims the lead from agterm's window");
+    fixture.attached();
+    assert_eq!(fixture.lead(), (None, true));
+    send(&second.peer, &zmx_role_title(&claim.nonce, "leader", 2));
+    assert_eq!(fixture.lead(), (Some(PaneRole::Leader), false));
+}

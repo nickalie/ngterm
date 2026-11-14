@@ -33,6 +33,8 @@ pub(crate) const PRINTED: &str = "e2e-42";
 pub(crate) struct Seen {
     pub(crate) layout: Option<RemoteLayout>,
     pub(crate) role: Option<PaneRole>,
+    /// Whether the last `PaneLead` covered the pane.
+    pub(crate) covered: bool,
     /// Every role a `PaneLead` gave, in order.
     pub(crate) roles: Vec<Option<PaneRole>>,
     pub(crate) attached: usize,
@@ -53,6 +55,7 @@ impl std::fmt::Debug for Seen {
             .debug_struct("Seen")
             .field("layout", &self.layout)
             .field("role", &self.role)
+            .field("covered", &self.covered)
             .field("roles", &self.roles)
             .field("attached", &self.attached)
             .field("lost", &self.lost)
@@ -69,8 +72,9 @@ impl Seen {
     pub(crate) fn record(&mut self, event: MobileEvent) {
         match event {
             MobileEvent::SessionLayout { layout, .. } => self.layout = Some(layout),
-            MobileEvent::PaneLead { role, .. } => {
+            MobileEvent::PaneLead { role, covered, .. } => {
                 self.role = role;
+                self.covered = covered;
                 self.roles.push(role);
             }
             MobileEvent::PaneAttached { .. } => self.attached += 1,
@@ -115,11 +119,16 @@ pub(crate) struct Client {
 
 impl Client {
     pub(crate) fn new(label: &'static str, world: &World) -> Self {
+        Self::with_keys(label, &world.key.private_key, &world.host_fingerprint)
+    }
+
+    /// A phone holding `private_key`, with the machine's host key `fingerprint` pinned.
+    pub(crate) fn with_keys(label: &'static str, private_key: &[u8], fingerprint: &str) -> Self {
         let (sender, events) = mpsc::channel();
         let core = MobileCore::new(
             Arc::new(Sink(Mutex::new(sender))),
-            Arc::new(Vault(world.key.private_key.clone())),
-            Arc::new(Pinned(world.host_fingerprint.clone())),
+            Arc::new(Vault(private_key.to_vec())),
+            Arc::new(Pinned(fingerprint.to_owned())),
         )
         .expect("a core");
         Self {

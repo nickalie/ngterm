@@ -7,7 +7,9 @@
 # script's exit trap reaps the same private namespace through that namespace's own session server and stops the
 # instance and sshd by the pids they recorded. The scratch directory is removed after a pass or a skip and kept after a
 # failure (its logs: headless.log, sshd/sshd.log). Its agent chat case runs a fake agent on the system's python3
-# (crates/ngterm-mobile/tests/support/fake_agent.py), its files under agent/ there.
+# (crates/ngterm-mobile/tests/support/fake_agent.py), its files under agent/ there. The same test binary's second test
+# types into a session of a Mac running upstream agterm: the conformance suite's stand-in
+# (conformance/agterm_conformance/fake_agterm.py, on the system's python3) behind a second sshd, under agterm/ there.
 #
 # The build and stage keep the caller's NGTERM_* build overrides (NGTERM_VENDOR, NGTERM_GHOSTTY_VT_PREFIX); the tests,
 # and so the instances and sshd they start, run with every NGTERM_* stripped, so nothing they start can reach an ngterm
@@ -150,12 +152,15 @@ reap() {
       kill -TERM "$pid" 2>/dev/null || true
     fi
   fi
-  if [[ -s "$WORK/sshd/sshd.pid" ]]; then
-    pid="$(<"$WORK/sshd/sshd.pid")"
-    if tr '\0' ' ' 2>/dev/null <"/proc/$pid/cmdline" | grep -qF "$WORK/sshd/sshd_config"; then
+  # the machine's sshd and the stand-in agterm Mac's
+  local sshd
+  for sshd in "$WORK/sshd" "$WORK/agterm/sshd"; do
+    [[ -s "$sshd/sshd.pid" ]] || continue
+    pid="$(<"$sshd/sshd.pid")"
+    if tr '\0' ' ' 2>/dev/null <"/proc/$pid/cmdline" | grep -qF "$sshd/sshd_config"; then
       kill -TERM "$pid" 2>/dev/null || true
     fi
-  fi
+  done
 }
 on_exit() {
   local status=$?
