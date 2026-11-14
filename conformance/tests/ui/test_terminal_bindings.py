@@ -181,15 +181,17 @@ def _without_trailing_blanks(lines):
 
 
 def _rows_below_the_viewport(ctl, sid):
-    """How many of the screen's lines lie below the viewport, 0 at the bottom. The viewport is placed by where its
+    """How many of the screen's rows lie below the viewport, 0 at the bottom. The viewport is placed by where its
     lines sit in the screen, not by one line's text: the echo and `cat`'s copy repeat each line, so the last line can
-    also show some rows higher up. Blank rows after the last written line are left out of both, as the cursor's row."""
-    screen = _without_trailing_blanks(_screen(ctl, sid))
-    every = _without_trailing_blanks(_all_lines(ctl, sid))
+    also show some rows higher up. Its text is matched without its trailing blank rows, which the whole screen also
+    has in other places, and those rows are then counted back in, so a viewport one row short of the cursor's blank
+    row is not the bottom."""
+    viewport, every = _screen(ctl, sid), _all_lines(ctl, sid)
+    screen = _without_trailing_blanks(viewport)
     assert screen, "the viewport shows no text"
     ends = [end for end in range(len(screen), len(every) + 1) if every[end - len(screen) : end] == screen]
     assert ends, f"the viewport {screen[:3]}…{screen[-3:]} is no run of the screen's lines"
-    return len(every) - ends[-1]
+    return len(every) - ends[-1] - (len(viewport) - len(screen))
 
 
 def _at_bottom(ctl, sid):
