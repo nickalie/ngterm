@@ -209,7 +209,9 @@ fn serve_until_end(
                 let _ = flushed.recv_timeout(FLUSH_TIMEOUT);
                 return 0;
             }
-            Ok(ToWorker::Command(command)) => post(engine, outgoing, command, fault, &mut held),
+            Ok(ToWorker::Command(command)) => {
+                post(&mut |command| engine.post(command), outgoing, command, fault, &mut held);
+            }
             Ok(ToWorker::PersistentSession {
                 session,
                 data_dir,
@@ -255,10 +257,10 @@ fn serve_until_end(
     }
 }
 
-/// Hands `command` to `engine`; under [`Fault::FrameAfterClose`] a page's close is followed by a frame of it, and under
-/// [`Fault::ReplyAfterClose`] replies wait in `held` for the next close and follow it.
+/// Hands `command` to the engine through `engine`; under [`Fault::FrameAfterClose`] a page's close is followed by a frame
+/// of it, and under [`Fault::ReplyAfterClose`] replies wait in `held` for the next close and follow it.
 fn post(
-    engine: &Local,
+    engine: &mut impl FnMut(Command),
     outgoing: &async_channel::Sender<Outgoing>,
     command: Command,
     fault: Option<Fault>,
@@ -272,13 +274,13 @@ fn post(
         Command::CloseView(view) => Some(*view),
         _ => None,
     };
-    engine.post(command);
+    engine(command);
     let Some(view) = closed else { return };
     if fault == Some(Fault::FrameAfterClose) {
         send_late_frame(outgoing, view);
     }
     for reply in held.drain(..) {
-        engine.post(reply);
+        engine(reply);
     }
 }
 

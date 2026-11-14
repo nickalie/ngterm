@@ -75,16 +75,17 @@ def _ended(pid):
 
 def _workers(instance):
     """The app's page worker processes still running: its children running `ngterm-web`, or the `bwrap` a worker
-    re-executes itself under."""
+    re-executes itself under, but not the `ngterm-web --probe` each engine start runs first."""
     found = []
     for entry in os.scandir("/proc"):
         if not entry.name.isdigit() or _parent(int(entry.name)) != instance.process.pid:
             continue
         try:
             program = os.path.basename(os.readlink(f"/proc/{entry.name}/exe"))
+            arguments = Path(f"/proc/{entry.name}/cmdline").read_bytes().split(b"\0")
         except OSError:
             continue
-        if program in WORKER_PROGRAMS and not _ended(int(entry.name)):
+        if program in WORKER_PROGRAMS and b"--probe" not in arguments and not _ended(int(entry.name)):
             found.append(int(entry.name))
     return found
 
@@ -205,3 +206,6 @@ def test_a_page_closed_while_its_request_waits_closes(faulty):
     )
     assert_ok(faulty.request("session.overlay.open", sid, html=str(path), javascript=True))
     faulty.wait_tree(lambda tree: "htmlOverlays" not in find_session(tree, sid))
+    # the late answer leaves the worker serving: a later page still loads
+    after = _page(faulty, sid, "after.html", "after")
+    assert _page_state(faulty, sid, after, "loaded")["id"] == after

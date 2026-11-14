@@ -345,3 +345,35 @@ fn a_worker_holding_replies_until_a_close_serves_on() {
         },
     );
 }
+
+#[test]
+fn a_reply_held_under_its_fault_reaches_the_engine_once_after_the_next_close() {
+    let (outgoing, _sent) = async_channel::unbounded();
+    let mut held = Vec::new();
+    let mut posted_by = |command, fault| {
+        let mut posted = Vec::new();
+        post(
+            &mut |command| posted.push(command),
+            &outgoing,
+            command,
+            fault,
+            &mut held,
+        );
+        posted
+    };
+    let reply = || Command::Reply(crate::ReplyToken::from_raw(7), Ok("null".to_owned()));
+    let close = || Command::CloseView(crate::ViewId::from_raw(3));
+    let fault = Some(Fault::ReplyAfterClose);
+    let posted = posted_by(reply(), None);
+    assert!(matches!(posted.as_slice(), [Command::Reply(..)]), "{posted:?}");
+    let posted = posted_by(reply(), fault);
+    assert!(posted.is_empty(), "{posted:?}");
+    let posted = posted_by(close(), fault);
+    assert!(
+        matches!(posted.as_slice(), [Command::CloseView(view), Command::Reply(token, _)]
+            if *view == crate::ViewId::from_raw(3) && *token == crate::ReplyToken::from_raw(7)),
+        "{posted:?}"
+    );
+    let posted = posted_by(close(), fault);
+    assert!(matches!(posted.as_slice(), [Command::CloseView(_)]), "{posted:?}");
+}
