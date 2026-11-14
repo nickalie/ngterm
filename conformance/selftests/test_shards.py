@@ -45,8 +45,10 @@ def run_shards(pytester: pytest.Pytester, count: int, *args: str) -> list[Path]:
     return directories
 
 
-def merge(*args: object) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(MERGE), *map(str, args)], capture_output=True, text=True, check=False)
+def merge(*args: object, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(MERGE), *map(str, args)], cwd=cwd, capture_output=True, text=True, check=False
+    )
 
 
 def ratchet(path: Path, *listed: str) -> Path:
@@ -348,6 +350,13 @@ def test_the_merge_joins_the_shards_coverage(pytester: pytest.Pytester, tmp_path
     assert "**Total: 100.00% of lines (2/2)" in (out / "coverage" / "summary.md").read_text()
     assert "### code coverage" in (out / "report.md").read_text()
     assert (out / "lost-profiles.txt").read_text() == "1 ngterm: killed\n0 ngterm: killed\n"
+    # as the report jobs name them: every path relative to the directory the merge starts in
+    root = directories[0].parent
+    relative = [directory.relative_to(root) for directory in directories]
+    done = merge("--out", "joined", "--coverage", "desktop", "linux", "--repo", repo, *relative, cwd=root)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "**Total: 100.00% of lines (2/2)" in (root / "joined" / "coverage" / "summary.md").read_text()
+    assert "ui ids" in (root / "joined" / "report.md").read_text().split("### catalog coverage")[1]
     (directories[1] / "coverage" / "lcov.info").unlink()
     done = merge("--out", out, "--coverage", "desktop", "linux", "--repo", repo, *directories)
     assert done.returncode == 2 and "no coverage report from a shard" in done.stderr

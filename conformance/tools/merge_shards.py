@@ -247,9 +247,9 @@ def join_coverage(reports: list[ShardReport], app: str, platform: str, repo: Pat
     if missing:
         return f"no coverage report from a shard: {', '.join(missing)}"
     command = [sys.executable, "-m", "agterm_conformance.code_coverage", "e2e", "--app", app, "--platform", platform,
-               "--repo", str(repo), "--out", str(out / "coverage")]
+               "--repo", str(repo.resolve()), "--out", str((out / "coverage").resolve())]
     for path in lcovs:
-        command += ["--lcov", str(path)]
+        command += ["--lcov", str(path.resolve())]  # absolute: the command runs in conformance/
     done = subprocess.run(command, cwd=CONFORMANCE, capture_output=True, text=True, check=False)
     if done.returncode != 0:
         return (done.stderr or done.stdout).strip().removeprefix("code coverage: ") or f"exit {done.returncode}"
@@ -261,7 +261,7 @@ def join_coverage(reports: list[ShardReport], app: str, platform: str, repo: Pat
 
 
 def catalog_line(out: Path, header: dict[str, Any]) -> str:
-    command = [sys.executable, "-m", "agterm_conformance.coverage", str(out / NODEIDS)]
+    command = [sys.executable, "-m", "agterm_conformance.coverage", str((out / NODEIDS).resolve())]
     # the header names the files on the shards' machine: this checkout's stand in where those are not here
     if not all(isinstance(header.get(key), str) and Path(header[key]).is_file() for key in ("catalog", "ui_ids")):
         command += ["--catalog", str(CONFORMANCE / "catalog.yaml"), "--ui-ids", str(CONFORMANCE / "ui-ids.yaml")]
