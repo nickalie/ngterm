@@ -1,9 +1,11 @@
 package com.nickalie.ngterm.android.platform
 
+import android.app.UiAutomation
 import android.content.ClipboardManager
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Base64
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -44,12 +46,32 @@ class AndroidClipboardDeviceTest {
         val deadline = SystemClock.uptimeMillis() + FOCUS_TIMEOUT_MS
         while (!compose.activity.hasWindowFocus()) {
             assertTrue("the app's window never got the focus", SystemClock.uptimeMillis() < deadline)
-            ParcelFileDescriptor
-                .AutoCloseInputStream(automation.executeShellCommand(CLOSE_SYSTEM_DIALOGS))
-                .use { it.readBytes() }
+            closeFocusHolder(automation)
             SystemClock.sleep(FOCUS_POLL_MS)
         }
     }
+
+    // "close system dialogs" makes an "isn't responding" dialog kill its app, which may be this one: its Wait button
+    // closes it. With no answer from the window manager in time, nothing is closed and the caller asks again.
+    private fun closeFocusHolder(automation: UiAutomation) {
+        val focus = shell(automation, FOCUSED_WINDOW).lineSequence().firstOrNull { FOCUS_LINE in it } ?: return
+        if (ANR_DIALOG in focus) {
+            automation.rootInActiveWindow
+                ?.findAccessibilityNodeInfosByViewId(ANR_WAIT)
+                ?.firstOrNull()
+                ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } else {
+            shell(automation, CLOSE_SYSTEM_DIALOGS)
+        }
+    }
+
+    private fun shell(
+        automation: UiAutomation,
+        command: String,
+    ): String =
+        ParcelFileDescriptor
+            .AutoCloseInputStream(automation.executeShellCommand(command))
+            .use { it.readBytes().decodeToString() }
 
     private fun keys(parts: List<ClipboardPart>) = parts.map { it.mime to it.data.toList() }
 
@@ -97,7 +119,14 @@ class AndroidClipboardDeviceTest {
         const val BINARY = 2048
         const val FOCUS_TIMEOUT_MS = 30_000L
         const val FOCUS_POLL_MS = 250L
-        const val CLOSE_SYSTEM_DIALOGS = "am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS"
+
+        // each bounded, so a slow system can't hold a call far past the focus deadline: the dump by its own time
+        // limit, the broadcast by not waiting for its receivers
+        const val FOCUSED_WINDOW = "dumpsys -t 5 window displays"
+        const val FOCUS_LINE = "mCurrentFocus="
+        const val ANR_DIALOG = "Application Not Responding:"
+        const val ANR_WAIT = "android:id/aerr_wait"
+        const val CLOSE_SYSTEM_DIALOGS = "am broadcast --async -a android.intent.action.CLOSE_SYSTEM_DIALOGS"
 
         // Ghostty's clipboard-multipart.py image: a 2x2 red PNG, 73 bytes
         val RED_PNG: ByteArray =
