@@ -283,6 +283,7 @@ fn locate_conversation(core: &mut Core, request: &Request) -> Outcome {
     };
     check_transcript(agent, transcript).map_err(ControlError::rejected)?;
     core.sync_agent_records();
+    let no_pane = || ControlError::rejected(NO_PANE);
     let records = &core.agents.by_pane;
     let newest = |held: &dyn Fn(&AgentRecord) -> bool| {
         records
@@ -295,10 +296,10 @@ fn locate_conversation(core: &mut Core, request: &Request) -> Outcome {
         .or_else(|| {
             newest(&|record| agent == AgentKind::Claude && moved_to(Path::new(&record.transcript), conversation))
         })
-        .ok_or_else(|| ControlError::rejected(NO_PANE))?;
+        .ok_or_else(no_pane)?;
     let (session, role) = locate(core.library(), identity)
         .map(|(session, role)| (session.id(), role))
-        .ok_or_else(|| ControlError::rejected(NO_PANE))?;
+        .ok_or_else(no_pane)?;
     let record = set_conversation(
         &mut core.agents.by_pane,
         identity,

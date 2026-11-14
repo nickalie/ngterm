@@ -105,7 +105,7 @@ mod tests {
         assert_eq!(continued_in(&path), None, "no file");
         fs::write(&path, format!("{REPLY}\n")).unwrap();
         assert_eq!(continued_in(&path), None, "it never moved");
-        fs::write(&path, format!("{REPLY}\n{}\n{STATE}\n", moved("bbbb"))).unwrap();
+        fs::write(&path, format!("{REPLY}\n{}\n{STATE}\nnot a row\n", moved("bbbb"))).unwrap();
         assert_eq!(continued_in(&path), Some("bbbb".to_owned()));
         fs::write(&path, format!("{REPLY}\n{}\n{STATE}\n{REPLY}\n", moved("bbbb"))).unwrap();
         assert_eq!(continued_in(&path), None, "the user went back to it");
