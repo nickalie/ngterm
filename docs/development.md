@@ -1328,7 +1328,7 @@ and the fix, and leaves everything else alone; its header says what it checks, a
 
 Every workflow that runs on a push to main runs on a push to a `ci/**` branch too, under the same path filters, so a
 `ci/<task>` run is the check main's run will be. Main keeps what a run leaves behind: only its runs publish
-(`zig-packages.yml`, `release-wpe-cache.yml`) and, `ios.yml` aside, save the cargo and vendor caches, which a branch's
+(`zig-packages.yml`, `release-wpe-cache.yml`) and save the cargo and vendor caches, which a branch's
 and a PR's runs only read, as theirs would crowd main's out of the repository's cache space. A push cancels the older
 run of the same workflow on the same `ci/**` branch and no other branch's. A branch made at a commit another branch
 already holds changes no file, so the path-filtered workflows don't start on it.
