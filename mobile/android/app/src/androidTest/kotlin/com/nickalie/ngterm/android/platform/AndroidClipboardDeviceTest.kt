@@ -2,6 +2,7 @@ package com.nickalie.ngterm.android.platform
 
 import android.app.UiAutomation
 import android.content.ClipboardManager
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Base64
@@ -121,12 +122,18 @@ class AndroidClipboardDeviceTest {
         const val FOCUS_POLL_MS = 250L
 
         // each bounded, so a slow system can't hold a call far past the focus deadline: the dump by its own time
-        // limit, the broadcast by not waiting for its receivers
-        const val FOCUSED_WINDOW = "dumpsys -t 5 window displays"
+        // limit, the broadcast by not waiting for its receivers where am can do that
+        // the window manager prints the focused window per display since Android 10, and with the windows before
+        val FOCUSED_WINDOW =
+            "dumpsys -t 5 window " + if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) "displays" else "windows"
         const val FOCUS_LINE = "mCurrentFocus="
         const val ANR_DIALOG = "Application Not Responding:"
         const val ANR_WAIT = "android:id/aerr_wait"
-        const val CLOSE_SYSTEM_DIALOGS = "am broadcast --async -a android.intent.action.CLOSE_SYSTEM_DIALOGS"
+
+        // am has no --async before Android 12 and rejects the whole command with it: there the broadcast waits
+        val CLOSE_SYSTEM_DIALOGS =
+            "am broadcast " + (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) "--async " else "") +
+                "-a android.intent.action.CLOSE_SYSTEM_DIALOGS"
 
         // Ghostty's clipboard-multipart.py image: a 2x2 red PNG, 73 bytes
         val RED_PNG: ByteArray =
