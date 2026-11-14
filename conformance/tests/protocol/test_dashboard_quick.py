@@ -272,24 +272,32 @@ def test_quick_zoom_ends_with_the_panel(ctl):
     assert_error(ctl.request("surface.zoom", "quick", mode="show"), "surface not available: quick")
 
 
-def _quick_grid(ctl):
-    """The quick terminal's rows and columns as its shell reads them; the typed line holds the marker split in two."""
+def _watch_quick_grid(ctl):
+    """Start a program in the quick terminal that prints the terminal's rows and columns, then again on each resize
+    (SIGWINCH), as a full-screen program learns them; its pattern. Nothing is typed while the panel resizes: a key
+    typed then can be lost on Windows. The typed line holds the marker split in two and never matches."""
     marker = f"QGRID{next(_markers)}"
-    assert_ok(ctl.request("quick.type", text=f"printf '%s%s=%s\\n' {marker[:5]} {marker[5:]} \"$(stty size)\"\n"))
-    pattern = re.compile(rf"(?m)^{marker}=(\d+) (\d+)$")
+    report = f'g() {{ printf "%s%s=%s\\n" {marker[:5]} {marker[5:]} "$(stty size)"; }}'
+    assert_ok(ctl.request("quick.type", text=f"sh -c '{report}; trap g WINCH; g; while :; do sleep 0.2; done'\n"))
+    return re.compile(rf"(?m)^{marker}=(\d+) (\d+)$")
+
+
+def _quick_grid(ctl, pattern):
+    """The rows and columns the watcher printed last."""
 
     def accept(response):
         assert response.ok, response.error
         return pattern.search(response.result["text"])
 
     accept.__qualname__ = f"quick text matching {pattern.pattern!r}"
-    rows, columns = pattern.search(ctl.wait_response("quick.text", None, accept).result["text"]).groups()
+    text = ctl.wait_response("quick.text", None, accept).result["text"]
+    rows, columns = pattern.findall(text)[-1]
     return int(rows), int(columns)
 
 
-def _wait_grid(ctl, check, what):
+def _wait_grid(ctl, pattern, check, what):
     def settled():
-        grid = _quick_grid(ctl)
+        grid = _quick_grid(ctl, pattern)
         assert check(grid), f"{what}: the quick terminal reads {grid}"
         return grid
 
@@ -302,7 +310,8 @@ def test_quick_zoom_resizes_the_panel_and_its_unzoom_restores_it(ctl):
     assert_ok(ctl.request("quick", mode="show"))
     try:
         _quick_echo(ctl)
-        panel = _quick_grid(ctl)
+        watched = _watch_quick_grid(ctl)
+        panel = _quick_grid(ctl, watched)
 
         def grown(grid):
             return grid[0] > panel[0] and grid[1] > panel[1]
@@ -322,29 +331,32 @@ def test_quick_zoom_resizes_the_panel_and_its_unzoom_restores_it(ctl):
             for mode in modes:
                 assert_ok(ctl.request("surface.zoom", "quick", mode=mode))
             assert ("zoomedSurface" in _top(ctl)) is zoomed, modes
-            _wait_grid(ctl, grown if zoomed else restored, f"after {modes}")
+            _wait_grid(ctl, watched, grown if zoomed else restored, f"after {modes}")
 
         # a zoom ends with the panel: shown again, the panel has its own size and the unzoom changes nothing
         assert_ok(ctl.request("surface.zoom", "quick", mode="show"))
-        _wait_grid(ctl, grown, "zoomed")
+        _wait_grid(ctl, watched, grown, "zoomed")
         assert_ok(ctl.request("quick", mode="hide"))
         assert_ok(ctl.request("quick", mode="show"))
         assert_absent(_top(ctl), "zoomedSurface")
-        _wait_grid(ctl, restored, "shown again")
+        _wait_grid(ctl, watched, restored, "shown again")
         assert_ok(ctl.request("surface.zoom", "quick", mode="hide"))
-        assert _quick_grid(ctl) == panel
+        assert _quick_grid(ctl, watched) == panel
 
         # hidden while its zoom is still under way: shown again, unzoomed, and it zooms as before
         assert_ok(ctl.request("surface.zoom", "quick", mode="show"))
         assert_ok(ctl.request("quick", mode="hide"))
         assert_ok(ctl.request("quick", mode="show"))
         assert_absent(_top(ctl), "zoomedSurface")
-        _wait_grid(ctl, restored, "shown again under way")
+        _wait_grid(ctl, watched, restored, "shown again under way")
         assert_ok(ctl.request("surface.zoom", "quick", mode="show"))
-        _wait_grid(ctl, grown, "zoomed again")
+        _wait_grid(ctl, watched, grown, "zoomed again")
         assert_ok(ctl.request("surface.zoom", "quick", mode="hide"))
-        _wait_grid(ctl, restored, "unzoomed again")
+        _wait_grid(ctl, watched, restored, "unzoomed again")
     finally:
+        # the watcher ends, so the next test's line reaches the shell
+        ctl.request("quick.type", text="\x03")
+        _quick_echo(ctl)
         ctl.request("quick", mode="hide")
 
 
