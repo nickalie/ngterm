@@ -371,10 +371,19 @@ def test_the_wheel_over_a_page_scrolls_the_page_not_its_sessions_terminal(ctl, u
         try:
             _page_title(ctl, sid, "page-ready")
             view = ui.find("htmlOverlay.page")
-            # keys typed with the pointer resting over the page, the wheel turned there next
+            # keys typed with the pointer resting over the page, the wheel turned there next; the keys reach the page or
+            # the session's terminal, whichever holds the keyboard
             ui.move(view)
             ui.press(*"typed")
-            _page_title(ctl, sid, "page-typed")
+
+            def typed():
+                (shown,) = find_session(ctl.tree(), sid)["htmlOverlays"]
+                text = _text(ctl, sid)
+                assert shown.get("title") == "page-typed" or "typed" in text, f"{shown.get('title')!r}, {text[-40:]!r}"
+                return True
+
+            typed.__qualname__ = "the keys in the page or the terminal"
+            wait_until(typed)
             ui.scroll(view, -5)
             _page_title(ctl, sid, "page-scrolled")
             below = _rows_below_the_viewport(ctl, sid)
