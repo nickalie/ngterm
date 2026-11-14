@@ -8,10 +8,11 @@
 # the Unit plan 20 to 25 min, the UI plan 21 to 27 min on the phone and 30 to 53 min on the tablet):
 #
 # - `core`: scripts/build-ios.sh --no-xcode, the core for both iOS targets, its Swift bindings and XCFramework, handed
-#   to the jobs below as the `ios-core` artifact (kept a day), which they build over with --prebuilt-core: none of
-#   them compiles Rust. Main keeps them in a cache too, keyed by everything they are built from (the crates, the
-#   workspace's pins, toolchain and cargo config, the libghostty-vt pins and patches, the scripts that build them),
-#   so a run over the same sources builds nothing;
+#   to the jobs below as the `ios-core` artifact, which they build over with --prebuilt-core: none of them compiles
+#   Rust. The artifact is kept for the 30 days in which a failed job can be run again, since such a rerun leaves
+#   `core` as it was. Main keeps them in a cache too, keyed by everything they are built from (the crates and the
+#   WSL launcher ngterm-core embeds, the workspace's pins, toolchain and cargo config, the libghostty-vt pins and
+#   patches, the scripts that build them), so a run over the same sources builds nothing;
 # - `core-tests`: the core's Rust tests on the phone simulator (ngterm-mobile's unit tests and ngterm-ghostty-vt's
 #   tests, through scripts/ios-sim-runner.sh). It needs no XCFramework, so it starts with `core`;
 # - `lint`: scripts/build-ios.sh lint: SwiftLint with its analyzer rules, swift-format, the suppression reasons, Swift
@@ -104,7 +105,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
-      # every crate, not only the core's build closure: ngterm-mobile embeds a file of a crate outside it
+      # every crate, not only the core's build closure: ngterm-mobile embeds a file of a crate outside it. And the WSL
+      # shell integration: ngterm-core embeds its launcher
       - name: the core a run on main built from these inputs
         id: built
         uses: actions/cache/restore@v6
@@ -112,7 +114,7 @@ jobs:
           path: |
             mobile/ios/Packages/NgtermCore/Generated/NgtermCoreFFI.xcframework
             mobile/ios/Packages/NgtermCore/Generated/NgtermCoreBindings
-          key: ios-core-xcode-27-${{ hashFiles('crates/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/build-ios.sh', 'scripts/setup-ios.sh', 'scripts/build-ghostty-vt.sh', 'scripts/lib/native.sh') }}
+          key: ios-core-xcode-27-${{ hashFiles('crates/**', 'resources/shell-integration/wsl/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/build-ios.sh', 'scripts/setup-ios.sh', 'scripts/build-ghostty-vt.sh', 'scripts/lib/native.sh') }}
       - name: rust toolchain (rust-toolchain.toml)
         if: steps.built.outputs.cache-hit != 'true'
         run: rustup toolchain install
@@ -149,7 +151,8 @@ jobs:
             mobile/ios/Packages/NgtermCore/Generated/NgtermCoreFFI.xcframework
             mobile/ios/Packages/NgtermCore/Generated/NgtermCoreBindings
           if-no-files-found: error
-          retention-days: 1
+          # as long as "re-run failed jobs" is offered: that rerun skips this job and needs its artifact
+          retention-days: 30
 
   core-tests:
     runs-on: xcode-27
