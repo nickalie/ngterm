@@ -561,22 +561,36 @@ fn policy(h: &Harness, _: &Context) -> Outcome {
 
 // MARK: - input
 
+/// Input goes to a page the user sees. `WebKit` routes a wheel event by its scrolling tree, which learns of the page
+/// (its scroll node, the region its `wheel` listener covers) in the rendering update that draws the page's first
+/// frame. A wheel event sent before that is dropped, or scrolls the page without its listener hearing of it
+/// (`computeWheelProcessingSteps` in `Source/WebCore/page/scrolling/ScrollingTree.cpp` at `wpewebkit-2.54.1`). The
+/// listeners come before the block the awaited frame shows, so they were there when it was drawn.
+///
+/// The two clicks go out together: a double click is two presses within `WPEPlatform`'s double-click time, which a
+/// wait for the page's answer in between could outlast on a loaded machine.
 fn input(h: &Harness, _: &Context) -> Outcome {
     let view = h.view(h.ephemeral(), Settings::overlay(true));
     h.load(
         view,
         page(
-            "<div style='height:2000px'></div><script>\
-             addEventListener('mousedown', e => { document.title = 'down:' + e.button + ':' + e.detail; });\
+            "<script>const downs = [];\
+             addEventListener('mousedown', e => {\
+               downs.push(e.button + ':' + e.detail); document.title = 'down:' + downs.join(',');\
+             });\
              addEventListener('keydown', e => { document.title = 'key:' + e.key + (e.shiftKey ? ':shift' : ''); });\
-             addEventListener('wheel', () => { document.title = 'wheel'; });</script>",
+             let wheels = 0;\
+             const wheeled = () => { document.title = 'wheel:' + wheels + (scrollY > 0 ? ':scrolled' : ''); };\
+             addEventListener('wheel', () => { wheels += 1; wheeled(); });\
+             addEventListener('scroll', wheeled);</script>\
+             <div style='height:2000px;background:#c03030'></div>",
         ),
     )?;
+    h.pixel_frame(view, 160, 120, RED)?;
     h.host.set_focused(view, true);
     h.click(view, 10.0, 10.0);
-    h.title(view, "down:0:1")?;
     h.click(view, 10.0, 10.0);
-    h.title(view, "down:0:2")?;
+    h.title(view, "down:0:1,0:2")?;
     let key = |pressed, modifiers| Key {
         pressed,
         keyval: 0x61,
@@ -601,7 +615,8 @@ fn input(h: &Harness, _: &Context) -> Outcome {
             modifiers: Modifiers::empty(),
         }),
     );
-    h.title(view, "wheel")?;
+    // the listener hears the one wheel event and the page scrolls, in either order
+    h.title(view, "wheel:1:scrolled")?;
     h.host.close_view(view);
     Ok(())
 }

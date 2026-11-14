@@ -12,9 +12,6 @@ branches that changed nothing in `ngterm-wpe`:
   the 250 ms bound here.
 - `worker::client::tests::a_large_paste_and_the_input_after_it_reach_a_worker_that_reads`: `Option::unwrap()` on
   `None` at `client.rs:1061` (`wire::recv` returned nothing).
-- `--test headless` `pointer_keyboard_and_wheel_input_reach_the_page` (`tests/headless/cases.rs:30`): timed out
-  waiting for the page title (`down:0:2`, later `wheel`), in shm direct and shm worker modes; it failed the same way on
-  unmodified main.
 
 Each passed when rerun alone at lower load. Under the Gates these are bugs: the bounds measure the scheduler, not the
 code. Bound what the test means (a send never blocks on the stalled peer) by event or read-back, or derive the limit
