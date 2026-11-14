@@ -47,11 +47,11 @@ import java.io.File
  * machine; the agterm one lists its live session from agterm's own CLI (the machine has no `ngtermctl`), and its card,
  * its sessions screen and the attached session's bar say "agterm", the last two showing what agterm lacks on a tap or a
  * long press. Every menu of the agterm session (the machine's list, the attached list, the bar) has Chat view off with
- * "agterm has no chat view"; the session attaches through agterm's bundled zmx, where agterm's own window leads the
- * pane: it is covered with Take control, and once taken the shell's prompt reaches the terminal and a line typed on
- * the soft keyboard (the test APK's own, [QaKeyboards]) runs there; it ends through agterm's CLI. The ngterm machine beside it shows no badge and keeps Chat view in its
- * session's menus. The stand-in's pane runs no agent, so the missing Show chat switch of an agterm agent pane is
- * `ChatModeTest`'s (its agterm case), not this test's.
+ * "agterm has no chat view"; the session attaches through agterm's bundled zmx, where agterm's own window leads
+ * the pane: it is covered with Take control, and once taken the shell's prompt reaches the terminal and a line typed
+ * on the soft keyboard (the test APK's own, [QaKeyboards]) runs there; it ends through agterm's CLI. The ngterm
+ * machine beside it shows no badge and keeps Chat view in its session's menus. The stand-in's pane runs no agent, so
+ * the missing Show chat switch of an agterm agent pane is `ChatModeTest`'s (its agterm case), not this test's.
  *
  * The agterm machine is the conformance suite's stand-in for agterm v0.41.1
  * (`conformance/agterm_conformance/fake_agterm.py`: its `agtermctl` and its `zmx`, answering as upstream's sources and
