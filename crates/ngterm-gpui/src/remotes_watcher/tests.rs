@@ -6,9 +6,22 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
-/// Polls `condition` until it holds or five seconds pass.
+/// How long a step may take: a loaded runner took seconds to start a watch.
+const PATIENCE: Duration = Duration::from_secs(30);
+
+/// Settle times for a test that counts reads. A loaded runner stalls a writer in the middle of one write for longer
+/// than [`DEBOUNCE`] (measured on the Windows runner: up to a second), and each such gap is one more read.
+const COUNTED: Settle = Settle {
+    quiet: Duration::from_secs(2),
+    cap: Duration::from_secs(20),
+};
+
+/// Longer than [`COUNTED`]'s quiet time: a read that was coming has come.
+const COUNTED_QUIET: Duration = Duration::from_millis(2500);
+
+/// Polls `condition` until it holds or [`PATIENCE`] runs out.
 fn wait(what: &str, condition: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while !condition() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -30,7 +43,7 @@ fn settled(directory: &Path) {
     .unwrap();
     probe.watch(directory, RecursiveMode::NonRecursive).unwrap();
     std::fs::write(&marker, "").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let paths = events
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -60,12 +73,21 @@ impl Reads {
 
 /// A watcher on `path` that reads the file on every change, as the core's refresh does.
 fn watching(path: &Path, test: impl FnOnce(&Reads)) {
+    watching_settled(Settle::default(), path, test);
+}
+
+/// [`watching`], for a test that counts the reads.
+fn counting(path: &Path, test: impl FnOnce(&Reads)) {
+    watching_settled(COUNTED, path, test);
+}
+
+fn watching_settled(settle: Settle, path: &Path, test: impl FnOnce(&Reads)) {
     settled(&nearest_existing_directory(&absolute(path)));
     let reads = Reads::default();
     *reads.text.lock().unwrap() = std::fs::read_to_string(path).unwrap_or_default();
     let file = path.to_path_buf();
     let handler = reads.clone();
-    let mut watcher = RemotesWatcher::new(move || {
+    let mut watcher = RemotesWatcher::settling(settle, move || {
         *handler.text.lock().unwrap() = std::fs::read_to_string(&file).unwrap_or_default();
         handler.count.fetch_add(1, Ordering::SeqCst);
     })
@@ -204,16 +226,22 @@ fn a_burst_of_edits_is_read_once_it_settles() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("remotes.conf");
     std::fs::write(&file, "").unwrap();
-    watching(&file, |reads| {
+    counting(&file, |reads| {
         let mut whole = String::new();
+        let mut last = Instant::now();
         for line in 0..20 {
             let text = format!("host{line}\n");
+            last = Instant::now();
             let mut handle = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
             std::io::Write::write_all(&mut handle, text.as_bytes()).unwrap();
             whole.push_str(&text);
         }
         wait("the burst's end is read", || reads.text() == whole);
-        std::thread::sleep(DEBOUNCE * 4);
+        assert!(
+            last.elapsed() >= COUNTED.quiet,
+            "the read waits for the burst to settle"
+        );
+        std::thread::sleep(COUNTED_QUIET);
         assert_eq!(reads.count(), 1, "one read for the whole burst");
     });
 }
@@ -223,37 +251,43 @@ fn reading_the_file_or_listing_its_directory_is_no_change() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("remotes.conf");
     std::fs::write(&file, "studio\n").unwrap();
-    watching(&file, |reads| {
+    counting(&file, |reads| {
         for _ in 0..5 {
             assert_eq!(std::fs::read_to_string(&file).unwrap(), "studio\n");
             assert!(std::fs::read_dir(dir.path()).unwrap().count() >= 1);
         }
-        std::thread::sleep(DEBOUNCE * 4);
+        std::thread::sleep(COUNTED_QUIET);
         assert_eq!(reads.count(), 0, "the handler's own read would loop otherwise");
         std::fs::write(&file, "mini\n").unwrap();
         wait("a real edit still counts", || reads.text() == "mini\n");
-        std::thread::sleep(DEBOUNCE * 4);
+        std::thread::sleep(COUNTED_QUIET);
         assert_eq!(reads.count(), 1, "the handler's read of the edit is no change either");
     });
 }
 
 #[test]
 fn a_steady_stream_of_edits_is_read_by_the_cap() {
+    let settle = Settle::default();
     let mut burst = Burst::default();
     let start = Instant::now();
-    assert_eq!(burst.due(), None, "nothing waits");
+    assert_eq!(burst.due(settle), None, "nothing waits");
     burst.changed(start);
-    assert_eq!(burst.due(), Some(start + DEBOUNCE));
+    assert_eq!(burst.due(settle), Some(start + DEBOUNCE));
     let later = start + DEBOUNCE / 2;
     burst.changed(later);
     assert_eq!(
-        burst.due(),
+        burst.due(settle),
         Some(later + DEBOUNCE),
         "a later change pushes the read back"
     );
+    assert_eq!(
+        burst.due(COUNTED),
+        Some(later + COUNTED.quiet),
+        "by the settle times it is given"
+    );
     let steady = start + DEBOUNCE_CAP;
     burst.changed(steady);
-    assert_eq!(burst.due(), Some(start + DEBOUNCE_CAP), "never past the cap");
+    assert_eq!(burst.due(settle), Some(start + DEBOUNCE_CAP), "never past the cap");
 }
 
 #[test]
@@ -355,7 +389,7 @@ fn following_the_same_path_again_keeps_the_watch_and_a_new_one_moves_it() {
     settled(dir.path());
     let count = Arc::new(AtomicUsize::new(0));
     let counting = Arc::clone(&count);
-    let mut watcher = RemotesWatcher::new(move || {
+    let mut watcher = RemotesWatcher::settling(COUNTED, move || {
         counting.fetch_add(1, Ordering::SeqCst);
     })
     .unwrap();
@@ -364,7 +398,7 @@ fn following_the_same_path_again_keeps_the_watch_and_a_new_one_moves_it() {
     wait("one read for following it, not two", || {
         count.load(Ordering::SeqCst) == 1
     });
-    std::thread::sleep(DEBOUNCE * 4);
+    std::thread::sleep(COUNTED_QUIET);
     assert_eq!(count.load(Ordering::SeqCst), 1, "the same path again is no new follow");
     std::fs::write(&first, "studio\n").unwrap();
     wait("the first file's edit", || count.load(Ordering::SeqCst) == 2);
@@ -374,10 +408,10 @@ fn following_the_same_path_again_keeps_the_watch_and_a_new_one_moves_it() {
     });
     // the first file alone, settled apart: a watch left on it would read once more
     std::fs::write(&first, "mini\n").unwrap();
-    std::thread::sleep(DEBOUNCE * 4);
+    std::thread::sleep(COUNTED_QUIET);
     assert_eq!(count.load(Ordering::SeqCst), 3, "the first file is no longer followed");
     std::fs::write(&second, "mini\n").unwrap();
     wait("the second file's edit", || count.load(Ordering::SeqCst) == 4);
-    std::thread::sleep(DEBOUNCE * 4);
+    std::thread::sleep(COUNTED_QUIET);
     assert_eq!(count.load(Ordering::SeqCst), 4, "one read for one edit");
 }

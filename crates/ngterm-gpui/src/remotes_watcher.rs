@@ -31,6 +31,24 @@ pub const DEBOUNCE: Duration = Duration::from_millis(50);
 /// The longest a steady stream of changes holds the read back.
 pub const DEBOUNCE_CAP: Duration = Duration::from_millis(500);
 
+/// How a burst of changes settles before one read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Settle {
+    /// How long after the burst's last change.
+    quiet: Duration,
+    /// How long after its first change at most.
+    cap: Duration,
+}
+
+impl Default for Settle {
+    fn default() -> Self {
+        Self {
+            quiet: DEBOUNCE,
+            cap: DEBOUNCE_CAP,
+        }
+    }
+}
+
 enum Message {
     Follow(PathBuf),
     Event(notify::Result<Event>),
@@ -52,11 +70,16 @@ impl RemotesWatcher {
     ///
     /// The watcher's thread could not start.
     pub fn new(on_change: impl Fn() + Send + 'static) -> std::io::Result<Self> {
+        Self::settling(Settle::default(), on_change)
+    }
+
+    /// [`Self::new`] with its own settle times: a test that counts reads takes ones no stalled writer overruns.
+    fn settling(settle: Settle, on_change: impl Fn() + Send + 'static) -> std::io::Result<Self> {
         let (control, messages) = mpsc::channel();
         let events = control.clone();
         let thread = std::thread::Builder::new()
             .name("ngterm-remotes-watch".to_owned())
-            .spawn(move || run(&messages, &events, &on_change))?;
+            .spawn(move || run(&messages, &events, settle, &on_change))?;
         Ok(Self {
             control,
             path: None,
@@ -150,11 +173,11 @@ impl Watch {
 }
 
 /// The thread: follows what [`RemotesWatcher::follow`] asks, debounces the changes, re-arms and reports.
-fn run(messages: &mpsc::Receiver<Message>, events: &mpsc::Sender<Message>, on_change: &dyn Fn()) {
+fn run(messages: &mpsc::Receiver<Message>, events: &mpsc::Sender<Message>, settle: Settle, on_change: &dyn Fn()) {
     let mut watch = Watch::default();
     let mut burst = Burst::default();
     loop {
-        let message = match burst.due() {
+        let message = match burst.due(settle) {
             None => messages.recv().map_err(|_| RecvTimeoutError::Disconnected),
             Some(due) => messages.recv_timeout(due.saturating_duration_since(Instant::now())),
         };
@@ -198,10 +221,10 @@ impl Burst {
         self.span = Some((first, now));
     }
 
-    /// When the burst is read: [`DEBOUNCE`] after its last change, at most [`DEBOUNCE_CAP`] after its first.
-    fn due(&self) -> Option<Instant> {
+    /// When the burst is read: `settle.quiet` after its last change, at most `settle.cap` after its first.
+    fn due(&self, settle: Settle) -> Option<Instant> {
         self.span
-            .map(|(first, last)| (last + DEBOUNCE).min(first + DEBOUNCE_CAP))
+            .map(|(first, last)| (last + settle.quiet).min(first + settle.cap))
     }
 }
 
