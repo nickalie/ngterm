@@ -20,11 +20,11 @@ pub(crate) fn local_token() -> Option<String> {
 fn resolve(env: impl Fn(&str) -> Option<String>, cli: impl FnOnce() -> Option<String>) -> Option<String> {
     ["GH_TOKEN", "GITHUB_TOKEN"]
         .into_iter()
-        .find_map(|name| env(name).and_then(valid_token))
+        .find_map(|name| env(name).as_deref().and_then(valid_token))
         .or_else(cli)
 }
 
-fn valid_token(value: String) -> Option<String> {
+fn valid_token(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty() && value.len() <= TOKEN_LIMIT && value.bytes().all(|byte| byte.is_ascii_graphic()))
         .then(|| value.to_owned())
@@ -67,7 +67,7 @@ fn command_token(command: &mut Command, timeout: Duration) -> Option<String> {
     let bytes = receive
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .ok()??;
-    valid_token(String::from_utf8(bytes).ok()?)
+    valid_token(&String::from_utf8(bytes).ok()?)
 }
 
 #[cfg(test)]
@@ -89,7 +89,7 @@ mod tests {
             Some("cli".into())
         );
         assert_eq!(resolve(|_| None, || None), None);
-        assert_eq!(valid_token(" token\r\n".into()), Some("token".into()));
+        assert_eq!(valid_token(" token\r\n"), Some("token".into()));
         for value in [
             String::new(),
             " \n".into(),
@@ -97,7 +97,7 @@ mod tests {
             "токен".into(),
             "x".repeat(TOKEN_LIMIT + 1),
         ] {
-            assert!(valid_token(value).is_none());
+            assert!(valid_token(&value).is_none());
         }
     }
 

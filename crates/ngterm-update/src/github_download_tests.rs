@@ -1,5 +1,5 @@
 use super::*;
-use std::io::{BufRead as _, Write as _};
+use std::io::BufRead as _;
 
 struct Server {
     url: String,
@@ -15,36 +15,7 @@ impl Server {
         let requests = std::thread::spawn(move || {
             responses
                 .into_iter()
-                .map(|response| {
-                    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                    let mut stream = loop {
-                        match listener.accept() {
-                            Ok((stream, _)) => break stream,
-                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                assert!(std::time::Instant::now() < deadline, "missing request");
-                                std::thread::sleep(Duration::from_millis(1));
-                            }
-                            Err(e) => panic!("accept: {e}"),
-                        }
-                    };
-                    stream.set_nonblocking(false).unwrap();
-                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-                    let mut reader = std::io::BufReader::new(&mut stream);
-                    let mut request = String::new();
-                    loop {
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                            break;
-                        }
-                        request.push_str(&line);
-                    }
-                    write!(
-                        stream,
-                        "HTTP/1.1 {response}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
-                    )
-                    .unwrap();
-                    request.to_ascii_lowercase()
-                })
+                .map(|response| serve(&listener, &response))
                 .collect()
         });
         Self { url, requests }
@@ -53,6 +24,41 @@ impl Server {
     fn finish(self) -> Vec<String> {
         self.requests.join().unwrap()
     }
+}
+
+fn accept(listener: &std::net::TcpListener) -> std::net::TcpStream {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => return stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(std::time::Instant::now() < deadline, "missing request");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(e) => panic!("accept: {e}"),
+        }
+    }
+}
+
+fn serve(listener: &std::net::TcpListener, response: &str) -> String {
+    let mut stream = accept(listener);
+    stream.set_nonblocking(false).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut reader = std::io::BufReader::new(&mut stream);
+    let mut request = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+            break;
+        }
+        request.push_str(&line);
+    }
+    write!(
+        stream,
+        "HTTP/1.1 {response}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+    )
+    .unwrap();
+    request.to_ascii_lowercase()
 }
 
 fn test_agent() -> ureq::Agent {
