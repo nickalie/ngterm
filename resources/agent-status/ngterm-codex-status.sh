@@ -157,6 +157,8 @@ stop_watcher() {
 }
 
 start_watcher() {
+  # Windows Codex can wait for the background descendant after the hook itself exits.
+  case "${OSTYPE:-}" in msys*|cygwin*|win32*) return 0 ;; esac
   local token token_file
   token_file=$(watch_file_path)
   token="$$-${RANDOM:-0}"

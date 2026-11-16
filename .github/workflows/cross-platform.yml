@@ -83,6 +83,8 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
+      - name: Codex lifecycle hooks (native Bash, including Git Bash on Windows)
+        run: python3 scripts/test-codex-status-hook.py --self-test
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       # only main saves caches: a branch's would crowd main's out of the repository's cache space
