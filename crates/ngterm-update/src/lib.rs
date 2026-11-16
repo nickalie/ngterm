@@ -8,6 +8,7 @@
 mod download;
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
+mod github_auth;
 mod install;
 mod privileged;
 mod staging;

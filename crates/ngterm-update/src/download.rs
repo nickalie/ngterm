@@ -80,13 +80,9 @@ impl Source {
     /// # Errors
     /// Returns network, metadata or incompatible release errors.
     pub fn check(&self, installation: &Installation, current: &str, trust: &Trust) -> Result<Option<Release>, Error> {
-        let mut response = self
-            .agent
-            .get(&self.api)
-            .header("User-Agent", concat!("ngterm/", env!("CARGO_PKG_VERSION")))
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .call()?;
+        let mut response = metadata_response(&self.agent, &self.api, || {
+            (self.api == API).then(crate::github_auth::local_token).flatten()
+        })?;
         let bytes = bounded_read(response.body_mut().as_reader(), METADATA_LIMIT)?;
         select(
             &serde_json::from_slice(&bytes)?,
@@ -96,6 +92,72 @@ impl Source {
             trust,
         )
     }
+}
+
+fn metadata_request(
+    agent: &ureq::Agent,
+    url: &str,
+    token: Option<&str>,
+) -> Result<ureq::http::Response<ureq::Body>, Error> {
+    let mut request = agent
+        .get(url)
+        .config()
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build()
+        .header("User-Agent", concat!("ngterm/", env!("CARGO_PKG_VERSION")))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28");
+    if let Some(token) = token {
+        let mut value = ureq::http::HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| error("The local GitHub credential is not a valid HTTP header."))?;
+        value.set_sensitive(true);
+        request = request.header("Authorization", value);
+    }
+    Ok(request.call()?)
+}
+
+fn metadata_response(
+    agent: &ureq::Agent,
+    url: &str,
+    credentials: impl FnOnce() -> Option<String>,
+) -> Result<ureq::http::Response<ureq::Body>, Error> {
+    let mut response = metadata_request(agent, url, None)?;
+    if primary_limit(&response)
+        && !response.headers().contains_key("retry-after")
+        && let Some(token) = credentials()
+    {
+        response = metadata_request(agent, url, Some(&token))?;
+    }
+    if primary_limit(&response) {
+        let reset = response
+            .headers()
+            .get("x-ratelimit-reset")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let retry = reset.map_or_else(String::new, |reset| {
+            format!(" Retry in {} seconds.", reset.saturating_sub(now))
+        });
+        return Err(error(format!(
+            "GitHub's API rate limit was reached.{retry} Check local GitHub authentication or use Release Downloads."
+        )));
+    }
+    if !response.status().is_success() {
+        return Err(ureq::Error::StatusCode(response.status().as_u16()).into());
+    }
+    Ok(response)
+}
+
+fn primary_limit(response: &ureq::http::Response<ureq::Body>) -> bool {
+    matches!(response.status().as_u16(), 403 | 429)
+        && response
+            .headers()
+            .get("x-ratelimit-remaining")
+            .is_some_and(|value| value == "0")
 }
 
 pub(crate) fn select(
@@ -317,3 +379,7 @@ pub(crate) fn download(
 #[cfg(test)]
 #[path = "download_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "github_download_tests.rs"]
+mod github_tests;
