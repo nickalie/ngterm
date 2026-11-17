@@ -358,11 +358,15 @@ mod tests {
         encoder.set_legacy_only(true);
         assert_eq!(encoder.encode(&mut terminal, &ctrl_c).unwrap(), b"\x03");
         assert_eq!(
-            encoder.encode(&mut terminal, &press(Key::ESCAPE, KeyMods::empty(), "")).unwrap(),
+            encoder
+                .encode(&mut terminal, &press(Key::ESCAPE, KeyMods::empty(), ""))
+                .unwrap(),
             b"\x1b"
         );
         assert_eq!(
-            encoder.encode(&mut terminal, &press(Key::TAB, KeyMods::SHIFT, "")).unwrap(),
+            encoder
+                .encode(&mut terminal, &press(Key::TAB, KeyMods::SHIFT, ""))
+                .unwrap(),
             b"\x1b[Z"
         );
         let release = KeyEvent {
