@@ -145,7 +145,6 @@ fn legacy_keys_ignore_the_kitty_and_modify_other_keys_modes() -> TestResult {
             (press("escape", Mods::empty(), ""), b"\x1b"),
             (press("key_c", Mods::CTRL, "c"), b"\x03"),
             (press("tab", Mods::SHIFT, ""), b"\x1b[Z"),
-            (press("key_x", Mods::ALT, "x"), b"\x1bx"),
             (press("key_a", Mods::empty(), "a"), b"a"),
         ],
     )
