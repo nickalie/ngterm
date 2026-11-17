@@ -296,9 +296,11 @@ pub(crate) struct InputState {
 }
 
 impl InputState {
-    pub(crate) fn new() -> Result<Self, vt::Error> {
+    pub(crate) fn new(legacy_keys: bool) -> Result<Self, vt::Error> {
+        let mut keys = vt::KeyEncoder::new()?;
+        keys.set_legacy_only(legacy_keys);
         Ok(Self {
-            keys: vt::KeyEncoder::new()?,
+            keys,
             mouse: vt::MouseEncoder::new()?,
             pressed: 0,
             padding: Padding::default(),

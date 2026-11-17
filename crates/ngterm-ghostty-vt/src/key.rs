@@ -120,6 +120,7 @@ pub struct KeyEncoder {
     // the event goes first: it never refers to the encoder, but nothing should outlive what it was made for
     event: Handle<ffi::GhosttyKeyEventImpl>,
     encoder: Handle<ffi::GhosttyKeyEncoderImpl>,
+    legacy_only: bool,
 }
 
 // SAFETY: both handles are plain library allocations with no thread affinity (crate docs); `&mut self` serializes
@@ -139,7 +140,17 @@ impl KeyEncoder {
         // SAFETY: as above.
         Error::check(unsafe { ffi::ghostty_key_event_new(std::ptr::null(), &raw mut event) })?;
         let event = Handle::new(event, ffi::ghostty_key_event_free)?;
-        Ok(Self { event, encoder })
+        Ok(Self {
+            event,
+            encoder,
+            legacy_only: false,
+        })
+    }
+
+    /// Encode every key as the legacy encodings would, whatever the program asked for: no Kitty keyboard protocol and
+    /// no `modifyOtherKeys`. For a program behind Windows' pseudoconsole, whose input parser drops both.
+    pub fn set_legacy_only(&mut self, legacy_only: bool) {
+        self.legacy_only = legacy_only;
     }
 
     /// The bytes `event` sends to the program under `terminal`'s current modes; empty when the key sends nothing (a
@@ -165,6 +176,9 @@ impl KeyEncoder {
         // SAFETY: both handles are live and `&mut` borrows serialize the call with the terminal's other users; the
         // call reads the terminal's modes into the encoder.
         unsafe { ffi::ghostty_key_encoder_setopt_from_terminal(self.encoder.ptr(), terminal.as_raw()) };
+        if self.legacy_only {
+            self.drop_extended_modes();
+        }
         if enabled {
             let mode = ffi::GHOSTTY_OPTION_AS_ALT_TRUE;
             // SAFETY: the option takes GhosttyOptionAsAlt, borrowed for this setter call on a live encoder.
@@ -188,6 +202,27 @@ impl KeyEncoder {
         // SAFETY: the event is live; null with zero length is "no text", so the event keeps no pointer to `text`.
         unsafe { ffi::ghostty_key_event_set_utf8(self.event.ptr(), std::ptr::null(), 0) };
         encoded
+    }
+
+    fn drop_extended_modes(&mut self) {
+        let kitty: ffi::GhosttyKittyKeyFlags = 0;
+        // SAFETY: the option takes GhosttyKittyKeyFlags, borrowed for this setter call on a live encoder.
+        unsafe {
+            ffi::ghostty_key_encoder_setopt(
+                self.encoder.ptr(),
+                ffi::GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS,
+                (&raw const kitty).cast(),
+            );
+        };
+        let modify_other_keys = false;
+        // SAFETY: the option takes a bool, borrowed for this setter call on a live encoder.
+        unsafe {
+            ffi::ghostty_key_encoder_setopt(
+                self.encoder.ptr(),
+                ffi::GHOSTTY_KEY_ENCODER_OPT_MODIFY_OTHER_KEYS_STATE_2,
+                (&raw const modify_other_keys).cast(),
+            );
+        };
     }
 
     fn fill(&mut self, event: &KeyEvent<'_>) {
@@ -308,6 +343,35 @@ mod tests {
         };
         assert_eq!(encode(&mut terminal, &ctrl_c), b"\x1b[99;5u");
         assert!(!terminal.mode(Mode::dec(1)));
+    }
+
+    #[test]
+    fn legacy_only_ignores_the_kitty_flags_and_modify_other_keys() {
+        let mut terminal = Terminal::new(80, 24).unwrap();
+        terminal.vt_write(b"\x1b[>1u\x1b[>4;2m");
+        let mut encoder = KeyEncoder::new().unwrap();
+        let ctrl_c = KeyEvent {
+            unshifted: Some('c'),
+            ..press(Key::C, KeyMods::CTRL, "c")
+        };
+        assert_ne!(encoder.encode(&mut terminal, &ctrl_c).unwrap(), b"\x03");
+        encoder.set_legacy_only(true);
+        assert_eq!(encoder.encode(&mut terminal, &ctrl_c).unwrap(), b"\x03");
+        assert_eq!(
+            encoder.encode(&mut terminal, &press(Key::ESCAPE, KeyMods::empty(), "")).unwrap(),
+            b"\x1b"
+        );
+        assert_eq!(
+            encoder.encode(&mut terminal, &press(Key::TAB, KeyMods::SHIFT, "")).unwrap(),
+            b"\x1b[Z"
+        );
+        let release = KeyEvent {
+            action: KeyAction::Release,
+            ..press(Key::A, KeyMods::empty(), "a")
+        };
+        assert!(encoder.encode(&mut terminal, &release).unwrap().is_empty());
+        encoder.set_legacy_only(false);
+        assert_eq!(encoder.encode(&mut terminal, &ctrl_c).unwrap(), b"\x1b[99;5u");
     }
 
     #[test]

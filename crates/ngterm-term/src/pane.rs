@@ -101,6 +101,9 @@ pub struct PaneConfig {
     pub grapheme_clusters: bool,
     /// The desktop's appearance the terminal answers color scheme queries with ([`Pane::set_color_scheme`]).
     pub color_scheme: ColorScheme,
+    /// Keys always take their legacy encodings, whatever the program asks for ([`vt::KeyEncoder::set_legacy_only`]):
+    /// on by default on Windows, whose pseudoconsole drops the Kitty keyboard protocol's and `modifyOtherKeys`' keys.
+    pub legacy_keys: bool,
     pub wake: Option<Wake>,
 }
 
@@ -119,6 +122,7 @@ impl PaneConfig {
             status_file: None,
             grapheme_clusters: true,
             color_scheme: ColorScheme::default(),
+            legacy_keys: cfg!(windows),
             wake: None,
         }
     }
@@ -138,6 +142,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("status_file", &self.status_file)
             .field("grapheme_clusters", &self.grapheme_clusters)
             .field("color_scheme", &self.color_scheme)
+            .field("legacy_keys", &self.legacy_keys)
             .field("wake", &self.wake.is_some())
             .finish()
     }
@@ -947,7 +952,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
         }))
         .map_err(PaneError::terminal)?;
     let colors = terminal.colors();
-    let input = InputState::new().map_err(PaneError::terminal)?;
+    let input = InputState::new(config.legacy_keys).map_err(PaneError::terminal)?;
     Ok(Shared {
         bridge: Mutex::new(crate::bridge::Peer {
             expected_nonce: config.attach_bridge.clone(),

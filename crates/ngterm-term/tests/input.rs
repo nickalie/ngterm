@@ -16,16 +16,21 @@ use std::fmt::Write as _;
 
 use ngterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
 use ngterm_term::{
-    ClipboardLocation, GridPoint, KeyInput, MouseAction, MouseButton, MouseInput, Padding, PaneError, Paste,
-    PasteSource, Scroll, TextRegion, Typing, Wheel, WheelInput,
+    ClipboardLocation, GridPoint, KeyInput, MouseAction, MouseButton, MouseInput, Padding, PaneConfig, PaneError,
+    Paste, PasteSource, Scroll, TextRegion, Typing, Wheel, WheelInput,
 };
-use support::{Fixture, TestResult, spawn, wait_file, wait_text};
+use support::{Fixture, SIZE, TestResult, spawn, spawn_with, wait_file, wait_text};
 
 /// A child in raw mode that sets `modes`, says `ready` and copies its input to `$DIR/in`.
 fn recorder(modes: &str) -> TestResult<Fixture> {
-    let fixture = spawn(&format!(
-        "stty raw -echo; printf '{modes}'; printf ready; exec cat > \"$DIR/in\""
-    ))?;
+    recorder_with(modes, &PaneConfig::new(SIZE))
+}
+
+fn recorder_with(modes: &str, config: &PaneConfig) -> TestResult<Fixture> {
+    let fixture = spawn_with(
+        &format!("stty raw -echo; printf '{modes}'; printf ready; exec cat > \"$DIR/in\""),
+        config,
+    )?;
     wait_text(&fixture.pane, "ready");
     Ok(fixture)
 }
@@ -124,6 +129,25 @@ fn kitty_encodings_follow_the_flags_the_program_pushed() -> TestResult {
             },
             b"\x1b[99;5:3u",
         )],
+    )
+}
+
+#[test]
+fn legacy_keys_ignore_the_kitty_and_modify_other_keys_modes() -> TestResult {
+    let config = PaneConfig {
+        legacy_keys: true,
+        ..PaneConfig::new(SIZE)
+    };
+    let fixture = recorder_with("\\033[>1u\\033[>4;2m", &config)?;
+    type_keys(
+        &fixture,
+        &[
+            (press("escape", Mods::empty(), ""), b"\x1b"),
+            (press("key_c", Mods::CTRL, "c"), b"\x03"),
+            (press("tab", Mods::SHIFT, ""), b"\x1b[Z"),
+            (press("key_x", Mods::ALT, "x"), b"\x1bx"),
+            (press("key_a", Mods::empty(), "a"), b"a"),
+        ],
     )
 }
 
