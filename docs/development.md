@@ -1370,8 +1370,8 @@ msiexec /i dist\ngterm-x64.msi                                               # f
 It installs into `%LOCALAPPDATA%\Programs\ngterm` with the staged layout and the licenses under `share\doc`, puts
 `bin\` on the user's `PATH`, and adds a Start-menu shortcut carrying the application id. The version is the staged
 `ngterm`'s Cargo version unless `--version` gives one; an install of a higher version replaces the installed one (a
-major upgrade). The uninstall removes its files, shortcut, `PATH` entry and the application id's registration, and
-leaves the state and config dirs. The session server's build id
+major upgrade, installed over it so that a taskbar pin survives). The uninstall removes its files, shortcut, `PATH`
+entry and the application id's registration, and leaves the state and config dirs. The session server's build id
 (`share\ngterm\session-BUILD`) is not installed, so an installed session server hands no sessions over to a new build
 after an upgrade (the .wxs header says why). `scripts/check-msi.ps1` installs an MSI for the current user, checks
 what it installed, upgrades and uninstalls it, on a throwaway machine or account only, as CI does.

@@ -26,8 +26,10 @@
   time, so the id would never match; without it the installed server runs as an unstaged one (no outdated reason, no
   handoff), as `cargo run` does.
 
-  Upgrades are major upgrades under the one UpgradeCode below (never change it): the earlier version is removed before
-  the new one is installed; user state (the state, config and agent directories) is never the installer's.
+  Upgrades are major upgrades under the one UpgradeCode below (never change it): the new version is installed over the
+  earlier one, which is removed after it, so ngterm.exe and the Start-menu shortcut never disappear and Explorer keeps
+  the user's taskbar pin (removing the earlier version first made it drop the pin); user state (the state, config and
+  agent directories) is never the installer's.
 
   ICE38, ICE64 and ICE91 are suppressed by the build script: they ask a component under the user's profile to key on
   an HKCU value, list its folders for removal, and vary with ALLUSERS, for the roaming profiles and per-user copies of
@@ -38,7 +40,8 @@
   <Package Name="ngterm" Manufacturer="ngterm" Version="$(var.Version)" UpgradeCode="2AFFBC1D-0676-4307-9304-8F9FC6D23363"
            Scope="perUser" Language="1033">
     <SummaryInformation Description="ngterm $(var.Version) installer" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of ngterm is already installed." />
+    <MajorUpgrade Schedule="afterInstallExecute"
+                  DowngradeErrorMessage="A newer version of ngterm is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Icon Id="ngterm.ico" SourceFile="$(var.Icon)" />

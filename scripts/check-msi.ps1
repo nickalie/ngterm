@@ -15,11 +15,12 @@ build identity and the licenses are in the staged layout; no session build id (p
 package's version; the user's PATH in the registry holds bin\ and keeps its value kind (REG_EXPAND_SZ), and a new
 PowerShell given that PATH finds the installed ngtermctl and runs it; the Start-menu shortcut targets ngterm.exe, starts
 in the user's profile and carries the app id as its System.AppUserModel.ID. With -UpgradeMsi, that MSI (a higher
-version) replaces the first: the first product is gone, the second installed, the files in place, and a file in the
-app's state directory is kept. Then the uninstall, after the app id's toast registration is written as the app writes it
-at each launch: no install folder, shortcut, product registration, PATH entry (the user's PATH has its entries and kind
-back), HKCU\Software\ngterm or app id registration is left, and the state directory's file stays (user state is never
-the installer's).
+version) replaces the first: the first product is gone, the second installed, the files in place, bin\ on the user's
+PATH once, ngterm.exe and the Start-menu shortcut never removed on the way (Explorer drops a taskbar pin whose target
+disappears), and a file in the app's state directory is kept. Then the uninstall, after the app id's toast registration
+is written as the app writes it at each launch: no install folder, shortcut, product registration, PATH entry (the
+user's PATH has its entries and kind back), HKCU\Software\ngterm or app id registration is left, and the state
+directory's file stays (user state is never the installer's).
 
 Each msiexec run logs verbosely under -Log. The exit status is 0 when every check passed.
 
@@ -88,8 +89,22 @@ function Get-RawUserPath {
     @([string] $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames'), [string] $key.GetValueKind('Path'))
 }
 
-function Test-OnUserPath {
-    @((Get-UserPath) -split ';' | Where-Object { $_.TrimEnd('\') -ieq $bin }).Count -gt 0
+function Get-UserPathCount {
+    @((Get-UserPath) -split ';' | Where-Object { $_.TrimEnd('\') -ieq $bin }).Count
+}
+
+function Test-OnUserPath { (Get-UserPathCount) -gt 0 }
+
+# Deleted and Renamed events of the given files, queued while msiexec runs and read back with Get-Event.
+function Watch-Removal([string[]] $paths) {
+    foreach ($path in $paths) {
+        $watcher = New-Object IO.FileSystemWatcher (Split-Path $path), (Split-Path -Leaf $path)
+        $watcher.EnableRaisingEvents = $true
+        foreach ($kind in 'Deleted', 'Renamed') {
+            Register-ObjectEvent -InputObject $watcher -EventName $kind -SourceIdentifier "removal-$kind-$path" | Out-Null
+        }
+        $watcher
+    }
 }
 
 function Test-Installed([string] $msi, [bool] $versioned) {
@@ -160,10 +175,20 @@ New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 Set-Content -Path $stateFile -Value 'user state'
 
 if ($UpgradeMsi) {
+    $watchers = @(Watch-Removal @($shortcut, (Join-Path $bin 'ngterm.exe')))
     Invoke-Msiexec @('/i', "`"$UpgradeMsi`"") 'upgrade'
+    # the watchers' events arrive on their own thread, a moment after msiexec exits
+    Start-Sleep -Seconds 1
+    $removals = @(Get-Event | Where-Object { $_.SourceIdentifier -like 'removal-*' })
+    $seen = ($removals | ForEach-Object { "$($_.SourceEventArgs.ChangeType) $($_.SourceEventArgs.FullPath)" }) -join ', '
+    Check "the upgrade never removed ngterm.exe or the shortcut (saw '$seen')" ($removals.Count -eq 0)
+    Get-EventSubscriber | Where-Object { $_.SourceIdentifier -like 'removal-*' } | Unregister-Event
+    $removals | Remove-Event
+    $watchers | ForEach-Object { $_.Dispose() }
     Check "the upgrade removed product $installed" ((Get-ProductState $installed) -eq -1)
     # built from the same binaries with a higher package version (scripts/build-msi.sh --version)
     $installed = Test-Installed $UpgradeMsi $false
+    Check "the user's PATH holds $bin once after the upgrade ($(Get-UserPathCount))" ((Get-UserPathCount) -eq 1)
     Check 'the upgrade kept the state directory' (Test-Path -PathType Leaf $stateFile)
 }
 
