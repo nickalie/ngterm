@@ -69,6 +69,7 @@ pub mod sidebar_actions;
 pub mod sidebar_drop;
 pub mod sound_throttle;
 pub mod state_lock;
+pub mod terminal_text;
 pub mod theme;
 pub mod title_admission;
 pub mod title_throttle;

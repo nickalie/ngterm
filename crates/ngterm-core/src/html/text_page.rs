@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::markdown_page::escaped;
-use super::terminal_text::stripping_escapes;
+use crate::terminal_text::stripping_escapes;
 
 /// The most a text page reads of its file.
 pub const MAX_BYTES: usize = 4 << 20;

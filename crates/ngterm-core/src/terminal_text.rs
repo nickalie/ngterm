@@ -1,5 +1,6 @@
-//! Text a terminal program wrote, read as the text it shows (upstream's `TerminalText.strippingEscapes`): a log page's
-//! diff headers and a failed custom command's panel drop the escape sequences that `text.js` paints or ignores.
+//! Text a terminal program wrote, read as the text it shows (upstream's `TerminalText.strippingEscapes`; its
+//! `sanitized` half is [`crate::model::naming::sanitized`]): a diff page's `--- `/`+++ ` headers and a failed custom
+//! command's panel drop the escape sequences that `text.js` paints or ignores.
 
 use std::borrow::Cow;
 

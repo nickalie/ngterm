@@ -4,9 +4,9 @@
 //! The runner posts the panel without the control dispatcher's text validation, so every string here is already
 //! stripped of escape sequences and control characters and capped at [`HudSpec::MAX_TEXT_LENGTH`].
 
-use crate::html::terminal_text::stripping_escapes;
 use crate::hud::{HudSpec, text_length};
 use crate::model::naming::sanitized;
+use crate::terminal_text::stripping_escapes;
 
 /// How much of stderr is retained, in bytes: only the last line is shown, and a command writing megabytes must not
 /// grow the buffer with it.
