@@ -78,7 +78,8 @@ jobs:
           if ((${#words[@]})); then
             extra=""
             for word in "${words[@]}"; do
-              if [[ "$word" != conformance/tests/* || "/$word/" == */../* ]]; then
+              path="${word%%::*}"
+              if [[ "$path" != conformance/tests/* || "/$path/" == */../* ]]; then
                 echo "::error::tests: $word is not under conformance/tests/"
                 exit 1
               fi
