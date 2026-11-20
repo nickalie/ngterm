@@ -40,8 +40,9 @@ panes; the hard limit is preserved. The remotes watcher accounts for FSEvents re
 Native services include the AppKit menu bar, physical Carbon global hotkeys, AppKit keyboard events and the layout's Command table,
 Text Input Source Services layout locks, system sounds, a private selection pasteboard, HTML clipboard content,
 window state queries, Reduce Motion/Transparency, network and wake retries, and UserNotifications banners.
-`macos-option-as-alt` selects neither, both, left or right Option as Meta; other Option presses retain layout
-text and dead-key composition. Network/wake and accessibility changes arrive through system notifications.
+`macos-option-as-alt` selects neither, both, left or right Option as Meta; unset, it is both on the U.S. and U.S.
+International layouts and neither on others, as in Ghostty, read from the current layout at each Option key. Other
+Option presses retain layout text and dead-key composition. Network/wake and accessibility changes arrive through system notifications.
 Notifications require launching a bundle and allowing notifications when macOS requests authorization.
 
 WKWebView pages share the native page lifecycle and navigation policy with the Windows frontend. Ephemeral pages

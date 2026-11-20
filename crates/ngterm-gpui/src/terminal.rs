@@ -91,7 +91,7 @@ pub(crate) fn run_frame(cx: &mut gpui_kit::VisualTestContext) {
 /// What a terminal draws and starts with, from the ghostty config.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerminalConfig {
-    pub macos_option_as_alt: ghostty_config::MacosOptionAsAlt,
+    pub macos_option_as_alt: Option<ghostty_config::MacosOptionAsAlt>,
     pub font: ghostty_config::Font,
     pub padding: ghostty_config::WindowPadding,
     pub palette: Arc<Palette>,

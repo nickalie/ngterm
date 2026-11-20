@@ -454,16 +454,36 @@ impl KeyStroke {
         }
     }
 
-    /// Apply terminal Option-as-Alt after the application keymap has had its own layout-aware chord.
+    /// Apply terminal Option-as-Alt after the application keymap has had its own layout-aware chord; an unset `mode`
+    /// takes the current keyboard layout's default ([`MacosOptionAsAlt::resolve`]).
+    ///
+    /// [`MacosOptionAsAlt::resolve`]: ngterm_core::ghostty_config::MacosOptionAsAlt::resolve
     #[must_use]
     pub fn with_option_as_alt(
         &self,
-        mode: ngterm_core::ghostty_config::MacosOptionAsAlt,
+        mode: Option<ngterm_core::ghostty_config::MacosOptionAsAlt>,
+    ) -> std::borrow::Cow<'_, Self> {
+        #[cfg(target_os = "macos")]
+        let layout_id = crate::input_source::keyboard_layout_id;
+        // the key does nothing off macOS
+        #[cfg(not(target_os = "macos"))]
+        let layout_id = Option::default;
+        self.with_option_as_alt_on(mode, layout_id)
+    }
+
+    /// [`Self::with_option_as_alt`] on the keyboard layout `layout_id` reads, only for a key Option modifies (Ghostty's
+    /// Surface.zig `encodeKeyOpts`).
+    #[must_use]
+    pub fn with_option_as_alt_on(
+        &self,
+        mode: Option<ngterm_core::ghostty_config::MacosOptionAsAlt>,
+        layout_id: impl FnOnce() -> Option<String>,
     ) -> std::borrow::Cow<'_, Self> {
         if cfg!(target_os = "macos")
             && self.mods.contains(Mods::ALT)
-            && mode.applies(self.sides.contains(ngterm_term::ModSides::ALT))
             && let Some(text) = &self.without_option
+            && ngterm_core::ghostty_config::MacosOptionAsAlt::resolve(mode, layout_id)
+                .applies(self.sides.contains(ngterm_term::ModSides::ALT))
         {
             let mut stroke = self.clone();
             stroke.text.clone_from(text);

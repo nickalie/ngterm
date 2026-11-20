@@ -81,9 +81,8 @@ pub enum PaddingColor {
 }
 
 /// Which Option key acts as the terminal's Alt/Meta modifier on macOS.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
 pub enum MacosOptionAsAlt {
-    #[default]
     #[strum(serialize = "false")]
     Off,
     #[strum(serialize = "true")]
@@ -100,6 +99,23 @@ impl MacosOptionAsAlt {
             (self, right),
             (Self::Both, _) | (Self::Left, false) | (Self::Right, true)
         )
+    }
+
+    /// Ghostty's mode for an unset key on the macOS keyboard layout `layout_id` (keyboard.zig `mapAppleId`,
+    /// `detectOptionAsAlt`): Alt on the U.S. layouts, where Option rarely types text, else the layout's characters.
+    #[must_use]
+    pub fn detect(layout_id: Option<&str>) -> Self {
+        match layout_id {
+            Some("com.apple.keylayout.US" | "com.apple.keylayout.USInternational") => Self::Both,
+            _ => Self::Off,
+        }
+    }
+
+    /// The `configured` mode, else the one [`Self::detect`] gives for the layout `layout_id` reads, which is called
+    /// only when the key is unset.
+    #[must_use]
+    pub fn resolve(configured: Option<Self>, layout_id: impl FnOnce() -> Option<String>) -> Self {
+        configured.unwrap_or_else(|| Self::detect(layout_id().as_deref()))
     }
 }
 
@@ -481,7 +497,8 @@ impl Default for Link {
 /// The terminal's config, as far as ngterm draws and drives the terminal itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GhosttyConfig {
-    pub macos_option_as_alt: MacosOptionAsAlt,
+    /// `macos-option-as-alt`; `None` when unset, which the frontend resolves per key ([`MacosOptionAsAlt::resolve`]).
+    pub macos_option_as_alt: Option<MacosOptionAsAlt>,
     pub font: Font,
     /// `theme`, both sides.
     pub theme: Option<ThemeName>,
@@ -522,7 +539,7 @@ pub const DEFAULT_TERM: &str = "xterm-ghostty";
 impl Default for GhosttyConfig {
     fn default() -> Self {
         Self {
-            macos_option_as_alt: MacosOptionAsAlt::default(),
+            macos_option_as_alt: None,
             font: Font::default(),
             theme: None,
             colors: Colors::default(),
@@ -686,7 +703,7 @@ impl GhosttyConfig {
             "scrollback-limit-lines" => self.scrollback.limit_lines = limit_or(value, None),
             "shell-integration-features" => self.shell_integration_features = shell_features(value),
             "term" => value.unwrap_or(DEFAULT_TERM).clone_into(&mut self.term),
-            "macos-option-as-alt" => self.macos_option_as_alt = enum_or(value, MacosOptionAsAlt::default()),
+            "macos-option-as-alt" => self.macos_option_as_alt = value.and_then(|value| value.parse().ok()),
             "copy-on-select" => self.copy_on_select = enum_or(value, CopyOnSelect::default()),
             "grapheme-width-method" => self.grapheme_width_method = enum_or(value, GraphemeWidthMethod::default()),
             "image-storage-limit" => {

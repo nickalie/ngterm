@@ -38,6 +38,8 @@
 pub mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::keyboard_layout_id;
 #[cfg(windows)]
 mod windows;
 

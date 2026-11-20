@@ -2030,8 +2030,41 @@ fn option_as_alt_modes_are_loaded_and_choose_their_side() {
     ] {
         let loaded = load(&format!("macos-option-as-alt = {value}\n"));
         assert!(loaded.diagnostics.is_empty());
-        assert_eq!(loaded.config.macos_option_as_alt, mode);
+        assert_eq!(loaded.config.macos_option_as_alt, Some(mode));
+        assert_eq!(
+            MacosOptionAsAlt::resolve(Some(mode), || Some("com.apple.keylayout.US".into())),
+            mode
+        );
         assert_eq!(mode.applies(false), left);
         assert_eq!(mode.applies(true), right);
     }
+}
+
+#[test]
+fn an_unset_option_as_alt_is_alt_only_on_the_us_layouts() {
+    assert_eq!(GhosttyConfig::default().macos_option_as_alt, None);
+    for text in [
+        "",
+        "macos-option-as-alt = true\nmacos-option-as-alt =\n",
+        "macos-option-as-alt = sometimes\n",
+    ] {
+        assert_eq!(load(text).config.macos_option_as_alt, None, "{text:?}");
+    }
+    for (layout, mode) in [
+        (Some("com.apple.keylayout.US"), MacosOptionAsAlt::Both),
+        (Some("com.apple.keylayout.USInternational"), MacosOptionAsAlt::Both),
+        (Some("com.apple.keylayout.USExtended"), MacosOptionAsAlt::Off),
+        (Some("com.apple.keylayout.German"), MacosOptionAsAlt::Off),
+        (Some("com.apple.keylayout.us"), MacosOptionAsAlt::Off),
+        (None, MacosOptionAsAlt::Off),
+    ] {
+        assert_eq!(
+            MacosOptionAsAlt::resolve(None, || layout.map(str::to_owned)),
+            mode,
+            "{layout:?}"
+        );
+    }
+    let explicit_off = load("macos-option-as-alt = false\n").config.macos_option_as_alt;
+    let unread = || -> Option<String> { panic!("an explicit value reads no layout") };
+    assert_eq!(MacosOptionAsAlt::resolve(explicit_off, unread), MacosOptionAsAlt::Off);
 }

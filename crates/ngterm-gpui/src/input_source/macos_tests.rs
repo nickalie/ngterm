@@ -7,6 +7,7 @@ fn real_input_sources_can_be_read_and_reselected_without_switching_layouts() {
     the_platform_probe_lists_and_reselects_the_current_input_source();
     an_unknown_source_is_rejected_without_changing_the_layout();
     missing_properties_have_no_string_and_are_false();
+    the_keyboard_layout_is_an_enabled_layout_and_sets_the_unset_option_as_alt();
 }
 
 fn the_platform_probe_lists_and_reselects_the_current_input_source() {
@@ -48,4 +49,18 @@ fn missing_properties_have_no_string_and_are_false() {
     assert!(!flag(source, &missing));
     // SAFETY: a framework constant whose string property the source owns.
     assert_eq!(string(source, unsafe { kTISPropertyInputSourceID }), Some(current));
+}
+
+fn the_keyboard_layout_is_an_enabled_layout_and_sets_the_unset_option_as_alt() {
+    use ngterm_core::ghostty_config::MacosOptionAsAlt as Mode;
+    let layout = keyboard_layout_id().unwrap();
+    assert!(
+        source_with_id(&layout).is_some(),
+        "{layout} is not an enabled input source"
+    );
+    assert_eq!(
+        Mode::resolve(None, keyboard_layout_id),
+        Mode::detect(Some(&layout)),
+        "{layout}"
+    );
 }

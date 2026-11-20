@@ -2377,8 +2377,9 @@ fn option_as_alt_selects_the_configured_side_and_unmodified_text() {
             ..NativeKey::default()
         };
         let stroke = KeyStroke::new(&keystroke("alt-e"), &Source::Native(native), false);
+        let unread = || -> Option<String> { panic!("an explicit value reads no layout") };
         for mode in [Mode::Off, Mode::Both, Mode::Left, Mode::Right] {
-            let normalized = stroke.with_option_as_alt(mode);
+            let normalized = stroke.with_option_as_alt_on(Some(mode), unread);
             assert_eq!(normalized.option_as_alt, mode.applies(right));
             assert_eq!(normalized.composing, !mode.applies(right));
             assert_eq!(normalized.text, if mode.applies(right) { "e" } else { "´" });
@@ -2390,6 +2391,45 @@ fn option_as_alt_selects_the_configured_side_and_unmodified_text() {
             );
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_unset_option_as_alt_reads_the_layout_of_each_option_key() {
+    let native = |alt: bool| NativeKey {
+        keycode: 39, // S
+        text: if alt { "ß" } else { "s" }.into(),
+        without_option: Some("s".into()),
+        modifiers: Modifiers {
+            alt,
+            ..Modifiers::default()
+        },
+        consumed: Modifiers {
+            alt,
+            ..Modifiers::default()
+        },
+        ..NativeKey::default()
+    };
+    let option_s = KeyStroke::new(&keystroke("alt-s"), &Source::Native(native(true)), false);
+    for (layout, alt) in [
+        ("com.apple.keylayout.US", true),
+        ("com.apple.keylayout.USInternational", true),
+        ("com.apple.keylayout.German", false),
+        ("com.apple.keylayout.ABC", false),
+    ] {
+        let mut reads = 0;
+        let normalized = option_s.with_option_as_alt_on(None, || {
+            reads += 1;
+            Some(layout.into())
+        });
+        assert_eq!(reads, 1, "{layout}");
+        assert_eq!(normalized.option_as_alt, alt, "{layout}");
+        assert_eq!(normalized.text, if alt { "s" } else { "ß" }, "{layout}");
+    }
+    assert!(!option_s.with_option_as_alt_on(None, || None).option_as_alt);
+    let plain_s = KeyStroke::new(&keystroke("s"), &Source::Native(native(false)), false);
+    let unread = || -> Option<String> { panic!("a key without Option reads no layout") };
+    assert!(!plain_s.with_option_as_alt_on(None, unread).option_as_alt);
 }
 
 #[cfg(windows)]

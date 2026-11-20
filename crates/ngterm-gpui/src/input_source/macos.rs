@@ -22,6 +22,7 @@ unsafe extern "C" {
     static kTISPropertyLocalizedName: &'static CFString;
     fn TISCreateInputSourceList(properties: &CFDictionary, include_all_installed: u8) -> Option<NonNull<CFArray>>;
     fn TISCopyCurrentKeyboardInputSource() -> InputSourceRef;
+    fn TISCopyCurrentKeyboardLayoutInputSource() -> InputSourceRef;
     fn TISGetInputSourceProperty(source: InputSourceRef, key: &CFString) -> *const c_void;
     fn TISSelectInputSource(source: InputSourceRef) -> i32;
 }
@@ -71,6 +72,24 @@ fn source_with_id(id: &str) -> Option<CFRetained<CFArray>> {
     sources(key, &id).filter(|list| list.count() > 0)
 }
 
+/// The id of `source`, a Copy call's result (or null), which this releases.
+fn copied_source_id(source: InputSourceRef) -> Option<String> {
+    let source = NonNull::new(source.cast_mut().cast::<CFType>())?;
+    // SAFETY: a Copy call's result is owned by the caller, released when this goes.
+    let source = unsafe { CFRetained::from_raw(source) };
+    // SAFETY: a constant of the framework, valid for the process's life.
+    let key = unsafe { kTISPropertyInputSourceID };
+    string(CFRetained::as_ptr(&source).as_ptr().cast_const().cast(), key)
+}
+
+/// The id of the keyboard layout keys are typed on (`com.apple.keylayout.US`), which an input method keeps under its
+/// own source: Ghostty's `KeymapDarwin` source, read on the main thread as all TIS calls must be.
+#[must_use]
+pub fn keyboard_layout_id() -> Option<String> {
+    // SAFETY: a Copy call: the source comes back retained, or null.
+    copied_source_id(unsafe { TISCopyCurrentKeyboardLayoutInputSource() })
+}
+
 impl Backend for InputSources {
     fn layouts(&mut self) -> Result<Vec<KeyboardLayout>, Failure> {
         // SAFETY: constants of the framework, valid for the process's life.
@@ -97,12 +116,7 @@ impl Backend for InputSources {
     fn current(&mut self) -> Result<String, Failure> {
         // SAFETY: a Copy call: the source comes back retained, or null.
         let source = unsafe { TISCopyCurrentKeyboardInputSource() };
-        let source = NonNull::new(source.cast_mut().cast::<CFType>()).ok_or("no current input source")?;
-        // SAFETY: a Copy call's result is owned by the caller, released when this goes.
-        let source = unsafe { CFRetained::from_raw(source) };
-        // SAFETY: a constant of the framework, valid for the process's life.
-        let key = unsafe { kTISPropertyInputSourceID };
-        string(CFRetained::as_ptr(&source).as_ptr().cast_const().cast(), key).ok_or_else(|| "no input source id".into())
+        copied_source_id(source).ok_or_else(|| "no current input source id".into())
     }
 
     fn select(&mut self, id: &str) -> Result<(), Failure> {
