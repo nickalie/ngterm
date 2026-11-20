@@ -183,3 +183,12 @@ fn start_offset_is_the_file_position_of_the_first_shown_byte() {
         assert_eq!(snapshot.start_offset, *start, "{name}");
     }
 }
+
+/// Upstream 3479714e: the renderer paints a log's colors from its escape sequences and reparses one that the next
+/// read completes, so a tail keeps them as the file has them, an unfinished one at the end included.
+#[test]
+fn snapshot_keeps_escape_sequences_for_the_renderer() {
+    let colored = "\u{1b}[36mok\u{1b}[39m\n\u{1b}Ptmux;\u{1b}\u{1b}[31mx\u{1b}\\y\u{1b}[3";
+    let shown = snapshot(colored.as_bytes(), 0, 10).unwrap();
+    assert_eq!((shown.text.as_str(), shown.lines), (colored, 2));
+}

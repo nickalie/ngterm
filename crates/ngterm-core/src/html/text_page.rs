@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::markdown_page::escaped;
+use super::terminal_text::stripping_escapes;
 
 /// The most a text page reads of its file.
 pub const MAX_BYTES: usize = 4 << 20;
@@ -237,12 +238,17 @@ pub fn is_diff(path: &str) -> bool {
 /// Maps each path a patch's `--- ` or `+++ ` row names, as the row spells it up to a tab, to the file's language, a
 /// quoted path looked up without its quotes; a file with no known language is left out (upstream's `diffLanguages`).
 /// A changed row can look like a header, so the renderer looks up only rows outside hunks. Rows split at every newline
-/// Swift's `isNewline` knows, so a CRLF patch maps its paths too.
+/// Swift's `isNewline` knows, so a CRLF patch maps its paths too, and are read without their escape sequences
+/// ([`stripping_escapes`]), as the renderer reads a colored patch.
 #[must_use]
 pub fn diff_languages(text: &str) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
     let rows = text.split(['\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}']);
-    for row in rows.filter(|row| row.starts_with("--- ") || row.starts_with("+++ ")) {
+    for raw in rows {
+        let row = stripping_escapes(raw);
+        if !(row.starts_with("--- ") || row.starts_with("+++ ")) {
+            continue;
+        }
         let path = row[4..].split('\t').next().unwrap_or_default();
         let file = if path.chars().count() > 1 && path.starts_with('"') && path.ends_with('"') {
             &path[1..path.len() - 1]

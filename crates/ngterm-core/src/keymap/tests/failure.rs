@@ -60,6 +60,26 @@ fn detail_drops_an_osc_sequence_whole_rather_than_showing_its_payload() {
     );
 }
 
+/// Upstream 3479714e: the `ESC ( B` that `tput sgr0` writes leaves no stray `B`.
+#[test]
+fn detail_drops_the_charset_sequence_tput_sgr0_writes() {
+    assert_eq!(
+        detail("\u{1b}[1mbuild failed\u{1b}(B\u{1b}[m".as_bytes()).as_deref(),
+        Some("build failed")
+    );
+}
+
+/// Upstream b7f93fe0: a tmux passthrough, an XTGETTCAP reply and kitty image data are dropped to their `ESC \`, the
+/// doubled ESCs inside a passthrough included.
+#[test]
+fn detail_drops_dcs_and_apc_strings_whole() {
+    assert_eq!(
+        detail("\u{1b}Ptmux;\u{1b}\u{1b}[31mhidden\u{1b}\\\u{1b}P1+r6b\u{1b}\\\u{1b}_Gf=1;AA\u{1b}\\error".as_bytes())
+            .as_deref(),
+        Some("error")
+    );
+}
+
 #[test]
 fn detail_decodes_a_tail_cut_mid_scalar() {
     let bytes = "ошибка".as_bytes();

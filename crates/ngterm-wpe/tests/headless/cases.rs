@@ -76,6 +76,18 @@ pub const CASES: &[(&str, Case)] = &[
         crate::text::search_leaves_no_trace,
     ),
     (
+        "text_page_shows_a_logs_terminal_colors_and_drops_its_other_escapes",
+        crate::text::colors,
+    ),
+    (
+        "text_page_shows_a_colored_diff_with_its_rows_and_language_and_no_escapes",
+        crate::text::colored_diff,
+    ),
+    (
+        "text_page_log_shows_no_fragment_of_an_escape_until_a_read_completes_it",
+        crate::text::log_mid_escape,
+    ),
+    (
         "a_clicked_document_loads_nothing_from_the_network_behind_its_filter",
         crate::document::silent,
     ),

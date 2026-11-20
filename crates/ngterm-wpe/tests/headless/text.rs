@@ -522,3 +522,111 @@ pub fn search_leaves_no_trace(h: &Harness, _: &Context) -> Outcome {
     }
     Ok(())
 }
+
+/// Upstream's `testColorEscapesBecomeStyledTextAndSearchReadsTheShownText` (3479714e, b7f93fe0): a log's SGR colors
+/// become styled runs, other sequences (a private CSI, DCS and APC strings, a tmux passthrough) leave no text and no
+/// style, and a search finds the shown text across the runs.
+pub fn colors(h: &Harness, _: &Context) -> Outcome {
+    const SPANS: &str = "[...document.querySelectorAll('pre code span')]
+        .map(s => `${s.textContent}:${s.style.color}:${s.style.fontWeight}`).join(',')";
+    let view = view(h, Vec::new());
+    h.load(view, document(ESCAPED, None, None))?;
+    let shown = reading(h, view, "document.querySelector('pre code').textContent", None)?;
+    ensure(
+        shown == "bugs+impl started\nfail red plain\ngreen\nok still xy\nend",
+        || format!("the shown text: {shown:?}"),
+    )?;
+    let spans = reading(h, view, SPANS, None)?;
+    let expected = concat!(
+        "bugs+impl:var(--ngterm-color-6, #00cdcd):,fail:rgb(255, 0, 0):bold, red:rgb(255, 0, 0):,",
+        "green:rgb(0, 128, 0):bold,ok:var(--ngterm-color-2, #00cd00):, still:var(--ngterm-color-2, #00cd00):",
+    );
+    ensure(spans == expected, || format!("the styled runs: {spans:?}"))?;
+    h.evaluate(view, "ngtermTextSearchSet('impl started', 1, false); null", Some(WORLD))?;
+    let count = reading(h, view, "document.querySelector('.ngterm-count').textContent", None)?;
+    ensure(count == "1 of 1", || format!("the search count: {count:?}"))?;
+    h.host.close_view(view);
+    h.forget(view);
+    Ok(())
+}
+
+/// Upstream's `testAColoredDiffShowsItsRowsAndFileLanguageWithoutTheEscapes`: git's colors drop out of a patch, which
+/// keeps its change steps, its bands and its file's language (`text_page::html` reads the headers without the escapes).
+pub fn colored_diff(h: &Harness, _: &Context) -> Outcome {
+    let plain = [
+        "diff --git a/x.go b/x.go",
+        "--- a/x.go",
+        "+++ b/x.go",
+        "@@ -1 +1 @@",
+        "-var a",
+        "+func b() {}",
+        "",
+    ];
+    let colored = [
+        "\x1b[1mdiff --git a/x.go b/x.go\x1b[m",
+        "\x1b[1m--- a/x.go\x1b[m",
+        "\x1b[1m+++ b/x.go\x1b[m",
+        "\x1b[36m@@ -1 +1 @@\x1b[m",
+        "\x1b[31m-var a\x1b[m",
+        "\x1b[32m+func b() {}\x1b[m",
+        "",
+    ]
+    .join("\n");
+    let view = view(h, Vec::new());
+    let html = ngterm_core::html::text_page::html(
+        &colored,
+        Some("diff"),
+        None,
+        &style(),
+        &ngterm_core::html::text_page::PageState::default(),
+    );
+    h.load(view, Load::Html { html, base_uri: None })?;
+    let dom = reading(
+        h,
+        view,
+        &format!(
+            "[document.querySelector('.ngterm-changes span').textContent,
+              document.querySelector('pre code').textContent === {},
+              document.querySelectorAll('pre code .hljs-keyword').length,
+              document.querySelectorAll('.ngterm-added, .ngterm-removed').length].join('|')",
+            json(&plain.join("\n"))?
+        ),
+        None,
+    )?;
+    ensure(dom == "1 change|true|2|2", || format!("a colored diff: {dom:?}"))?;
+    h.host.close_view(view);
+    h.forget(view);
+    Ok(())
+}
+
+/// Upstream's `testAFollowedLogEndingMidEscapeShowsNoFragmentUntilItCompletes`: a log update that ends inside an
+/// escape sequence shows none of it, and the read that completes it paints its color.
+pub fn log_mid_escape(h: &Harness, _: &Context) -> Outcome {
+    let view = view(h, Vec::new());
+    h.load(view, document_with("a\n", " data-log data-following=\"true\""))?;
+    let mut shown = Vec::new();
+    for update in ["a\nx\x1b[3", "a\nx\x1b[31mb\n"] {
+        h.evaluate(
+            view,
+            &format!(
+                "ngtermTextUpdate({}, false, false, false, null, null); null",
+                json(update)?
+            ),
+            Some(WORLD),
+        )?;
+        shown.push(reading(
+            h,
+            view,
+            "JSON.stringify([document.querySelector('pre code').textContent,
+              document.querySelector('pre code span')?.style.color ?? ''])",
+            None,
+        )?);
+    }
+    ensure(
+        shown == [r#"["a\nx",""]"#, r#"["a\nxb\n","var(--ngterm-color-1, #cd0000)"]"#],
+        || format!("the shown text and color after each read: {shown:?}"),
+    )?;
+    h.host.close_view(view);
+    h.forget(view);
+    Ok(())
+}

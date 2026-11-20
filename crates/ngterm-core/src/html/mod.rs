@@ -14,6 +14,7 @@ pub mod navigation;
 mod origin_path;
 pub mod outcomes;
 pub mod profile;
+pub mod terminal_text;
 pub mod text_page;
 pub mod theme;
 mod volume;

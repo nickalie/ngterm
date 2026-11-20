@@ -400,6 +400,13 @@ fn a_crlf_diff_maps_its_header_paths() {
     );
 }
 
+/// Upstream's `aColoredDiffMapsItsHeaderPathsWithoutTheEscapes`.
+#[test]
+fn a_colored_diff_maps_its_header_paths_without_the_escapes() {
+    let text = "\u{1b}[1mdiff --git a/x.go b/x.go\u{1b}[m\n\u{1b}[1m--- a/x.go\u{1b}[m\n\u{1b}[1m+++ b/x.go\u{1b}[m\n";
+    assert_eq!(diff_languages(text), languages(&[("a/x.go", "go"), ("b/x.go", "go")]));
+}
+
 /// Upstream's `aDiffUnderTheHighlightCapCarriesItsFileLanguages`: sorted keys, escaped; not past the cap, on another
 /// language or with no header.
 #[test]

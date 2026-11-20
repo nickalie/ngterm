@@ -4,6 +4,7 @@
 //! The runner posts the panel without the control dispatcher's text validation, so every string here is already
 //! stripped of escape sequences and control characters and capped at [`HudSpec::MAX_TEXT_LENGTH`].
 
+use crate::html::terminal_text::stripping_escapes;
 use crate::hud::{HudSpec, text_length};
 use crate::model::naming::sanitized;
 
@@ -55,51 +56,6 @@ fn is_newline(c: char) -> bool {
 /// outside the panel, and stripping C0 alone leaves the `[31m` an escape trails behind.
 fn cleaned(text: &str) -> String {
     super::keybind::trim_blank(&sanitized(&stripping_escapes(text))).to_owned()
-}
-
-/// Drops each ESC and the sequence after it: CSI (`ESC [` up to a final byte `@`-`~`), OSC (`ESC ]` up to BEL or
-/// `ESC \`), and the two-character forms. A trailing partial sequence goes with it.
-fn stripping_escapes(text: &str) -> String {
-    if !text.contains('\u{1b}') {
-        return text.to_owned();
-    }
-    let mut result = String::with_capacity(text.len());
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            result.push(c);
-            continue;
-        }
-        match chars.next() {
-            Some('[') => skip_csi(&mut chars),
-            Some(']') => skip_osc(&mut chars),
-            _ => {}
-        }
-    }
-    result
-}
-
-/// Skips a CSI's parameters and its final byte.
-fn skip_csi(chars: &mut std::str::Chars<'_>) {
-    for c in chars.by_ref() {
-        if ('\u{40}'..='\u{7e}').contains(&c) {
-            break;
-        }
-    }
-}
-
-/// Skips an OSC up to and including its BEL, or its `ESC` and the character after it (the `\` of ST).
-fn skip_osc(chars: &mut std::str::Chars<'_>) {
-    while let Some(c) = chars.next() {
-        match c {
-            '\u{07}' => return,
-            '\u{1b}' => {
-                chars.next();
-                return;
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Truncates to what a HUD accepts, measured in [`text_length`]'s unit, one scalar at a time.
