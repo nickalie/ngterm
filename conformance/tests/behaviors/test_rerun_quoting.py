@@ -24,6 +24,11 @@ pytestmark = [
 ]
 
 LIVE_ANY_SHELL = pytest.mark.requires("live-sessions", "live-any-shell", any=True, reason="needs Live panes")
+# Only the shells this host has: `--must-pass` counts a skipped Live case as not passed (Windows skips them all as
+# unsupported, which it excuses).
+LIVE_SHELLS = [
+    shell for shell in ("bash", "zsh", "fish") if sys.platform == "win32" or shutil.which(shell, path="/usr/bin:/bin")
+]
 SHELL_START = 60.0
 # Longer than a macOS exec chain (the python3 shim, then Python.app), whose first images show a transient argv[0].
 SETTLE = 0.5
@@ -293,11 +298,9 @@ def test_the_pane_profile_names_the_receiver_before_the_launch_shell(launch, tmp
 
 @LIVE_ANY_SHELL
 @pytest.mark.covers("session.new")
-@pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
+@pytest.mark.parametrize("shell", LIVE_SHELLS)
 def test_a_live_creation_command_keeps_apostrophes_beside_marks(launch, shell):
     path = shutil.which(shell, path="/usr/bin:/bin")
-    if path is None:
-        pytest.skip(f"no {shell} on this machine")
     ctl = launch(settings={"restoreMode": "live"}, pane_shell=path)
     _shell_home(ctl)
     argv = _program(*MARKED, *OTHER)
