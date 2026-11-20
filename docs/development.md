@@ -1808,7 +1808,8 @@ beside the ui layer's job, and its `report` job joins the shards and holds `--mu
 - The files are balanced by their recorded seconds (`conformance/shard-weights-linux.txt`,
   `shard-weights-windows.txt`, `shard-weights-macos.txt` for the reference); a file without a record weighs its number of tests. Stale weights cost balance only.
   The joined report's table shows each shard's seconds: when they drift far apart, refresh the weights from a main
-  run's joined report (`<leg>-conformance` artifact):
+  run's joined report (`<leg>-conformance` artifact; for the reference, `reference-macos-<tag>` from a manual run on
+  main, written to `shard-weights-macos.txt`):
   `conformance/tools/shard_durations.py nodeids.jsonl --write conformance/shard-weights-linux.txt`.
 - A shard judges the listed ids it ran, so a red one fails that shard's job, with its log, traces and report
   (`<leg>-conformance-shard-<I>` artifact, kept three days). The report job judges the ratchet on the joined report,

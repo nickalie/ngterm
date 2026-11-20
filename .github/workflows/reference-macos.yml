@@ -78,7 +78,7 @@ jobs:
           if ((${#words[@]})); then
             extra=""
             for word in "${words[@]}"; do
-              if [[ "$word" != conformance/tests/* ]]; then
+              if [[ "$word" != conformance/tests/* || "/$word/" == */../* ]]; then
                 echo "::error::tests: $word is not under conformance/tests/"
                 exit 1
               fi
@@ -214,9 +214,10 @@ jobs:
         with:
           pattern: reference-macos-${{ needs.plan.outputs.tag }}-shard-*
           path: shards
-      # Exit 2: a shard left no report, or the shards are not every part of one split. A shard's own `--must-pass`
-      # problems fail its job; only the joined run can tell a capability no test requires or none passed for.
-      - name: join the shards and hold --must-pass over the whole run
+      # Exit 2: a shard left no report, or the shards are not every part of one split. Without --list,
+      # merge_shards.py judges no outcome: the step fails on each failed or not-run test, collection error and
+      # --must-pass problem.
+      - name: join the shards and fail on their failed tests, collection errors and --must-pass problems
         run: |
           python conformance/tools/merge_shards.py --title reference-macos --out report shards/*
           cat report/report.md >> "$GITHUB_STEP_SUMMARY"
@@ -225,9 +226,15 @@ jobs:
           import sys
 
           with open("report/nodeids.jsonl", encoding="utf-8") as lines:
-              problems = [record["problem"] for record in map(json.loads, lines) if record.get("kind") == "must-pass"]
+              records = [json.loads(line) for line in lines]
+          problems = [f"--must-pass live-sessions: {record['problem']}" for record in records
+                      if record.get("kind") == "must-pass"]
+          problems += [f"{record['outcome']}: {record['nodeid']}" for record in records
+                       if record.get("kind") == "test" and record.get("outcome") in ("failed", "error", "not-run")]
+          problems += [f"collection error: {record['nodeid']}" for record in records
+                       if record.get("kind") == "collection-error"]
           for problem in problems:
-              print(f"::error::--must-pass live-sessions: {problem}")
+              print(f"::error::{problem}")
           sys.exit(1 if problems else 0)
           EOF
       - name: upload the joined report
