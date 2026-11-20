@@ -96,7 +96,7 @@ It launches the reference through `SwiftMacosAdapter` (sentinel mode) and drives
 
 ## The ui layer on reference-macos (confirmed 2026-10-12)
 
-`conformance/tests/ui` runs as its own step of `reference-macos.yml`, with `--reruns 1`.
+`conformance/tests/ui` runs as its own job of `reference-macos.yml`, with `--reruns 1`.
 What the reference showed while the tests settled:
 
 - `palette-subtitle` and `palette-badge` never reach the accessibility tree.

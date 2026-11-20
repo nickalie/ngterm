@@ -1723,6 +1723,8 @@ already holds changes no file, so the path-filtered workflows don't start on it.
   check on such a pull request has to name a workflow. A dispatched run builds the branch as pushed, not its merge
   with `main`.
 - `reference-macos.yml` (PRs that change `conformance/`, and by hand): the suite against upstream's macOS release.
+  The protocol, cli and behaviors layers run in shards and the ui layer in its own job ([Sharded suite](#sharded-suite));
+  by hand, the `layer` input runs only some layers and `tests` only the test paths or node ids it names, in one job.
 
 ### CI caches
 
@@ -1791,6 +1793,8 @@ an artifact; every leg (a login shell on Linux, the coverage run, Windows) then 
 leg's shards with `conformance/tools/merge_shards.py`. The instrumented build's shards and report are jobs of their
 own (`conformance-cov`, `conformance-report-cov`, `coverage-windows`, `windows-report-cov`): a build that fails
 takes only its own stage's shards and report with it, and the ratchet's report does not wait for the coverage run.
+`reference-macos.yml` builds nothing: its `reference` matrix runs the protocol, cli and behaviors layers in shards
+beside the ui layer's job, and its `report` job joins the shards and holds `--must-pass live-sessions` over them.
 
 - A stage travels as a tar made by `conformance/tools/stage-archive.sh`, which keeps the programs' mode bits and
   their modification times whole: the live sessions' server takes its staged build id only for a binary of the
@@ -1802,7 +1806,7 @@ takes only its own stage's shards and report with it, and the ratchet's report d
   itself. A file's tests stay together and in order, so tests that share a module's instance or rely on the test
   before them in their file run as in a whole run. No test may rely on another file's.
 - The files are balanced by their recorded seconds (`conformance/shard-weights-linux.txt`,
-  `shard-weights-windows.txt`); a file without a record weighs its number of tests. Stale weights cost balance only.
+  `shard-weights-windows.txt`, `shard-weights-macos.txt` for the reference); a file without a record weighs its number of tests. Stale weights cost balance only.
   The joined report's table shows each shard's seconds: when they drift far apart, refresh the weights from a main
   run's joined report (`<leg>-conformance` artifact):
   `conformance/tools/shard_durations.py nodeids.jsonl --write conformance/shard-weights-linux.txt`.
