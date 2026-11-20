@@ -303,7 +303,7 @@ def test_a_live_creation_command_keeps_apostrophes_beside_marks(launch, shell):
     argv = _program(*MARKED, *OTHER)
     sid = _new(ctl, command=_line(argv, "sh").rstrip("\n"))
     _replays(ctl, sid, argv, start=1)
-    assert find_session(ctl.tree(), sid).get("backedByLive") is True
+    assert find_session(ctl.tree(), sid).get(ctl.vocabulary.backed_key) is True
 
 
 @pytest.mark.requires("live-sessions", reason="the origin session must be Live")
@@ -315,7 +315,8 @@ def test_a_remote_companion_line_keeps_apostrophes_beside_marks(remote_origin, r
     local = None
     try:
         origin.wait_mounted(parent, "left")
-        local = assert_ok(remote_viewer.request("live.attach", parent, host=remote_origin.host))["id"]
+        attach = remote_viewer.vocabulary.command("live.attach")
+        local = assert_ok(remote_viewer.request(attach, parent, host=remote_origin.host))["id"]
         argv = _program(*MARKED, *OTHER)
         name = "it'\u0301s; echo INJECTED x'\ufe0f y'\U0001f3fb"
         command = _line(argv, "sh").rstrip("\n")
