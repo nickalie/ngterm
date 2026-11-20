@@ -7,8 +7,9 @@ The pane's program is a probe, the harness's own Python, that pushes both modes,
 Kitty encodings (Ghostty's key encoder, upstream's too). On Windows the pseudoconsole stands between the pane and the
 program: it reads the pane's bytes and gives the program console key events (`ReadConsoleInputW`, the form `console`),
 and its input parser drops the Kitty and `modifyOtherKeys` encodings, so there a pane always sends the legacy ones
-(`PaneConfig::legacy_keys`). The Mac's Option is a text key by default (Ghostty's `macos-option-as-alt`), so Alt+V
-is not pressed there. The command line is the probe's words alone, unquoted, as `kitty_clipboard.probe_command`'s.
+(`PaneConfig::legacy_keys`). On the Mac, Ghostty's `macos-option-as-alt` decides whether Option is Alt, and left unset
+it changes with the keyboard layout (`test_pane_input`), so Alt+V is not pressed there. The command line is the
+probe's words alone, unquoted, as `kitty_clipboard.probe_command`'s.
 
 The same keys reach the probe in a session that a viewer attached from a POSIX origin (`remote_origin`, the staged
 `ngterm-headless`): the viewer sends the Kitty encodings there too."""
