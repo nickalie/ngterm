@@ -108,6 +108,13 @@ def test_option_dead_keys_compose_with_the_next_key_and_leave_nothing_pending(ct
 
 @MAC
 @pytest.mark.covers("session.text", "config.reload", "behavior:pane.typing")
+@pytest.mark.upstream_bug(
+    "posted-dead-key-lets-backspace-and-escape-through",
+    reason="upstream's keyDown (GhosttySurfaceView+Input.swift) holds a key back only while hasMarkedText() "
+    "(`composing`, which libghostty's key_encode.zig does not encode), but for a posted Option dead key AppKit's "
+    "input context keeps the accent with no marked text: the reference typed `e¨^[u` for x, ⌥e, ⌫, e, ⌥u, ⎋, u "
+    "(reference-macos run 44833274949): the Backspace erased the x, and the Escape put the accent and an ESC",
+)
 def test_backspace_or_escape_after_a_dead_key_cancels_only_its_accent(ctl, ui):
     with configured(ctl, OPTION_TYPES_TEXT), _reading(ctl, "cat -v") as sid:
         ui.press("x", "alt+e", "delete", "e", "alt+u", "escape", "u", "return")
