@@ -437,6 +437,76 @@ def test_overlay_changes_refusals(ctl):
         ctl.request("session.close", sid)
 
 
+def _git_colored(patch):
+    """`patch` as `git diff --color=always` writes it: headers bold, hunk headers cyan, removed rows red, added rows
+    green with their sign colored apart, and a reset after every row."""
+    rows = []
+    for row in patch.splitlines():
+        if row.startswith(("--- ", "+++ ")):
+            rows.append(f"\x1b[1m{row}\x1b[m")
+        elif row.startswith("@@"):
+            rows.append(f"\x1b[36m{row}\x1b[m")
+        elif row.startswith("-"):
+            rows.append(f"\x1b[31m{row}\x1b[m")
+        elif row.startswith("+"):
+            rows.append(f"\x1b[32m+\x1b[m\x1b[32m{row[1:]}\x1b[m")
+        else:
+            rows.append(f"{row}\x1b[m")
+    return "\n".join(rows) + "\n"
+
+
+def _found(ctl, sid, query, matches):
+    """The page counts `matches` of `query`; a step carries its query, so its answer counts that query."""
+    assert assert_ok(ctl.request("session.overlay.search", sid, text=query)) == {"id": sid}
+    step = _once_loaded(ctl, "session.overlay.search", sid, to="next")
+    assert assert_ok(step) == {"id": sid, "text": f"{matches} of {matches}"}, query
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.overlay.changes", "session.overlay.search", "field:tree.session.htmlOverlays")
+def test_a_colored_diff_page_steps_between_its_changes_and_shows_no_escape(ctl):
+    # a `git diff --color=always` saved as .diff is still a patch: its colors drop out and it has the changes of
+    # the plain patch
+    path = _file(ctl, "colored.diff", _git_colored(DIFF))
+    sid = _new(ctl)
+    try:
+        _open_text(ctl, sid, path)
+        assert _text(ctl, sid, lambda text: "changes" in text)["changes"] == {"count": 2, "current": 0}
+        first = assert_ok(_once_loaded(ctl, "session.overlay.changes", sid, to="next"))
+        assert first == {"id": sid, "text": "1 of 2"}
+        assert assert_ok(ctl.request("session.overlay.changes", sid, to="next")) == {"id": sid, "text": "2 of 2"}
+        for query, matches in [("twelve", 1), ("+++ b/notes.txt", 1), ("[1m", 0), ("[32m", 0), ("\x1b", 0)]:
+            _found(ctl, sid, query, matches)
+    finally:
+        ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.overlay.open", "session.overlay.search", "session.overlay.follow",
+                    "field:tree.session.htmlOverlays")
+def test_a_followed_log_shows_no_fragment_of_an_escape_until_a_write_completes_it(ctl):
+    path = _file(ctl, "partial.log", "first line\n")
+    sid = _new(ctl)
+    try:
+        _open_text(ctl, sid, path, tail=50, followFile=True)
+        _lines(ctl, sid, 1, following=True)
+        # a write that stops inside a color sequence shows its text and nothing of the sequence
+        with path.open("a", encoding="utf-8") as log:
+            log.write("partial \x1b[3")
+        _lines(ctl, sid, 2, following=True)
+        for query, matches in [("partial", 1), ("[3", 0), ("\x1b", 0)]:
+            _found(ctl, sid, query, matches)
+        # the steps paused the page; the write that completes the sequence paints its color and leaves no fragment
+        assert assert_ok(ctl.request("session.overlay.follow", sid, mode="on")) == {"id": sid, "text": "following"}
+        with path.open("a", encoding="utf-8") as log:
+            log.write("1mred\x1b[0m done\nnext line\n")
+        _lines(ctl, sid, 3, following=True)
+        for query, matches in [("partial red done", 1), ("1mred", 0), ("[3", 0), ("[0m", 0)]:
+            _found(ctl, sid, query, matches)
+    finally:
+        ctl.request("session.close", sid)
+
+
 # -- session.overlay.wrap
 
 

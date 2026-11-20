@@ -342,6 +342,39 @@ def test_run_refusals(ctl, keymap, target, args, error):
     assert_error(ctl.request("keymap.run", target, **args), error)
 
 
+# what a failing command writes to stderr: its message colored, then `tput sgr0` (`ESC ( B ESC [ m`), an XTGETTCAP
+# DCS and a kitty image APC on the same line, and a last line with only another `tput sgr0`
+FAILED_STDERR = (
+    "warning: first\n\x1b[31mfatal: disk full\x1b(B\x1b[m\x1bP+q544e\x1b\\ \x1b_Gf=1;AAAA\x1b\\end\n\x1b(B\x1b[m"
+)
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("keymap.run", "field:tree.session.hud")
+def test_a_failed_commands_panel_shows_its_last_line_without_escape_residue(ctl, keymap, adapter):
+    # the panel's detail is the last line the command wrote to stderr that still has text once its escape sequences
+    # are gone, with no "B" left by `tput sgr0` and no DCS or APC payload
+    lines = CommandLines.of(adapter)
+    written = ctl.instance.root / "failed-stderr.txt"
+    written.write_bytes(FAILED_STDERR.encode())
+    shown = f"type {lines.quote(written)} 1>&2 & exit 3" if lines.cmd else f"cat {lines.quote(written)} >&2; exit 3"
+    keymap.write_text(f'command "fails" --error-hud {shown}\n')
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    sid = _new(ctl)
+    try:
+        assert assert_ok(ctl.request("keymap.run", sid, name="fails")) == {"id": sid}
+
+        def panel(tree):
+            hud = find_session(tree, sid).get("hud")
+            assert hud is not None, "no panel yet"
+            return hud
+
+        hud = panel(ctl.wait_tree(panel))
+        assert (hud["message"], hud["detail"]) == ("fails: exit 3", "fatal: disk full end")
+    finally:
+        ctl.request("session.close", sid)
+
+
 # -- hooks
 
 
