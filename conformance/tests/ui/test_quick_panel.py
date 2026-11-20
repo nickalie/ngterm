@@ -5,7 +5,8 @@ keyboard: the keys typed next go to its terminal. It also shows over the main wi
 `QuickTerminalPanel` is `[.borderless, .nonactivatingPanel]` at the floating level, joins all Spaces as a full screen
 auxiliary window and can become key. Its frame is
 upstream's `targetFrame`: the panel size of its screen's visible frame (the menu bar and Dock left out), centered in
-it, and the whole visible frame while zoomed."""
+it, and the whole visible frame while zoomed. A full screen Space hides the Dock, so over a full screen window the
+visible frame is the screen below the menu bar."""
 
 import math
 import re
@@ -56,8 +57,9 @@ def _flipped(rect, primary_height):
     )
 
 
-def _visible_frame(frame):
-    """The visible frame of the screen that holds the center of `frame`, as `_frame` gives it."""
+def _visible_frame(frame, full_screen=False):
+    """The visible frame of the screen that holds the center of `frame`, as `_frame` gives it. In a full screen Space
+    it is the screen below the menu bar: AppKit in this process still gives the desktop's, with the Dock."""
     import AppKit
 
     screens = AppKit.NSScreen.screens()
@@ -66,7 +68,8 @@ def _visible_frame(frame):
     for screen in screens:
         left, top, width, height = _flipped(screen.frame(), primary_height)
         if left <= x < left + width and top <= y < top + height:
-            return _flipped(screen.visibleFrame(), primary_height)
+            visible = _flipped(screen.visibleFrame(), primary_height)
+            return (left, visible[1], width, top + height - visible[1]) if full_screen else visible
     raise AssertionError(f"no screen holds the panel's frame {frame}")
 
 
@@ -82,14 +85,17 @@ def _sized(got, want):
     return math.floor(want + EPSILON) - EPSILON <= got <= math.ceil(want - EPSILON) + EPSILON
 
 
-def _framed(zoomed):
-    """A check that the panel's frame is the visible frame (zoomed), else the target frame in it."""
+def _framed(zoomed, full_screen=False):
+    """A check that the panel's frame is the visible frame (zoomed), else the target frame in it: what is wrong, or
+    None."""
 
     def check(frame):
-        visible = _visible_frame(frame)
+        visible = _visible_frame(frame, full_screen)
         want = visible if zoomed else _target_frame(visible)
         origin = all(abs(got - expected) <= ORIGIN_SLACK for got, expected in zip(frame[:2], want[:2]))
-        return origin and all(_sized(got, expected) for got, expected in zip(frame[2:], want[2:]))
+        if origin and all(_sized(got, expected) for got, expected in zip(frame[2:], want[2:])):
+            return None
+        return f"the panel's frame is {frame} in the visible frame {visible}"
 
     return check
 
@@ -126,7 +132,8 @@ def _borderless(ui, pid, what, check):
         assert len(windows) == 1, f"{what}: the quick terminal's windows are {windows}"
         ((frame, buttons),) = windows
         assert buttons == [], f"{what}: the panel has the title bar buttons {buttons}"
-        assert check(frame), f"{what}: the panel's frame is {frame} in the visible frame {_visible_frame(frame)}"
+        problem = check(frame)
+        assert problem is None, f"{what}: {problem}"
         layers = _layers(ui, pid, frame)
         floating = int(ui.quartz.CGWindowLevelForKey(ui.quartz.kCGFloatingWindowLevelKey))
         assert [layer for layer in layers if layer > 0] == [floating], (
@@ -246,7 +253,7 @@ def test_the_quick_panel_shows_over_a_full_screen_window(app, ctl, ui):
             except WaitTimeout:
                 if attempt == 2:
                     raise
-        _borderless(ui, pid, "shown over the full screen window", _framed(zoomed=False))
+        _borderless(ui, pid, "shown over the full screen window", _framed(zoomed=False, full_screen=True))
 
         def main_on_screen():
             layers = _layers(ui, pid, main)
