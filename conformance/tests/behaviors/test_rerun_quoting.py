@@ -44,6 +44,7 @@ BANGS = ("!needle", "fix!x", "!")
 # macOS has bash only at /bin/bash, usrmerged Linux at both paths.
 BASH = shutil.which("bash", path="/usr/bin:/bin")
 _markers = itertools.count(1)
+RAN = object()
 
 
 def _quoted(word, shell):
@@ -97,12 +98,15 @@ def _foreground(ctl, sid, pane="left"):
     return program_argv(session.get("foreground" if pane == "left" else "splitForeground"))
 
 
-def _ready(ctl, sid, shell="bash", **pane):
-    """Waits until the pane's shell reads lines: a line typed before its line editor starts can be lost."""
+def _ready(ctl, sid, shell="bash", refused=None, **pane):
+    """Waits until the pane's shell reads lines: a line typed before its line editor starts can be lost. With
+    `refused`, gives RAN as soon as the pane runs that argv instead, since its shell then never reads a line."""
     marker = f"RQ{next(_markers):04d}X"
     line = f"printf '%s%s\\n' {marker[:3]} {marker[3:]}\n"
 
     def printed():
+        if refused is not None and _runs(ctl, sid, refused, pane.get("pane", "left")):
+            return RAN
         if not ctl.request("session.type", sid, text=line, **pane).ok:
             return None
         try:
@@ -110,7 +114,13 @@ def _ready(ctl, sid, shell="bash", **pane):
         except AssertionError:
             return None
 
-    wait_until(printed, timeout=SHELL_START)
+    return wait_until(printed, timeout=SHELL_START)
+
+
+def _runs(ctl, sid, argv, pane):
+    foreground = _foreground(ctl, sid, pane)
+    # a macOS framework Python runs again as its Python.app, under that name
+    return isinstance(foreground, list) and foreground[1:] == argv[1:]
 
 
 def _new(ctl, **args):
@@ -152,7 +162,7 @@ def _plain(ctl, sid, argv, pane="left"):
     """The pane runs its shell and nothing of the capture: the shell answers, the captured program is not running,
     and no part of its line ran."""
     _show(ctl, sid, pane)
-    _ready(ctl, sid, **_args(pane))
+    assert _ready(ctl, sid, refused=argv, **_args(pane)) is not RAN, f"the pane runs the refused capture {argv!r}"
     assert _foreground(ctl, sid, pane) != argv
     text = assert_ok(ctl.request("session.text", sid, all=True, **_args(pane)))["text"]
     assert "needle" not in text and "INJECTED" not in text, text
