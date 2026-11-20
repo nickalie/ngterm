@@ -7,13 +7,16 @@ counts what was typed without wrapping. The pane mounts before its program start
 its `Last login` line before running the command, into the middle of anything typed that early: the test first has
 `cat` print a line back, the same probe `test_terminal_bindings` uses.
 
-On the Mac, Option is a text key by default (Ghostty's `macos-option-as-alt`): it types the layout's character. With
-the option on, Option is Alt: the key goes with ESC before it, which `cat -v` shows as `^[`. The Option cases press the
-US layout's keys (macOS CI's and the test Macs'). Its Option dead keys (e, u, n) compose with the next key, as posted
-key codes too (remote desktops, automation tools), and leave no accent for a later key or another session. Backspace
-or Escape right after a dead key cancels only its accent: the program gets neither key."""
+On the Mac, Ghostty's `macos-option-as-alt` decides what Option does. With the option off, Option is a text key: it
+types the layout's character. With the option on, Option is Alt: the key goes with ESC before it, which `cat -v` shows
+as `^[`. Left unset, the option is on for the U.S. and U.S. International layouts and off for the others (Ghostty's
+`KeyboardLayout.detectOptionAsAlt`, which upstream's `ghostty_surface_key_translation_mods` applies). The Option cases
+press the U.S. layout's keys (macOS CI's and the test Macs'). Its Option dead keys (e, u, n) compose with the next key,
+as posted key codes too (remote desktops, automation tools), and leave no accent for a later key or another session.
+Backspace or Escape right after a dead key cancels only its accent: the program gets neither key."""
 
 import contextlib
+import ctypes
 import re
 import sys
 
@@ -23,6 +26,9 @@ from agterm_conformance.match import assert_ok
 from agterm_conformance.wait import wait_cursor
 
 MAC = pytest.mark.skipif(sys.platform != "darwin", reason="the Mac's Option key")
+# the input source ids for which Ghostty's unset `macos-option-as-alt` is on
+OPTION_AS_ALT_LAYOUTS = ("com.apple.keylayout.US", "com.apple.keylayout.USInternational")
+OPTION_TYPES_TEXT = "macos-option-as-alt = false\n"
 
 # Case, digits and shifted symbols; no Return follows them, so `cat` never prints them back and the echo is their only
 # copy in the pane.
@@ -81,28 +87,29 @@ def _reading(ctl, command):
 
 
 @MAC
-@pytest.mark.covers("session.text", "behavior:pane.typing")
+@pytest.mark.covers("session.text", "config.reload", "behavior:pane.typing")
 def test_option_types_the_layouts_character(ctl, ui):
-    with _reading(ctl, "cat") as sid:
+    with configured(ctl, OPTION_TYPES_TEXT), _reading(ctl, "cat") as sid:
         ui.press("alt+s", "alt+g", "alt+p", "alt+shift+a", "return")
         ctl.wait_text(sid, r"ß©πÅ\s+ß©πÅ", all=True)
 
 
 @MAC
-@pytest.mark.covers("session.text", "behavior:pane.typing")
+@pytest.mark.covers("session.text", "config.reload", "behavior:pane.typing")
 def test_option_dead_keys_compose_with_the_next_key_and_leave_nothing_pending(ctl, ui):
-    with _reading(ctl, "cat") as sid:
-        ui.press("alt+e", "e", "alt+u", "u", "alt+n", "n", "alt+u", "a", "1", "alt+e", "space", "2", "return")
-        ctl.wait_text(sid, r"éüñä1´2\s+éüñä1´2", all=True)
-    with _reading(ctl, "cat") as sid:
-        ui.press("3", "alt+u", "u", "alt+s", "return")
-        ctl.wait_text(sid, r"\n3üß\s+3üß", all=True)
+    with configured(ctl, OPTION_TYPES_TEXT):
+        with _reading(ctl, "cat") as sid:
+            ui.press("alt+e", "e", "alt+u", "u", "alt+n", "n", "alt+u", "a", "1", "alt+e", "space", "2", "return")
+            ctl.wait_text(sid, r"éüñä1´2\s+éüñä1´2", all=True)
+        with _reading(ctl, "cat") as sid:
+            ui.press("3", "alt+u", "u", "alt+s", "return")
+            ctl.wait_text(sid, r"\n3üß\s+3üß", all=True)
 
 
 @MAC
-@pytest.mark.covers("session.text", "behavior:pane.typing")
+@pytest.mark.covers("session.text", "config.reload", "behavior:pane.typing")
 def test_backspace_or_escape_after_a_dead_key_cancels_only_its_accent(ctl, ui):
-    with _reading(ctl, "cat -v") as sid:
+    with configured(ctl, OPTION_TYPES_TEXT), _reading(ctl, "cat -v") as sid:
         ui.press("x", "alt+e", "delete", "e", "alt+u", "escape", "u", "return")
         ctl.wait_text(sid, r"\nxeu\s+xeu", all=True)
 
@@ -113,3 +120,33 @@ def test_option_as_alt_sends_escape_before_the_key(ctl, ui):
     with configured(ctl, "macos-option-as-alt = true\n"), _reading(ctl, "cat -v") as sid:
         ui.press("alt+u", "a", "alt+e", "e", "return")
         ctl.wait_text(sid, r"\^\[ua\^\[ee\s+\^\[ua\^\[ee", all=True)
+
+
+def _keyboard_layout():
+    """The input source id of the keyboard layout Ghostty reads: `TISCopyCurrentKeyboardLayoutInputSource`'s."""
+    import objc
+
+    carbon = ctypes.CDLL("/System/Library/Frameworks/Carbon.framework/Carbon")
+    foundation = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    carbon.TISCopyCurrentKeyboardLayoutInputSource.restype = ctypes.c_void_p
+    carbon.TISGetInputSourceProperty.restype = ctypes.c_void_p
+    carbon.TISGetInputSourceProperty.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    foundation.CFRelease.argtypes = [ctypes.c_void_p]
+    source = carbon.TISCopyCurrentKeyboardLayoutInputSource()
+    assert source, "no current keyboard layout"
+    try:
+        key = ctypes.c_void_p.in_dll(carbon, "kTISPropertyInputSourceID")
+        return str(objc.objc_object(c_void_p=carbon.TISGetInputSourceProperty(source, key)))
+    finally:
+        foundation.CFRelease(source)
+
+
+@MAC
+@pytest.mark.covers("session.text", "behavior:pane.typing")
+def test_option_is_alt_by_default_on_the_us_layouts(ctl, ui):
+    layout = _keyboard_layout()
+    if layout not in OPTION_AS_ALT_LAYOUTS:
+        pytest.skip(f"the keyboard layout {layout} leaves Option a text key by default")
+    with _reading(ctl, "cat -v") as sid:
+        ui.press("alt+s", "alt+e", "e", "return")
+        ctl.wait_text(sid, r"\^\[s\^\[ee\s+\^\[s\^\[ee", all=True)
