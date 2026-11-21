@@ -383,6 +383,15 @@ impl ShellDialect {
         }
     }
 
+    /// Whether the shell program `name` reads a bracketed paste at its prompt, once its line editor turns mode 2004
+    /// on: bash 5.1 and later, zsh 5.1 and later, and fish. Never on Windows, where the pseudoconsole decides what
+    /// reaches the shell.
+    #[must_use]
+    pub fn reads_bracketed_paste(name: &str) -> bool {
+        let name = basename(name.strip_prefix('-').unwrap_or(name));
+        !cfg!(windows) && matches!(name, "bash" | "rbash" | "zsh" | "fish")
+    }
+
     /// What submits a typed line: upstream's line feed for POSIX shells and fish, else a carriage return, the Enter
     /// key's own code.
     #[must_use]

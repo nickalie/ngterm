@@ -195,10 +195,6 @@ def _shell_home(ctl):
     home = ctl.instance.home
     # without a startup file, an interactive zsh starts its new-user menu instead of a prompt
     (home / ".zshrc").write_text("PS1='$ '\n")
-    # a vendor autopair plugin (CachyOS installs one) changes typed quotes; a user file of that name replaces it
-    conf = home / ".config" / "fish" / "conf.d"
-    conf.mkdir(parents=True, exist_ok=True)
-    (conf / "autopair.fish").write_text("")
 
 
 @pytest.mark.covers("behavior:restore.rerun-replays-captured-command")

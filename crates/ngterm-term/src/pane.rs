@@ -104,7 +104,27 @@ pub struct PaneConfig {
     /// Keys always take their legacy encodings, whatever the program asks for ([`vt::KeyEncoder::set_legacy_only`]):
     /// on by default on Windows, whose pseudoconsole drops the Kitty keyboard protocol's and `modifyOtherKeys`' keys.
     pub legacy_keys: bool,
+    /// Input held until the program reads a bracketed paste: a launch's input for a shell's line editor.
+    pub held_input: Option<HeldInput>,
     pub wake: Option<Wake>,
+}
+
+/// Input the pane holds for its program until the program turns bracketed paste (mode 2004) on, as a line editor does
+/// once it reads its prompt: `pasted` goes in then. Without it for `patience` after the pane starts, `typed` goes in
+/// instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldInput {
+    pub pasted: Vec<u8>,
+    pub typed: Vec<u8>,
+    pub patience: Duration,
+}
+
+impl HeldInput {
+    /// This input and when its patience, counted from now, ends.
+    fn due(self) -> (Self, Instant) {
+        let deadline = Instant::now() + self.patience;
+        (self, deadline)
+    }
 }
 
 impl PaneConfig {
@@ -123,6 +143,7 @@ impl PaneConfig {
             grapheme_clusters: true,
             color_scheme: ColorScheme::default(),
             legacy_keys: cfg!(windows),
+            held_input: None,
             wake: None,
         }
     }
@@ -143,6 +164,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("grapheme_clusters", &self.grapheme_clusters)
             .field("color_scheme", &self.color_scheme)
             .field("legacy_keys", &self.legacy_keys)
+            .field("held_input", &self.held_input)
             .field("wake", &self.wake.is_some())
             .finish()
     }
@@ -259,6 +281,8 @@ pub(crate) struct Shared {
     writes: Arc<Mutex<vt::DeferredClipboardWrites>>,
     /// Where the terminal's PTY writes go instead of the reply queue while a paste runs.
     pub(crate) divert: DivertSlot,
+    /// [`PaneConfig::held_input`] and when its patience ends.
+    held_input: Mutex<Option<(HeldInput, Instant)>>,
     pub(crate) search: Mutex<SearchSlot>,
     /// Wakes the search worker early (a new needle, the pane going away).
     pub(crate) search_wake: Condvar,
@@ -999,10 +1023,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
     let colors = terminal.colors();
     let input = InputState::new(config.legacy_keys).map_err(PaneError::terminal)?;
     Ok(Shared {
-        bridge: Mutex::new(crate::bridge::Peer {
-            expected_nonce: config.attach_bridge.clone(),
-            ..Default::default()
-        }),
+        bridge: Mutex::new(crate::bridge::Peer::expecting(config.attach_bridge.clone())),
         vt: Mutex::new(Vt {
             terminal,
             input,
@@ -1022,6 +1043,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
         armed,
         writes,
         divert,
+        held_input: Mutex::new(config.held_input.clone().map(HeldInput::due)),
         search: Mutex::new(SearchSlot::default()),
         search_wake: Condvar::new(),
         replies,
@@ -1436,6 +1458,7 @@ impl Worker {
                     if !fed {
                         break;
                     }
+                    self.release_held_input();
                     self.after_batch(output.len());
                 }
                 #[cfg(feature = "local")]
@@ -1444,7 +1467,10 @@ impl Worker {
                         session_io::handle(live, &self.shared, mail);
                     }
                 }
-                Mail::Idle => self.expire_deadlines(),
+                Mail::Idle => {
+                    self.expire_deadlines();
+                    self.release_held_input();
+                }
                 Mail::Eof => {
                     self.shared.mark_eof();
                     self.shared.wake();
@@ -1456,9 +1482,31 @@ impl Worker {
         self.shared.wake();
     }
 
-    /// When a synchronized-output hold expires, if one is on.
+    /// When a synchronized-output hold expires or the held input's patience ends, whichever is first.
     fn hold_deadline(&self) -> Option<Instant> {
-        lock(&self.shared.capture).hold_deadline()
+        let hold = lock(&self.shared.capture).hold_deadline();
+        let patience = lock(&self.shared.held_input).as_ref().map(|(_, deadline)| *deadline);
+        hold.into_iter().chain(patience).min()
+    }
+
+    /// Send the held input once the program reads a bracketed paste, or typed once its patience ended.
+    fn release_held_input(&self) {
+        let vt = lock(&self.shared.vt);
+        let mut slot = lock(&self.shared.held_input);
+        let Some((held, deadline)) = slot.as_ref() else {
+            return;
+        };
+        let bytes = if vt.terminal.mode(vt::Mode::dec(2004)) {
+            held.pasted.clone()
+        } else if Instant::now() >= *deadline {
+            held.typed.clone()
+        } else {
+            return;
+        };
+        *slot = None;
+        drop(slot);
+        drop(vt);
+        self.shared.push_input(&bytes);
     }
 
     /// End an expired hold and wake the frontend. An animation wake only requests a capture: ticking stays under

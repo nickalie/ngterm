@@ -8,8 +8,11 @@
 //!   `ngterm-session attach` line would read ([`Launch::live`], from
 //!   [`ngterm_core::restore::spawn_plan::resolve_live_seed`]): the line's session and creation argv, the environment
 //!   below (carrying the wrap configuration from [`Runtime`]) and the working directory; a plain pane runs its seed's
-//!   command, or the login shell with its `initial_input` typed in. A pane's shell profile takes the login shell's
-//!   place, run from its structured argv, and runs the command itself when it is a CMD or WSL one ([`Launch::shell_profile`]).
+//!   command, or the login shell with its `initial_input` typed in. Upstream types it too (libghostty's
+//!   `initial_input`), but a bash, zsh or fish line editor gets it as a bracketed paste once it turns that mode on, so
+//!   a plugin bound to a key (fish's autopair on a quote) cannot change the line ([`Prepared::pasted_input`]). A
+//!   pane's shell profile takes the login shell's place, run from its structured argv, and runs the command itself when
+//!   it is a CMD or WSL one ([`Launch::shell_profile`]).
 //! - **Windows**: a command line runs as `cmd.exe`'s command text, `%ComSpec% /D /S /C "<line>"` (no `AutoRun`, as
 //!   `sh -c` reads no rc file; `/S` with the outer quotes keeps the line's own quotes as written, which a quoted
 //!   program path needs), its tail passed as written ([`PaneCommand::raw_args`]). The login shell runs directly, as
@@ -199,14 +202,15 @@ impl Host {
             .command
             .clone()
             .unwrap_or_else(|| profile.map_or_else(|| self.shell.clone(), |profile| profile.executable.clone()));
-        let typed = launch.initial_input.as_ref().and_then(|input| {
-            // a profile's executable runs as it is, not as a shell value
-            let program = profile.map_or_else(
-                || shell_program(&line),
-                |profile| Some(Cow::Borrowed(profile.executable.as_str())),
-            );
-            typed_input(input, program.as_deref())
-        });
+        // a profile's executable runs as it is, not as a shell value
+        let editor = profile.map_or_else(
+            || shell_program(&line),
+            |profile| Some(Cow::Borrowed(profile.executable.as_str())),
+        );
+        let (typed, pasted) = launch
+            .initial_input
+            .as_ref()
+            .map_or((None, None), |input| launch_input(input, editor.as_deref()));
         let integration = self.integrate(launch, profile, &mut line, env, &mut vars);
         for (key, value) in &self.env {
             vars.set(key, value.clone());
@@ -252,6 +256,7 @@ impl Host {
         Prepared {
             command,
             initial_input: typed.map(String::into_bytes).or_else(|| self.config_input()),
+            pasted_input: pasted.map(String::into_bytes),
             exit: ExitPolicy::Launched {
                 argv,
                 command: launch.command.is_some(),
@@ -396,6 +401,16 @@ impl Host {
 #[cfg(unix)]
 fn program(line: &str, _shell: bool, _cwd: Option<&Path>, _env: &dyn Env) -> (PaneCommand, String) {
     pane_command(&ShellCommand::posix(line))
+}
+
+/// `input` typed for the shell program `editor` ([`typed_input`]), and pasted too when its line editor reads a
+/// bracketed paste.
+fn launch_input(input: &PaneInput, editor: Option<&str>) -> (Option<String>, Option<String>) {
+    let typed = typed_input(input, editor);
+    let pasted = editor
+        .filter(|editor| typed.is_some() && ShellDialect::reads_bracketed_paste(editor))
+        .and_then(|editor| input.pasted(ShellDialect::of_program(editor)));
+    (typed, pasted)
 }
 
 /// `input` as typed into the shell `program`, a pane profile's before the host's. Refuse a capture with `!` for
@@ -722,6 +737,9 @@ impl Launch {
 pub struct Prepared {
     pub command: PaneCommand,
     pub initial_input: Option<Vec<u8>>,
+    /// The launch's own input as a bracketed paste, for a shell whose line editor reads one: it replaces
+    /// `initial_input` once the shell turns bracketed paste on ([`crate::HeldInput`]).
+    pub pasted_input: Option<Vec<u8>>,
     pub exit: ExitPolicy,
 }
 
@@ -759,7 +777,8 @@ pub fn resource_candidates(exe: Option<&Path>) -> Vec<PathBuf> {
 
 impl Pane {
     /// Start `launch` under `host` on a new PTY of `config`'s size, with the exit handling of a launched pane; the
-    /// launch's input is queued for the program at once. A live launch attaches to its session in process instead
+    /// launch's input is queued for the program at once, or held for a shell that reads a bracketed paste
+    /// ([`Prepared::pasted_input`], [`crate::HeldInput`]). A live launch attaches to its session in process instead
     /// (module docs); an attach that fails ends the pane with the CLI's status, reported through
     /// [`crate::PaneEvent::Exited`]. A painter launch paints its HUD body in process (`crate::painted`).
     ///
@@ -770,8 +789,14 @@ impl Pane {
     /// [`crate::PaneEvent::Exited`] (a command that is not found ends with status 127 instead, 1 under `cmd.exe`).
     pub fn launch(launch: &Launch, host: &Host, config: &PaneConfig) -> Result<Self, PaneError> {
         let prepared = host.prepare(launch, &ProcessEnv);
-        let input = prepared.initial_input.unwrap_or_default();
+        let mut input = prepared.initial_input.unwrap_or_default();
+        let held_input = prepared.pasted_input.map(|pasted| crate::HeldInput {
+            pasted,
+            typed: std::mem::take(&mut input),
+            patience: PASTE_PATIENCE,
+        });
         let config = PaneConfig {
+            held_input,
             exit: prepared.exit,
             status_file: launch.status_file.clone(),
             attach_bridge: launch
@@ -823,6 +848,10 @@ impl Pane {
         Ok(pane)
     }
 }
+
+/// How long a launch's input waits for its shell to turn bracketed paste on before it is typed instead: a bash
+/// before 5.1, or a zsh with `zle_bracketed_paste` unset, never turns it on.
+const PASTE_PATIENCE: Duration = Duration::from_secs(3);
 
 /// The status a program that could not start ends with: libghostty's child exits 1 after a failed `exec`.
 const FAILED_START_STATUS: u32 = 1;
@@ -998,6 +1027,37 @@ mod tests {
             host(None).prepare(&command, &MapEnv::new()).initial_input.as_deref(),
             Some(&b"'tool' 'a b'\n"[..])
         );
+    }
+
+    #[test]
+    fn a_shell_that_reads_a_bracketed_paste_gets_the_launchs_input_pasted() {
+        let pasted = |shell: &str, input: Option<PaneInput>| {
+            let host = Host {
+                shell: shell.to_owned(),
+                input: vec![InputSource::Raw(b"config".to_vec())],
+                ..host(None)
+            };
+            let launch = Launch {
+                initial_input: input,
+                ..Launch::default()
+            };
+            host.prepare(&launch, &MapEnv::new())
+                .pasted_input
+                .map(|bytes| String::from_utf8(bytes).unwrap())
+        };
+        let replay = || Some(PaneInput::Replay(vec!["tool".to_owned(), "a b".to_owned()]));
+        let expected = (!cfg!(windows)).then_some("\x1b[200~'tool' 'a b'\x1b[201~\n");
+        for shell in ["/usr/bin/fish -l", "/bin/zsh", "bash"] {
+            assert_eq!(pasted(shell, replay()).as_deref(), expected, "{shell}");
+        }
+        assert_eq!(
+            pasted("bash", Some(PaneInput::Line("cd x".to_owned()))).as_deref(),
+            (!cfg!(windows)).then_some("\x1b[200~cd x\x1b[201~\n")
+        );
+        // a shell with no line editor, the config's own input, and an argv no shell may run are typed as before
+        assert_eq!(pasted("/bin/sh", replay()), None);
+        assert_eq!(pasted("/bin/zsh", None), None);
+        assert_eq!(pasted("/bin/zsh", Some(PaneInput::Replay(Vec::new()))), None);
     }
 
     #[test]

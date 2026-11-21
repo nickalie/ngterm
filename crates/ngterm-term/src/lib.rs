@@ -104,7 +104,8 @@ pub use kitty::{
 #[cfg(feature = "local")]
 pub use launch::{COMMAND_SHELL, FALLBACK_TERM, Host, Launch, Prepared, resolve_resources, resource_candidates};
 pub use pane::{
-    DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, GridSize, Pane, PaneConfig, PaneStats, Wake,
+    DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, GridSize, HeldInput, Pane, PaneConfig, PaneStats,
+    Wake,
 };
 pub use placeholder::PLACEHOLDER;
 #[cfg(feature = "local")]

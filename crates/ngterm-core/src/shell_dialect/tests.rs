@@ -362,6 +362,16 @@ fn a_shell_path_run_directly_keeps_its_spaces_and_brackets() {
 }
 
 #[test]
+fn bash_zsh_and_fish_read_a_bracketed_paste_outside_windows() {
+    for name in ["bash", "/bin/bash", "-zsh", "/usr/bin/fish", "rbash"] {
+        assert_eq!(ShellDialect::reads_bracketed_paste(name), !cfg!(windows), "{name}");
+    }
+    for name in ["sh", "/bin/dash", "pwsh", "cmd.exe", "nu", "bashful"] {
+        assert!(!ShellDialect::reads_bracketed_paste(name), "{name}");
+    }
+}
+
+#[test]
 fn each_dialect_submits_with_its_own_enter() {
     assert_eq!(
         ShellDialect::Posix.typed(&["sleep", "600"]).as_deref(),

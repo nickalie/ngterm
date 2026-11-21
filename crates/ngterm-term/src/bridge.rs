@@ -150,6 +150,14 @@ pub(crate) struct PasteOptions<'a> {
     pub lazy: bool,
 }
 impl Peer {
+    /// A peer that expects a launch's `nonce`, only on a viewer of a capability-advertising attach endpoint.
+    pub(crate) fn expecting(nonce: Option<String>) -> Self {
+        Self {
+            expected_nonce: nonce,
+            ..Self::default()
+        }
+    }
+
     pub fn paste(
         &mut self,
         pane: &Pane,

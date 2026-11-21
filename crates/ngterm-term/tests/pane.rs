@@ -16,10 +16,10 @@ mod redraw;
 use std::time::{Duration, Instant};
 
 use ngterm_term::{
-    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardWrite, ColorScheme, Frame, GridSize, Pane,
-    PaneCommand, PaneConfig, PaneError, PaneEvent, Progress, ReadScope, Rgb,
+    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardWrite, ColorScheme, Frame, GridSize, HeldInput,
+    Pane, PaneCommand, PaneConfig, PaneError, PaneEvent, Progress, ReadScope, Rgb,
 };
-use support::{SIZE, TestResult, spawn, spawn_with, wait_events, wait_file, wait_file_containing, wait_text};
+use support::{Fixture, SIZE, TestResult, spawn, spawn_with, wait_events, wait_file, wait_file_containing, wait_text};
 
 fn exited(events: &[PaneEvent]) -> bool {
     events.iter().any(|event| matches!(event, PaneEvent::Exited(_)))
@@ -296,6 +296,40 @@ fn a_resize_reaches_the_child() {
     assert_eq!(frame.cols, 100);
     assert_eq!(frame.rows.len(), 30);
     assert!(fixture.pane.resize(GridSize { cols: 0, ..size }).is_err());
+}
+
+/// A pane holding `pasted` and `typed` for its script, typed after `patience` at the latest.
+fn holding(script: &str, patience: Duration) -> TestResult<Fixture> {
+    let config = PaneConfig {
+        held_input: Some(HeldInput {
+            pasted: b"\x1b[200~pasted\x1b[201~\n".to_vec(),
+            typed: b"typed\n".to_vec(),
+            patience,
+        }),
+        ..PaneConfig::new(SIZE)
+    };
+    spawn_with(script, &config)
+}
+
+#[test]
+fn held_input_is_pasted_once_the_program_turns_bracketed_paste_on() {
+    let fixture = holding(
+        r#"sleep 0.3; printf '\033[?2004h'; IFS= read -r line; printf '%s' "$line" > "$DIR/got""#,
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    let got = wait_file_containing(&fixture.path("got"), b"pasted");
+    assert_eq!(got, b"\x1b[200~pasted\x1b[201~");
+}
+
+#[test]
+fn held_input_is_typed_when_the_program_never_turns_bracketed_paste_on() {
+    let patience = Duration::from_millis(300);
+    let started = Instant::now();
+    let fixture = holding(r#"IFS= read -r line; printf '%s' "$line" > "$DIR/got""#, patience).unwrap();
+    let got = wait_file_containing(&fixture.path("got"), b"typed");
+    assert!(started.elapsed() >= patience);
+    assert_eq!(got, b"typed");
 }
 
 #[test]

@@ -78,8 +78,9 @@ fn replayed() -> TestResult<Vec<String>> {
     Ok(argv)
 }
 
-/// `shell` launched as a pane's login shell with `argv` replayed into it, its record going to `record`.
-fn launch(shell: &Path, argv: &[String], record: &Path, dir: &Path) -> TestResult<Pane> {
+/// `shell` launched as a pane's login shell with `argv` replayed into it, its record going to `record`, `env` added
+/// to its environment.
+fn launch(shell: &Path, argv: &[String], record: &Path, dir: &Path, env: &[(String, String)]) -> TestResult<Pane> {
     let isolation = std::env::vars_os()
         .map(|(key, _)| key.to_string_lossy().into_owned())
         .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_"))
@@ -87,7 +88,10 @@ fn launch(shell: &Path, argv: &[String], record: &Path, dir: &Path) -> TestResul
     let launch = Launch {
         initial_input: Some(PaneInput::Replay(argv.to_vec())),
         working_directory: Some(dir.to_path_buf()),
-        env: vec![(RECORD.to_owned(), record.display().to_string())],
+        env: [(RECORD.to_owned(), record.display().to_string())]
+            .into_iter()
+            .chain(env.iter().cloned())
+            .collect(),
         env_remove: isolation,
         ..Launch::default()
     };
@@ -118,7 +122,89 @@ fn a_replay_typed_into_each_shell_runs_the_exact_argv() -> TestResult {
     let argv = replayed()?;
     for (index, shell) in shells().iter().enumerate() {
         let record = dir.path().join(format!("record-{index}"));
-        let pane = launch(shell, &argv, &record, dir.path())?;
+        let pane = launch(shell, &argv, &record, dir.path(), &[])?;
+        let recorded = wait_record(&pane, &record);
+        assert_eq!(recorded, NASTY, "{}", shell.display());
+    }
+    Ok(())
+}
+
+/// The line-editing shells this host has, by full path; macOS' `/bin/bash` 3.2 has no bracketed paste, so only a
+/// newer bash counts there.
+fn line_editors() -> Vec<PathBuf> {
+    let bash: &[&str] = if cfg!(target_os = "macos") {
+        &["/opt/homebrew/bin/bash", "/usr/local/bin/bash"]
+    } else {
+        &["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
+    };
+    let zsh: &[&str] = &["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"];
+    let fish: &[&str] = &[
+        "/usr/bin/fish",
+        "/bin/fish",
+        "/usr/local/bin/fish",
+        "/opt/homebrew/bin/fish",
+    ];
+    [("fish", fish), ("zsh", zsh), ("bash", bash)]
+        .into_iter()
+        .filter_map(|(name, paths)| {
+            let found = paths.iter().map(PathBuf::from).find(|path| path.exists());
+            if found.is_none() {
+                eprintln!("SKIPPED: no {name} on this host");
+            }
+            found
+        })
+        .collect()
+}
+
+/// The environment that makes `shell` read a throwaway config from `dir`, in which the `'` key is bound as an
+/// autopair plugin binds it: it types a pair of quotes and puts the cursor between them.
+fn quote_pairing(shell: &Path, dir: &Path) -> TestResult<Vec<(String, String)>> {
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home)?;
+    let mut env = vec![("HOME".to_owned(), home.display().to_string())];
+    match shell.file_name().and_then(|name| name.to_str()) {
+        Some("fish") => {
+            let conf = dir.join("config/fish/conf.d");
+            std::fs::create_dir_all(&conf)?;
+            // the name of a vendor autopair plugin too, which this file overrides
+            std::fs::write(
+                conf.join("autopair.fish"),
+                "function _pair_quote\n    commandline --insert \"''\"\n    \
+                 commandline --cursor (math (commandline --cursor) - 1)\nend\nbind \"'\" _pair_quote\n",
+            )?;
+            env.push(("XDG_CONFIG_HOME".to_owned(), dir.join("config").display().to_string()));
+        }
+        Some("zsh") => {
+            let zdotdir = dir.join("zdotdir");
+            std::fs::create_dir_all(&zdotdir)?;
+            std::fs::write(zdotdir.join(".zshenv"), "unsetopt GLOBAL_RCS\n")?;
+            std::fs::write(
+                zdotdir.join(".zshrc"),
+                "pair-quote() { LBUFFER+=\"'\"; RBUFFER=\"'$RBUFFER\"; }\n\
+                 zle -N pair-quote\nbindkey \"'\" pair-quote\n",
+            )?;
+            env.push(("ZDOTDIR".to_owned(), zdotdir.display().to_string()));
+        }
+        _ => {
+            let inputrc = dir.join("inputrc");
+            std::fs::write(&inputrc, "\"'\": \"\\C-v'\\C-v'\\C-b\"\n")?;
+            env.push(("INPUTRC".to_owned(), inputrc.display().to_string()));
+        }
+    }
+    Ok(env)
+}
+
+/// A key-bound plugin (fish's autopair, zsh-autopair, a readline macro) rewrites the quotes a replay would type, so a
+/// shell that reads bracketed paste gets the replay pasted: the plugin's keys never run on it.
+#[test]
+fn a_replay_runs_the_exact_argv_under_a_plugin_bound_to_the_quote_key() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let argv = replayed()?;
+    for (index, shell) in line_editors().iter().enumerate() {
+        let home = dir.path().join(format!("shell-{index}"));
+        let env = quote_pairing(shell, &home)?;
+        let record = dir.path().join(format!("record-{index}"));
+        let pane = launch(shell, &argv, &record, dir.path(), &env)?;
         let recorded = wait_record(&pane, &record);
         assert_eq!(recorded, NASTY, "{}", shell.display());
     }

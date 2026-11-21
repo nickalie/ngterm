@@ -585,10 +585,24 @@ impl PaneInput {
     /// cannot be handed safely ([`ShellDialect::line`]).
     #[must_use]
     pub fn text(&self, dialect: ShellDialect) -> Option<String> {
+        self.line(dialect).map(|line| line + dialect.enter())
+    }
+
+    /// [`Self::text`] as a bracketed paste, its Enter after the paste: a line editor inserts a paste as it is, so a
+    /// plugin bound to a key the line holds (fish's autopair on a quote) cannot change it. `None` as for
+    /// [`Self::text`], and for a line holding an escape, which could end the paste early.
+    #[must_use]
+    pub fn pasted(&self, dialect: ShellDialect) -> Option<String> {
+        self.line(dialect)
+            .filter(|line| !line.contains('\x1b'))
+            .map(|line| format!("\x1b[200~{line}\x1b[201~{}", dialect.enter()))
+    }
+
+    fn line(&self, dialect: ShellDialect) -> Option<String> {
         match self {
             Self::Line(line) if line.is_empty() => None,
-            Self::Line(line) => Some(format!("{line}{}", dialect.enter())),
-            Self::Replay(argv) => dialect.typed(argv),
+            Self::Line(line) => Some(line.clone()),
+            Self::Replay(argv) => dialect.line(argv),
         }
     }
 }
@@ -1509,6 +1523,22 @@ mod tests {
             pin.text(ShellDialect::Cmd).as_deref(),
             Some("cd x && claude --resume y\r")
         );
+    }
+
+    #[test]
+    fn a_pane_input_is_pasted_bracketed_with_its_enter_after_the_paste() {
+        let argv = PaneInput::Replay(vec!["tool".to_owned(), "it's".to_owned()]);
+        assert_eq!(
+            argv.pasted(ShellDialect::Fish).as_deref(),
+            Some("\x1b[200~'tool' 'it\\'s'\x1b[201~\n")
+        );
+        assert_eq!(argv.pasted(ShellDialect::Unknown), None);
+        assert_eq!(
+            line("cd x").pasted(ShellDialect::Posix).as_deref(),
+            Some("\x1b[200~cd x\x1b[201~\n")
+        );
+        assert_eq!(line("").pasted(ShellDialect::Posix), None);
+        assert_eq!(line("a\x1b[201~b").pasted(ShellDialect::Posix), None);
     }
 
     #[test]
