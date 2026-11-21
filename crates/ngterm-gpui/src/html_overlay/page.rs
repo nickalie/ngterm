@@ -497,7 +497,7 @@ impl Page {
                 ngterm_wpe_client::LoadEvent::Finished => self.load_event(&LoadEvent::Finished),
                 ngterm_wpe_client::LoadEvent::Redirected => {}
             },
-            Event::LoadFailed { error, .. } => self.load_event(&policy::failure_event(error)),
+            Event::LoadFailed { error, .. } => self.load_failed(policy::failure_event(error)),
             Event::WebProcessTerminated { .. } => {
                 self.state.borrow_mut().shown_url = None;
                 self.load_event(&LoadEvent::Terminated);
@@ -577,6 +577,25 @@ impl Page {
         self.report_outcome(outcome);
     }
 
+    /// A failed load; a link page keeps the file it shows when a followed link cannot be read.
+    fn load_failed(&self, event: LoadEvent) {
+        let LoadEvent::Failed(message) = event else {
+            return self.load_event(&event);
+        };
+        let outcome = {
+            let mut state = self.state.borrow_mut();
+            if !state.active() {
+                return;
+            }
+            if state.overlay.markdown_links.is_some() {
+                state.load.failed_over_shown(message)
+            } else {
+                state.load.handle(&LoadEvent::Failed(message))
+            }
+        };
+        self.report_outcome(outcome);
+    }
+
     fn committed(&self) {
         let web = self.web_url();
         {
@@ -634,7 +653,7 @@ impl Page {
         if moved {
             let web = self.web_url();
             let mut state = self.state.borrow_mut();
-            state.shown_url = policy::shown_after_change(state.shown_url.as_ref(), web.as_ref());
+            state.shown_url = policy::shown_after_page_change(&state.overlay, state.shown_url.as_ref(), web.as_ref());
         }
         self.report_page();
     }
@@ -748,7 +767,15 @@ impl Page {
             text.load_document(true);
             return;
         }
+        let links = self.state.borrow().overlay.markdown_links.clone();
         let load = match source {
+            // a link page loads through the page scheme, which reads each file it follows
+            HtmlSource::Markdown { .. } if let Some(grant) = links => {
+                match ngterm_core::html::markdown_link_url(self.id, &grant.path) {
+                    Some(url) => Load::Uri(url.into()),
+                    None => return self.fail(format!("not an absolute path: {}", grant.path)),
+                }
+            }
             source @ (HtmlSource::Image { .. }
             | HtmlSource::Markdown { .. }
             | HtmlSource::Text { .. }
@@ -939,7 +966,10 @@ impl Page {
             if !state.active() {
                 return false;
             }
-            decide(&policy::navigation_action(url.clone(), target, clicked), &state.overlay)
+            decide(
+                &policy::page_navigation_action(url.clone(), target, clicked, &state.overlay),
+                &state.overlay,
+            )
         };
         if decision == HtmlNavigationDecision::OpenExternal {
             let page = self.me.clone();
@@ -1236,6 +1266,116 @@ mod tests {
         });
         model.drain();
         assert_eq!(model.overlay().load_state, HtmlLoadState::Loaded);
+    }
+
+    /// A Markdown page in a folder with a link grant, and the address it loads `name` in that folder from.
+    fn link_page() -> (tempfile::TempDir, HtmlOverlay, impl Fn(&HtmlOverlay, &str) -> String) {
+        let dir = tempfile::tempdir().unwrap();
+        let readme = dir.path().join("README.md");
+        std::fs::write(&readme, "[guide](sub/guide.md)").unwrap();
+        let readme = readme.to_string_lossy().into_owned();
+        let grant = ngterm_core::html::markdown_page::link_grant(&readme, "/nowhere");
+        let flags = ngterm_core::html::HtmlPageFlags {
+            navigation: true,
+            ..ngterm_core::html::HtmlPageFlags::default()
+        };
+        let overlay = HtmlOverlay::linked(HtmlSource::Markdown { path: readme }, flags, grant);
+        let address = |overlay: &HtmlOverlay, name: &str| {
+            let root = std::path::Path::new(&overlay.markdown_links.as_ref().unwrap().root).join(name);
+            ngterm_core::html::markdown_link_url(overlay.id, &root.to_string_lossy())
+                .unwrap()
+                .into()
+        };
+        (dir, overlay, address)
+    }
+
+    fn failed(page: &Page, uri: String, cx: &mut App) {
+        page.event(
+            &Event::LoadFailed {
+                view: page.view_id().unwrap(),
+                uri,
+                error: LoadError {
+                    kind: LoadErrorKind::Failed,
+                    message: "not a markdown file in the page's folder".to_owned(),
+                },
+            },
+            cx,
+        );
+    }
+
+    fn shows(page: &Page, uri: &str, cx: &mut App) {
+        let engine = EngineState {
+            uri: Some(uri.to_owned()),
+            title: None,
+            can_go_back: true,
+            can_go_forward: false,
+        };
+        let view = page.view_id().unwrap();
+        page.event(&Event::Page { view, page: engine }, cx);
+    }
+
+    /// Upstream's `MarkdownPageRenderingTests` link-page cases on WPE: the page loads its file through the page scheme
+    /// with the Markdown renderer, names a followed file only once it committed, keeps the file it shows when a link
+    /// cannot be read, reloads what it shows with the engine's own reload, and reloads its original file by address.
+    #[gpui_kit::test]
+    fn a_link_page_loads_through_the_page_scheme_and_keeps_its_file_when_a_link_fails(cx: &mut TestAppContext) {
+        let (_dir, mut source, address) = link_page();
+        let readme = address(&source, "README.md");
+        let guide = address(&source, "sub/guide.md");
+        let (page, web, mut model) = model_page(&source);
+        assert!(
+            page.scripts(&source)
+                .iter()
+                .any(|script| script.source == super::super::documents::script())
+        );
+        source.reload_revision += 1;
+        cx.update(|cx| page.apply(&source, true, cx));
+        assert!(web.recorder.take().contains(&Call::Load(Load::Uri(readme.clone()))));
+
+        cx.update(|cx| failed(&page, readme.clone(), cx));
+        model.drain();
+        assert_eq!(
+            model.overlay().load_state,
+            HtmlLoadState::Failed,
+            "a first load with nothing shown fails"
+        );
+
+        cx.update(|cx| {
+            progress(&page, ngterm_wpe_client::LoadEvent::Started, cx);
+            shows(&page, &readme, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Committed, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Finished, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Started, cx);
+            shows(&page, &guide, cx);
+        });
+        model.drain();
+        let original = source.source.text();
+        assert_eq!(
+            model.overlay().current.as_ref().map(|shown| shown.page.clone()),
+            Some(original.clone())
+        );
+        cx.update(|cx| failed(&page, guide.clone(), cx));
+        model.drain();
+        assert_eq!(model.overlay().load_state, HtmlLoadState::Loaded);
+        assert_eq!(model.overlay().load_error, None);
+        assert_eq!(
+            model.overlay().current.as_ref().map(|shown| shown.page.clone()),
+            Some(original)
+        );
+
+        cx.update(|cx| {
+            progress(&page, ngterm_wpe_client::LoadEvent::Started, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Committed, cx);
+        });
+        model.drain();
+        let shown = model.overlay().current.clone().unwrap();
+        assert!(shown.page.ends_with("guide.md") && shown.can_go_back, "{shown:?}");
+        assert_eq!(model.overlay().identity(), "guide.md");
+
+        source.reload_revision += 1;
+        source.reload_target = HtmlReloadTarget::Current;
+        cx.update(|cx| page.apply(&source, true, cx));
+        assert_eq!(web.recorder.take(), [Call::Reload]);
     }
 
     #[gpui_kit::test]

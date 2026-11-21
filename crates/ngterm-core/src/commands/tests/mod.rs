@@ -26,6 +26,7 @@ mod hud;
 mod keymap;
 mod live;
 mod live_capture;
+mod markdown_links;
 mod messages;
 mod metadata;
 mod moves;

@@ -115,6 +115,7 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
             ..
         } => Cancel,
         // a clicked HTML file shares the Markdown arm: a user-activated web link is offered, nothing else leaves it
+        // but a link page's own Markdown files
         HtmlSource::Markdown { .. }
         | HtmlSource::Document { .. }
         | HtmlSource::Replica {
@@ -123,6 +124,8 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
         } => {
             if web {
                 offer
+            } else if follows_link(action, overlay) {
+                Allow
             } else {
                 Cancel
             }
@@ -168,6 +171,21 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
             offer
         }
     }
+}
+
+/// Whether `action` loads a Markdown file inside the page's link grant at the page's own address (upstream's
+/// `followsLink`). The check is lexical: the source serving the file judges its real path again.
+fn follows_link(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> bool {
+    let Some(grant) = overlay.markdown_links.as_ref() else {
+        return false;
+    };
+    if action.target != HtmlNavigationTarget::MainFrame || !super::replica_url_of(&action.url, overlay.id) {
+        return false;
+    }
+    super::markdown_link_path(&action.url).is_some_and(|path| {
+        super::markdown_page::is_markdown(std::path::Path::new(&path))
+            && super::markdown_page::lexical_path(&path, std::path::Path::new(&grant.root)).is_some()
+    })
 }
 
 /// A file URL's path, percent-decoded as Foundation's `URL.path` gives it: the OS path it names, else (a URL
@@ -596,5 +614,75 @@ mod tests {
             let url = Url::parse(address).unwrap();
             assert_eq!(HtmlSource::origin_of(&url).as_deref(), Some(display), "{address}");
         }
+    }
+
+    fn notes() -> super::super::markdown_page::MarkdownLinkGrant {
+        super::super::markdown_page::MarkdownLinkGrant {
+            path: super::super::os_path("/tmp/notes/readme.md"),
+            root: super::super::os_path("/tmp/notes"),
+        }
+    }
+
+    fn link_page(links: Option<super::super::markdown_page::MarkdownLinkGrant>) -> HtmlOverlay {
+        HtmlOverlay::linked(
+            HtmlSource::Markdown {
+                path: super::super::os_path("/tmp/notes/readme.md"),
+            },
+            HtmlPageFlags {
+                navigation: true,
+                ..HtmlPageFlags::default()
+            },
+            links,
+        )
+    }
+
+    /// The address page `page` loads `path` from, its path spelled as the address does: a file on this OS.
+    fn link_address(page: &HtmlOverlay, path: &str) -> String {
+        let own = super::super::markdown_link_url(page.id, &super::super::os_path("/tmp/notes/readme.md")).unwrap();
+        let prefix = own.as_str().strip_suffix("/tmp/notes/readme.md").unwrap();
+        format!("{prefix}{path}")
+    }
+
+    /// Upstream's `HtmlOverlayTests.aLinkPageLoadsOnlyItsOwnMarkdownInsideTheGrant`.
+    #[test]
+    fn a_link_page_loads_only_its_own_markdown_inside_the_grant() {
+        let page = link_page(Some(notes()));
+        for (path, target, user, decision) in [
+            ("/tmp/notes/readme.md", MainFrame, false, Allow),
+            ("/tmp/notes/sub/guide.markdown", MainFrame, true, Allow),
+            ("/tmp/notes/a/../readme.md", MainFrame, true, Allow),
+            ("/tmp/notes/sub/guide.MD#usage", MainFrame, true, Allow),
+            ("/tmp/notes/../other/x.md", MainFrame, true, Cancel),
+            ("/tmp/notes/%2e%2e/other/x.md", MainFrame, true, Cancel),
+            ("/tmp/notes/x%2F..%2F..%2Fother%2Fx.md", MainFrame, true, Cancel),
+            ("/tmp/other/x.md", MainFrame, true, Cancel),
+            ("/tmp/notes/notes.txt", MainFrame, true, Cancel),
+            ("/tmp/notes", MainFrame, true, Cancel),
+            ("/tmp/notes/sub/guide.md", Subframe, true, Cancel),
+            ("/tmp/notes/sub/guide.md", NewWindow, true, Cancel),
+        ] {
+            let url = link_address(&page, path);
+            assert_eq!(
+                decide(&action(&url, target, user), &page),
+                decision,
+                "{url} {target:?} {user}"
+            );
+        }
+    }
+
+    /// Upstream's `HtmlOverlayTests.aLinkPageRefusesAnotherPagesAddressAndAPageWithoutAGrant`.
+    #[test]
+    fn a_link_page_refuses_another_pages_address_and_a_page_without_a_grant() {
+        let linked = link_page(Some(notes()));
+        let plain = link_page(None);
+        let other = link_page(Some(notes()));
+        let readme = "/tmp/notes/readme.md";
+        let decided = |url: &str, user: bool, page: &HtmlOverlay| decide(&action(url, MainFrame, user), page);
+        assert_eq!(decided(&link_address(&other, readme), true, &linked), Cancel);
+        assert_eq!(decided(&link_address(&plain, readme), true, &plain), Cancel);
+        assert_eq!(decided("https://example.com/x.md", true, &linked), OpenExternal);
+        assert_eq!(decided("https://example.com/x.md", false, &linked), Cancel);
+        let file = Url::from_file_path(super::super::os_path(readme)).unwrap();
+        assert_eq!(decided(file.as_str(), true, &linked), Cancel);
     }
 }

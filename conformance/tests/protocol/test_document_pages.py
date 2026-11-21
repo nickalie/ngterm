@@ -1,9 +1,12 @@
 """Local raster/Markdown/text overlays have source-specific permissions and reload their original document."""
 
 import base64
+import os
+import uuid
 
 import pytest
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session
+from agterm_conformance.vocabulary import foundation_resolved
 
 pytestmark = pytest.mark.since("0.40.0")
 
@@ -63,6 +66,7 @@ def test_markdown_page_reads_back_its_source(ctl):
 
 
 ONE_SOURCE = "session.overlay.open takes one of a command, --html, --url, --image, --markdown or --text"
+MARKDOWN_OPTIONS = "session.overlay.open: --markdown takes no --wait, --cwd, --js, --chromeless, --persistent or --browse"
 KINDS = {"image": ("image", "x.png"), "markdownFile": ("markdown", "x.md"), "textFile": ("text", "x.go")}
 TYPES = {
     "image": "a png, jpg, jpeg, gif or webp file",
@@ -82,9 +86,14 @@ def test_document_open_refusals(ctl, source):
         # a text file beside another local source is a second source too
         text = str(ctl.instance.root / "x.go")
         assert_error(ctl.request("session.overlay.open", "missing", **source_args, textFile=text), ONE_SOURCE)
-    for flag in ("wait", "navigation", "javascript", "chromeless", "persistent", "browse"):
-        assert_error(ctl.request("session.overlay.open", "missing", **source_args, **{flag: True}),
-                     f"session.overlay.open: --{kind} takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse")
+    # a markdown page takes --navigation: it follows links to markdown files in its folder
+    markdown = source == "markdownFile"
+    flags = ("wait", "javascript", "chromeless", "persistent", "browse") if markdown else (
+        "wait", "navigation", "javascript", "chromeless", "persistent", "browse")
+    refusal = (MARKDOWN_OPTIONS if markdown else
+               f"session.overlay.open: --{kind} takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse")
+    for flag in flags:
+        assert_error(ctl.request("session.overlay.open", "missing", **source_args, **{flag: True}), refusal)
     assert_error(ctl.request("session.overlay.open", "missing", **{source: "relative"}),
                  f"session.overlay.open: --{kind} must be an absolute path")
     # a text path is taken literally: a `:line` suffix is part of its name, and no source, config, text or log type
@@ -92,6 +101,62 @@ def test_document_open_refusals(ctl, source):
     for name in ineligible:
         assert_error(ctl.request("session.overlay.open", "missing", **{source: str(ctl.instance.root / name)}),
                      f"session.overlay.open: --{kind} must be {TYPES[source]}")
+
+
+def _readme(folder):
+    """A README in `folder` linking to a guide below it, and its path."""
+    (folder / "sub").mkdir(parents=True, exist_ok=True)
+    (folder / "sub" / "guide.md").write_text("# Guide\n", encoding="utf-8")
+    readme = folder / "README.md"
+    readme.write_text("# Readme\n\n[guide](sub/guide.md)\n", encoding="utf-8")
+    return readme
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.overlay.open", "session.overlay.navigate", "session.overlay.reload",
+                    "field:tree.session.htmlOverlays")
+def test_a_markdown_page_with_navigation_reads_back_its_link_page(ctl):
+    readme = _readme(ctl.instance.root / f"docs-{uuid.uuid4().hex}")
+    sid = _new(ctl)
+    try:
+        assert_ok(ctl.request("session.overlay.open", sid, markdownFile=str(readme), navigation=True))
+        page = _page(ctl, sid)
+        assert_subset(page, {"markdown": str(readme), "navigation": True, "canGoBack": False, "canGoForward": False})
+        assert foundation_resolved(page["page"]) == foundation_resolved(os.path.realpath(readme)), page
+        assert_error(ctl.request("session.overlay.navigate", sid, to="back"), "no page to go back to")
+        assert_error(ctl.request("session.overlay.navigate", sid, to="browser"),
+                     "a markdown page opens only in its overlay")
+        assert_ok(ctl.request("session.overlay.reload", sid, current=True))
+        assert_subset(_page(ctl, sid), {"markdown": str(readme), "navigation": True})
+    finally:
+        ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
+def test_a_markdown_file_in_the_home_folder_opens_without_navigation(ctl):
+    readme = ctl.instance.home / f"home-{uuid.uuid4().hex}.md"
+    readme.write_text("# Home\n\n[guide](sub/guide.md)\n", encoding="utf-8")
+    sid = _new(ctl)
+    try:
+        assert_ok(ctl.request("session.overlay.open", sid, markdownFile=str(readme), navigation=True))
+        page = _page(ctl, sid)
+        assert page["markdown"] == str(readme)
+        assert_absent(page, "navigation")
+    finally:
+        ctl.request("session.close", sid)
+        readme.unlink(missing_ok=True)
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.overlay.open")
+def test_a_markdown_page_takes_navigation_and_no_other_page_flag(ctl):
+    path = str(ctl.instance.root / "x.md")
+    for flag in ("wait", "javascript", "chromeless", "persistent", "browse"):
+        assert_error(ctl.request("session.overlay.open", "missing", markdownFile=path, navigation=True, **{flag: True}),
+                     MARKDOWN_OPTIONS)
+    assert_error(ctl.request("session.overlay.open", "missing", markdownFile=path, navigation=True),
+                 "no such session: missing")
 
 
 TEXT_OPTIONS = "session.overlay.open: --text takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse"

@@ -212,6 +212,7 @@ impl AppState {
             return;
         }
         let poster = self.poster.clone();
+        let home = self.core.library().home().to_owned();
         self.spawn_link_work(move || {
             let checked = match document {
                 Document::Image => ngterm_app::documents::probe_image(&path).map(Some),
@@ -222,6 +223,10 @@ impl AppState {
                     ngterm_app::documents::check_log(&path, ngterm_core::html::text_page::DEFAULT_TAIL).map(|()| None)
                 }
             };
+            // a clicked Markdown file follows its links in its folder, the grant read with the file
+            let links = (document == Document::Markdown && checked.is_ok())
+                .then(|| ngterm_core::html::markdown_page::link_grant(&path.to_string_lossy(), &home))
+                .flatten();
             post(&poster, move |state: &mut AppState| {
                 if state.quitting {
                     return;
@@ -230,6 +235,9 @@ impl AppState {
                 let shown = checked.is_ok_and(|probe| match (document, source) {
                     (Document::Log, HtmlSource::Text { path, .. }) => {
                         state.core.open_log_link(path, session, size_percent)
+                    }
+                    (Document::Markdown, HtmlSource::Markdown { path }) => {
+                        state.core.open_markdown_link(path, session, size_percent, links)
                     }
                     (_, source) => state.core.open_document_link(source, session, size_percent, probe),
                 });

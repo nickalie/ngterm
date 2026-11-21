@@ -704,6 +704,7 @@ impl Core {
             clicked: overlay.clicked,
             text_log: overlay.text_log,
             image_pixels: pixels,
+            markdown_links: None,
         };
         let size = page_size(&opening);
         let sent = OverlaySize {

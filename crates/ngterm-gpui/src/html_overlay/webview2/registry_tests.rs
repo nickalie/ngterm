@@ -432,6 +432,27 @@ fn each_source_gets_the_web_view_its_page_needs(cx: &mut TestAppContext) {
                 );
             },
         ),
+        (
+            HtmlOverlay::linked(
+                HtmlSource::Markdown {
+                    path: "/g/README.md".to_owned(),
+                },
+                ngterm_core::html::HtmlPageFlags {
+                    navigation: true,
+                    ..ngterm_core::html::HtmlPageFlags::default()
+                },
+                Some(ngterm_core::html::markdown_page::MarkdownLinkGrant {
+                    path: "/g/README.md".to_owned(),
+                    root: "/g".to_owned(),
+                }),
+            ),
+            |spec: &Spec| {
+                assert!(
+                    spec.replica.is_some() && spec.text.is_none() && spec.trusted_document_script.is_some(),
+                    "a link page reads its files through the replica protocol with the Markdown renderer"
+                );
+            },
+        ),
     ];
     for (index, (source, check)) in cases.iter().enumerate() {
         let model = Model::new(source);

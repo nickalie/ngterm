@@ -292,7 +292,7 @@ fn open_refusals_name_the_flag_combination() {
         ),
         (
             json!({"command": "true", "navigation": true}),
-            "session.overlay.open: --navigation requires --html or --url",
+            "session.overlay.open: --navigation requires --html, --url or --markdown",
         ),
         (
             json!({"command": "true", "javascript": true}),

@@ -29,7 +29,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 33] = [
+pub const CASES: [(&str, Case); 35] = [
     (
         "an_image_document_renders_and_current_reload_rereads_the_source",
         image_document,
@@ -37,6 +37,14 @@ pub const CASES: [(&str, Case); 33] = [
     (
         "a_markdown_document_renders_inert_markup_and_embedded_pictures",
         markdown_document,
+    ),
+    (
+        "a_markdown_link_page_follows_a_clicked_link_through_the_page_scheme",
+        markdown_link_followed,
+    ),
+    (
+        "a_markdown_link_page_keeps_its_file_when_a_clicked_link_cannot_be_read",
+        markdown_link_unreadable,
     ),
     (
         "a_text_page_starts_with_the_models_search_and_steps_through_its_renderer",
@@ -169,6 +177,7 @@ pub fn run(gpu: &str, filter: Option<&str>) -> i32 {
 
 const WAIT: Duration = Duration::from_secs(30);
 const RED: [u8; 4] = [0xc0, 0x30, 0x30, 0xff];
+const BLUE: [u8; 4] = [0x30, 0x30, 0xc0, 0xff];
 
 /// The window's content: the page shown, at the window's size.
 struct Stage {
@@ -1769,6 +1778,76 @@ fn markdown_document(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         &element,
         |_, width, pixels| close(pixel(pixels, width, 160, 130), RED),
     )
+}
+
+/// A Markdown page with its folder's link grant whose picture links to `target`, and the folder: the picture is red, and
+/// `sub/guide.md` there shows a blue one.
+fn link_page(fixture: &Fixture, target: &str) -> Result<HtmlOverlay, String> {
+    let root = fixture.scratch.path().join(format!("docs-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(root.join("sub")).map_err(|error| error.to_string())?;
+    let save = |color: [u8; 4], path: PathBuf| {
+        image::RgbaImage::from_pixel(300, 180, image::Rgba(color))
+            .save(path)
+            .map_err(|error| error.to_string())
+    };
+    save(RED, root.join("red.png"))?;
+    save(BLUE, root.join("sub/blue.png"))?;
+    std::fs::write(root.join("sub/guide.md"), "![blue](blue.png)").map_err(|error| error.to_string())?;
+    let path = root.join("README.md");
+    std::fs::write(&path, format!("[![red](red.png)]({target})")).map_err(|error| error.to_string())?;
+    let path = path.to_string_lossy().into_owned();
+    let grant = ngterm_core::html::markdown_page::link_grant(&path, "/nowhere");
+    let flags = HtmlPageFlags {
+        navigation: true,
+        ..HtmlPageFlags::default()
+    };
+    Ok(HtmlOverlay::linked(HtmlSource::Markdown { path }, flags, grant))
+}
+
+/// Upstream's `MarkdownPageRenderingTests` link click: the page loads its file through the page scheme, a click on a
+/// relative link renders the linked file with its own folder's picture, and a reload of what it shows keeps it.
+fn markdown_link_followed(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let mut overlay = link_page(fixture, "sub/guide.md")?;
+    let element = fixture.mount(&overlay, 320.0, 300.0)?;
+    fixture.until("the first file's picture", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), RED)
+    })?;
+    fixture.click(point(px(160.), px(130.)))?;
+    fixture.until("the linked file's picture", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), BLUE)
+    })?;
+    overlay.reload_revision += 1;
+    overlay.reload_target = ngterm_core::html::HtmlReloadTarget::Current;
+    fixture.cx.update(|cx| html_overlay::apply(&overlay, true, cx));
+    for _ in 0..50 {
+        let (width, pixels) = fixture.frame()?;
+        check(!close(pixel(&pixels, width, 160, 130), RED), || {
+            "a reload of the shown file went back to the first".to_owned()
+        })?;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    fixture.until("the linked file reloaded", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), BLUE)
+    })
+}
+
+/// Upstream's `MarkdownPageRenderingTests` missing target: a click on a link whose file is not there leaves the shown
+/// file on screen, not an error page.
+fn markdown_link_unreadable(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let overlay = link_page(fixture, "missing.md")?;
+    let element = fixture.mount(&overlay, 320.0, 300.0)?;
+    fixture.until("the first file's picture", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), RED)
+    })?;
+    fixture.click(point(px(160.), px(130.)))?;
+    for _ in 0..100 {
+        let (width, pixels) = fixture.frame()?;
+        check(close(pixel(&pixels, width, 160, 130), RED), || {
+            "the unreadable link replaced the shown file".to_owned()
+        })?;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
 }
 
 /// A text page's renderer (`text.js` in its world) starts with the model's query from its document and counts it; a

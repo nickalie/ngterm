@@ -143,22 +143,6 @@ def test_an_operation_id_is_refused_and_nothing_runs(cli, ctl, row):
     assert _holds(ctl) == before
 
 
-def test_a_markdown_page_with_navigation_reaches_the_app_which_refuses_it(cli, ctl, row):
-    sid = row["SESSION"]
-    doc = cli.instance.home / "registered-ahead.md"
-    doc.write_text("# doc\n\n[next](next.md)\n")
-    try:
-        result = cli("session", "overlay", "open", "--markdown", doc.name, "--navigation", "--target", sid)
-        _refused(
-            result,
-            "session.overlay.open: --markdown takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent "
-            "or --browse",
-        )
-        assert not find_session(ctl.tree(), sid).get("htmlOverlays")
-    finally:
-        doc.unlink(missing_ok=True)
-
-
 def test_server_install_checks_its_destination_then_refuses(cli):
     """Local-only: nothing is connected to, here or over ssh."""
     _failed(

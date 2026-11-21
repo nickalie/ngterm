@@ -357,7 +357,12 @@ fn restored_page(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str) 
         _ => None,
     };
     let source = restored_source(source, flags, home)?;
-    Some(HtmlOverlay::new(source, flags).with_text_log(log))
+    // a Markdown page's links are judged again, as a new open judges them
+    let links = match &source {
+        HtmlSource::Markdown { path } if flags.navigation => html::markdown_page::link_grant(path, home),
+        _ => None,
+    };
+    Some(HtmlOverlay::linked(source, flags, links).with_text_log(log))
 }
 
 /// The source a persisted page shows, when it still checks out with `flags` as `session.overlay.open` would check it
@@ -380,8 +385,15 @@ fn restored_source(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str
         PageSourceSnapshot::Image { path } => {
             (document && shown_document(path, &IMAGE_EXTENSIONS)).then(|| HtmlSource::Image { path: path.clone() })
         }
-        PageSourceSnapshot::Markdown { path } => (document && shown_document(path, &MARKDOWN_EXTENSIONS))
-            .then(|| HtmlSource::Markdown { path: path.clone() }),
+        PageSourceSnapshot::Markdown { path } => {
+            let linked = flags
+                == HtmlPageFlags {
+                    navigation: true,
+                    ..HtmlPageFlags::default()
+                };
+            ((document || linked) && shown_document(path, &MARKDOWN_EXTENSIONS))
+                .then(|| HtmlSource::Markdown { path: path.clone() })
+        }
         PageSourceSnapshot::Text { path, line, .. } => (document
             && html::is_absolute(path)
             && html::text_page::is_eligible(path)

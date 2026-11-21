@@ -469,6 +469,22 @@ fn a_document_page_over_a_following_pane_meets_the_presenter_refusal() {
     assert!(origin.node().get("htmlOverlays").is_none());
 }
 
+/// A presenter is handed a Markdown page without its links, so without navigation: nothing serves them there.
+#[test]
+fn a_markdown_page_with_navigation_goes_to_the_presenter_without_it() {
+    let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
+    origin.fixture().core.set_html_host(Box::new(MarkdownHost));
+    let dir = tempfile::tempdir().unwrap();
+    let readme = dir.path().join("README.md").to_string_lossy().into_owned();
+    let opened = origin.overlay(SessionCmd::OverlayOpen, |a| {
+        a.markdown_file = Some(readme);
+        a.navigation = Some(true);
+    });
+    assert!(opened.ok, "{opened:?}");
+    let request = origin.presenter.last("page.request").unwrap()["page"].clone();
+    assert_eq!(request["navigation"], json!(false), "{request}");
+}
+
 /// Upstream's `testARemoteOpenSkipsTheLocalPageFollowAndStore`: no web view, saved store or selection is this
 /// machine's concern, so a persistent page goes even where no web view could run.
 #[test]

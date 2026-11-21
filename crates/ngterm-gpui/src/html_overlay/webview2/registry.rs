@@ -471,14 +471,14 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
     let id = page.id();
     let weak = Rc::downgrade(page);
     let reports = jobs.clone();
-    // a replica built here from its fetched bytes loads nothing through the replica protocol
+    // a replica built here from its fetched bytes loads nothing through the replica protocol, a link page its files
     let html_replica = matches!(
         overlay.source,
         HtmlSource::Replica {
             content: ReplicaContent::Html,
             ..
         }
-    );
+    ) || overlay.markdown_links.is_some();
     let replica = html_replica.then(|| {
         let jobs = jobs.clone();
         Arc::new(move |uri: String, reply: wry::RequestAsyncResponder| {
@@ -800,6 +800,9 @@ pub fn relay(page: Uuid, body: String, reply: u64) {
 /// address names as its host, from the file of that path on the machine that opened it; a read naming another page,
 /// or from a page that is no replica, fails without reaching that machine.
 fn replica_read(page_id: Uuid, uri: &str, reply: ReadReply) {
+    if let Some(grant) = page(page_id).and_then(|page| page.overlay().markdown_links) {
+        return serve_linked(policy::markdown_link_read(uri, page_id), grant, reply);
+    }
     let path = page(page_id).and_then(|page| {
         matches!(
             page.overlay().source,
@@ -826,6 +829,19 @@ fn replica_read(page_id: Uuid, uri: &str, reply: ReadReply) {
             .core
             .replica_fetch(page_id, &path, Box::new(move |result| answer_read(token, result)));
         state.settle();
+    });
+}
+
+/// Serves a link page's read of `path` (upstream's `MarkdownPageSource.linkSource`): the document built on a worker, the
+/// grant judging the file again there; a read naming another page fails unread.
+fn serve_linked(path: Option<String>, grant: ngterm_core::html::markdown_page::MarkdownLinkGrant, reply: ReadReply) {
+    let Some(path) = path else {
+        return respond(reply, Err(policy::NOT_THIS_PAGE.to_owned()));
+    };
+    std::thread::spawn(move || {
+        let answer = super::super::documents::read_linked(&path, &grant)
+            .map(|html| ("text/html; charset=utf-8".to_owned(), html.into_bytes()));
+        respond(reply, answer);
     });
 }
 

@@ -2203,6 +2203,34 @@ fn document_probes_open_supported_documents_and_reveal_failed_probes() {
     }
 }
 
+/// Upstream's `testAClickedMarkdownFileOpensWithNavigationAndAGrant`: a clicked Markdown file opens with navigation and
+/// the grant of its folder, read with the file off the main thread.
+#[test]
+fn a_clicked_markdown_file_opens_with_navigation_and_its_folders_grant() {
+    let (mut state, _, session) = state_with_terminal();
+    let (main_loop, _held) = record(&mut state);
+    state.core.set_html_host(Box::new(HtmlEngine));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("README.md");
+    std::fs::write(&path, "[guide](sub/guide.md)").unwrap();
+    state.open_document_link(path.clone(), session, None, links::Document::Markdown);
+    let shown = |state: &AppState| {
+        state
+            .core
+            .library()
+            .held_session(session)
+            .unwrap()
+            .overlay
+            .page()
+            .cloned()
+    };
+    run_until(&mut state, &main_loop, |state| shown(state).is_some());
+    let page = shown(&state).unwrap();
+    assert!(page.clicked && page.flags.navigation);
+    let grant = page.markdown_links.expect("the folder's grant");
+    assert_eq!(std::path::PathBuf::from(grant.root), dir.path().canonicalize().unwrap());
+}
+
 #[test]
 fn web_links_open_overlays_and_quit_discards_an_inflight_document_probe() {
     let (mut state, _, session) = state_with_terminal();

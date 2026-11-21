@@ -26,6 +26,7 @@ use crate::app_actions::{ActionEffect, FrontendAction};
 use crate::error::ControlError;
 use crate::html::bridge::{self, HtmlBridgePage};
 use crate::html::image_page::{ImageData, ImagePixels};
+use crate::html::markdown_page::{self, MarkdownLinkGrant};
 use crate::html::text_page::{self, TextLog};
 use crate::html::{
     HtmlHost, HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlPageInfo, HtmlPageOutcomes,
@@ -108,6 +109,9 @@ pub(crate) struct PageOpening {
     /// An image page's probed size, which it travels with when the presenting machine shows it (upstream's
     /// `imagePixels`): set from the probe, never by the dispatcher; an image page without it is never handed over.
     pub image_pixels: Option<ImagePixels>,
+    /// A clicked Markdown page's link grant, read with its file off the main thread; the control path computes its own
+    /// once the file checks out, and the dispatcher never sets it (upstream's `markdownLinks` option).
+    pub markdown_links: Option<MarkdownLinkGrant>,
 }
 
 impl PageOpening {
@@ -142,6 +146,7 @@ impl PageOpening {
             clicked: false,
             text_log,
             image_pixels: None,
+            markdown_links: None,
         }
     }
 }
@@ -176,11 +181,8 @@ fn open_checked(
         image = read_for_hand_over(core, &mut opening, image, checked)?;
         checked = true;
     }
-    let page = HtmlOverlay {
-        clicked: opening.clicked,
-        ..HtmlOverlay::new(opening.source.clone(), opening.flags)
-    }
-    .with_text_log(opening.text_log);
+    // the presenting machine is handed a Markdown page without its links, so without navigation
+    let page = opened_page(&opening, Uuid::new_v4(), None);
     let page_id = page.id;
     let refusal = match crate::remote::open_remote_page(core, resolved.window, resolved.session, &page, &opening) {
         RemotePageOpen::Local => None,
@@ -222,6 +224,8 @@ fn open_checked(
     if core.page_belongs_remote(id, opening.pane) {
         return Err(ControlError::rejected(PRESENTER));
     }
+    let links = markdown_links(core, &mut opening, checked);
+    let page = opened_page(&opening, page_id, links);
     let (store, _) = session_store(core, target, window)?;
     store
         .open_html_overlay_sized(
@@ -244,6 +248,55 @@ fn open_checked(
         page_id: Some(uuid_string(page_id)),
         ..with_id(id)
     })
+}
+
+/// How a page a terminal click names opens over its session: marked clicked, and for a Markdown file with navigation,
+/// which it keeps only with its links.
+fn clicked_opening(source: HtmlSource, size_percent: Option<i64>) -> PageOpening {
+    PageOpening {
+        flags: HtmlPageFlags {
+            navigation: matches!(source, HtmlSource::Markdown { .. }),
+            ..HtmlPageFlags::default()
+        },
+        source,
+        pane: None,
+        size_percent,
+        points: OverlayPointSize::default(),
+        background_color: None,
+        follow: false,
+        clicked: true,
+        text_log: None,
+        image_pixels: None,
+        markdown_links: None,
+    }
+}
+
+/// The page `opening` opens under `id`, following `links` when it is a Markdown page with navigation.
+fn opened_page(opening: &PageOpening, id: Uuid, links: Option<MarkdownLinkGrant>) -> HtmlOverlay {
+    HtmlOverlay {
+        id,
+        clicked: opening.clicked,
+        ..HtmlOverlay::linked(opening.source.clone(), opening.flags, links)
+    }
+    .with_text_log(opening.text_log)
+}
+
+/// A local Markdown page's link grant once its file checked out (upstream's `linkGrant` beside
+/// `markdownFileRefusal`): a click's own, read off the main thread with its file, else one judged here; none without
+/// navigation or for another kind of page.
+fn markdown_links(core: &Core, opening: &mut PageOpening, checked: bool) -> Option<MarkdownLinkGrant> {
+    let clicked = opening.markdown_links.take();
+    let HtmlSource::Markdown { path } = &opening.source else {
+        return None;
+    };
+    if !opening.flags.navigation {
+        return None;
+    }
+    if checked {
+        clicked
+    } else {
+        markdown_page::link_grant(path, core.library().home())
+    }
 }
 
 /// What reads a page's file before it takes its slot: the frontend's web views, or the probe of an origin that has none
@@ -873,6 +926,23 @@ impl Core {
         self.open_clicked_document(source, session, size_percent, image, None)
     }
 
+    /// Opens a clicked Markdown file with navigation (upstream's `openMarkdownLink`), its links followed within `links`,
+    /// the grant read with the file off the main thread; with none its links stay text and it has no navigation. As
+    /// [`Self::open_document_link`] otherwise.
+    pub fn open_markdown_link(
+        &mut self,
+        path: String,
+        session: Uuid,
+        size_percent: Option<i64>,
+        links: Option<MarkdownLinkGrant>,
+    ) -> bool {
+        let opening = PageOpening {
+            markdown_links: links,
+            ..clicked_opening(HtmlSource::Markdown { path }, size_percent)
+        };
+        self.open_clicked(opening, session, None)
+    }
+
     /// Opens a clicked log as a log page following its file's end (upstream's `openTextLink` with `opensAsLog`), after
     /// the off-main read of its last [`text_page::DEFAULT_TAIL`] lines; as [`Self::open_document_link`] otherwise.
     pub fn open_log_link(&mut self, path: String, session: Uuid, size_percent: Option<i64>) -> bool {
@@ -889,25 +959,23 @@ impl Core {
         source: HtmlSource,
         session: Uuid,
         size_percent: Option<i64>,
-        mut image: Option<ImageData>,
+        image: Option<ImageData>,
         text_log: Option<text_page::TextLog>,
     ) -> bool {
+        let opening = PageOpening {
+            text_log,
+            ..clicked_opening(source, size_percent)
+        };
+        self.open_clicked(opening, session, image)
+    }
+
+    /// Opens a page a terminal click names once nothing can refuse it, in place of a hidden page an earlier click
+    /// opened.
+    fn open_clicked(&mut self, opening: PageOpening, session: Uuid, mut image: Option<ImageData>) -> bool {
         if !self.can_show_link_overlay(session) {
             return false;
         }
-        self.release_for_click(session, false, &source, &mut image);
-        let opening = PageOpening {
-            source,
-            flags: HtmlPageFlags::default(),
-            pane: None,
-            size_percent,
-            points: OverlayPointSize::default(),
-            background_color: None,
-            follow: false,
-            clicked: true,
-            text_log,
-            image_pixels: None,
-        };
+        self.release_for_click(session, false, &opening.source, &mut image);
         open_checked(self, Some(&uuid_string(session)), None, opening, image, true).is_ok()
     }
 
@@ -979,6 +1047,7 @@ impl Core {
             clicked: true,
             text_log: None,
             image_pixels: None,
+            markdown_links: None,
         };
         open(self, Some(&uuid_string(session)), None, opening).is_ok()
     }

@@ -34,6 +34,26 @@ def test_cli_document_sources_resolve_relative_paths(cli, ctl, source, filename,
         path.unlink(missing_ok=True)
 
 
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("cli:session overlay open", "session.overlay.open")
+def test_cli_markdown_page_with_navigation_opens_a_link_page(cli, ctl):
+    sid = assert_ok(ctl.request("session.new"))["id"]
+    ctl.wait_mounted(sid, "left")
+    folder = ctl.instance.home / f"docs-{uuid.uuid4().hex}"
+    (folder / "sub").mkdir(parents=True)
+    (folder / "sub" / "guide.md").write_text("# Guide\n")
+    readme = folder / "README.md"
+    readme.write_text("# Readme\n\n[guide](sub/guide.md)\n")
+    try:
+        relative = os.path.join(folder.name, "README.md")
+        result = cli("session", "overlay", "open", "--markdown", relative, "--navigation", "--target", sid)
+        assert (result.returncode, result.stderr) == (0, ""), (result.stdout, result.stderr)
+        overlay = find_session(ctl.tree(), sid)["htmlOverlays"][0]
+        assert (overlay["markdown"], overlay.get("navigation")) == (os.fspath(readme), True), overlay
+    finally:
+        assert_ok(ctl.request("session.close", sid))
+
+
 ONE_SOURCE = "provide exactly one of COMMAND, --html, --url, --image, --markdown or --text"
 TEXT_OPTIONS = (
     "--text takes no --companion, --page, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd"

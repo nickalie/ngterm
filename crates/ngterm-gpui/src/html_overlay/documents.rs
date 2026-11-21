@@ -131,7 +131,7 @@ pub(super) fn read(source: &HtmlSource) -> Result<String, String> {
         }
         HtmlSource::Markdown { path } => {
             let document = ngterm_app::documents::probe_markdown(std::path::Path::new(path))?;
-            Ok(markdown_page::html(&document.markdown, &document.images, STYLE))
+            Ok(markdown_page::html(&document.markdown, &document.images, STYLE, false))
         }
         HtmlSource::Document { path } => {
             ngterm_app::documents::load_document(std::path::Path::new(path), document_page_builder())
@@ -139,6 +139,19 @@ pub(super) fn read(source: &HtmlSource) -> Result<String, String> {
         // a text page's documents are its bridge's (`text_page`), which carry the model's search
         _ => unreachable!("only image, markdown and document sources are read through bounded probes"),
     }
+}
+
+/// Why a link page's source refuses a read: the file is not Markdown inside the page's folder once its symlinks are
+/// resolved.
+pub(super) const NOT_A_LINKED_FILE: &str = "not a markdown file in the page's folder";
+
+/// The document a link page shows for `requested`, a file its page scheme was asked for (upstream's
+/// `MarkdownPageSource.linkSource`): judged again by the grant's rules when it is read, the page's own file included,
+/// read at the normalized request, and built with its links kept. Blocking: a worker's.
+pub(super) fn read_linked(requested: &str, grant: &markdown_page::MarkdownLinkGrant) -> Result<String, String> {
+    let file = markdown_page::linked_document(requested, grant).ok_or_else(|| NOT_A_LINKED_FILE.to_owned())?;
+    let document = ngterm_app::documents::probe_markdown(std::path::Path::new(&file))?;
+    Ok(markdown_page::html(&document.markdown, &document.images, STYLE, true))
 }
 
 /// A blocking read of a file of the machine that opened a page: its path there, the cap and the failures' wording.
@@ -165,7 +178,7 @@ pub(super) fn build_replica(path: &str, content: ReplicaContent, read: &mut Orig
             // a picture that cannot be read is left to its alt text, as a local page's is
             let fetch = |picture: &str, room: usize| read(picture, room, ContentFailures::default()).ok();
             let document = ngterm_app::documents::markdown_from_bytes(bytes, path, fetch)?;
-            Ok(markdown_page::html(&document.markdown, &document.images, STYLE))
+            Ok(markdown_page::html(&document.markdown, &document.images, STYLE, false))
         }
         ReplicaContent::Text { line } => {
             let text = ngterm_app::documents::text_from_bytes(bytes, path)?;
@@ -359,5 +372,40 @@ mod tests {
             read(&missing).unwrap_err(),
             format!("unreadable html file: {}", dir.path().join("missing.html").display())
         );
+    }
+
+    /// Upstream's `MarkdownPageRenderingTests` link-source cases at the reader: a linked file inside the grant is built
+    /// with its links kept and its own pictures, the page's own file is judged as any other, and a file outside the
+    /// grant or not Markdown is refused without being read.
+    #[test]
+    fn a_link_pages_source_reads_only_markdown_inside_its_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("README.md"), "[guide](sub/guide.md)").unwrap();
+        std::fs::write(root.join("sub/guide.md"), "# Guide\n\n![shot](shot.png)").unwrap();
+        std::fs::write(root.join("sub/shot.png"), png(2)).unwrap();
+        std::fs::write(root.join("notes.txt"), "x").unwrap();
+        let readme = root.join("README.md").to_string_lossy().into_owned();
+        let grant = markdown_page::link_grant(&readme, "/nowhere").unwrap();
+        let at = |name: &str| root.join(name).to_string_lossy().into_owned();
+
+        let first = read_linked(&grant.path, &grant).unwrap();
+        assert!(first.contains("data-links=\"local\"") && first.contains("[guide](sub/guide.md)"));
+        let guide = read_linked(&at("sub/guide.md"), &grant).unwrap();
+        assert!(
+            guide.contains("# Guide") && guide.contains("data:image/png;base64,"),
+            "{guide}"
+        );
+        for refused in [at("notes.txt"), at("../outside.md"), "/etc/x.md".to_owned()] {
+            assert_eq!(
+                read_linked(&refused, &grant),
+                Err(NOT_A_LINKED_FILE.to_owned()),
+                "{refused}"
+            );
+        }
+        assert!(read_linked(&at("sub/missing.md"), &grant).is_err());
+        let plain = HtmlSource::Markdown { path: readme };
+        assert!(!read(&plain).unwrap().contains("data-links"));
     }
 }

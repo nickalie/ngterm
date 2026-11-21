@@ -112,7 +112,11 @@ fn documents_reject_sources_flags_and_paths_before_resolving_a_target() {
         ),
         (
             json!({"markdownFile": markdown, "javascript": true}),
-            "session.overlay.open: --markdown takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse",
+            "session.overlay.open: --markdown takes no --wait, --cwd, --js, --chromeless, --persistent or --browse",
+        ),
+        (
+            json!({"markdownFile": markdown, "navigation": true, "cwd": path(".")}),
+            "session.overlay.open: --markdown takes no --wait, --cwd, --js, --chromeless, --persistent or --browse",
         ),
         (
             json!({"image": "x.png"}),
@@ -156,12 +160,13 @@ fn document_options_refuse_each_true_flag_but_allow_explicit_false() {
                 object.as_object_mut().unwrap().insert(flag.to_owned(), json!(value));
                 let input: Args = serde_json::from_value(object).unwrap();
                 let result = crate::commands::overlay::overlay_content("", &input, None);
-                assert_eq!(result.is_err(), value, "{source}/{flag}={value}");
-                let kind = if source == "image" { "image" } else { "markdown" };
-                let error = if value {
-                    format!(
-                        "session.overlay.open: --{kind} takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse"
-                    )
+                // a Markdown page takes navigation, which its links follow with (upstream's `markdownContent`)
+                let refused = value && (source == "image" || flag != "navigation");
+                assert_eq!(result.is_err(), refused, "{source}/{flag}={value}");
+                let error = if refused && source == "image" {
+                    "session.overlay.open: --image takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse".to_owned()
+                } else if refused {
+                    "session.overlay.open: --markdown takes no --wait, --cwd, --js, --chromeless, --persistent or --browse".to_owned()
                 } else {
                     "a page companion needs --html or --url".to_owned()
                 };

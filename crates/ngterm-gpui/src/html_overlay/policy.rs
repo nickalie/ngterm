@@ -16,7 +16,8 @@ use ngterm_core::html::navigation::file_path;
 #[cfg(target_os = "linux")]
 use ngterm_core::html::{HtmlNavigationAction, HtmlNavigationTarget, REPLICA_SCHEME};
 use ngterm_core::html::{
-    HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource, replica_path, replica_url_of, strictly_inside, volume,
+    HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource, markdown_link_path, replica_path, replica_url_of,
+    strictly_inside, volume,
 };
 use url::Url;
 
@@ -62,6 +63,24 @@ pub fn navigation_action(url: Url, target: DecisionTarget, link_clicked: bool) -
         target: frame,
         user_activated,
     }
+}
+
+#[cfg(target_os = "linux")]
+/// [`navigation_action`] for a page of `overlay`'s: a Markdown page holds no frame (its document loads nothing but
+/// `data:` pictures), so each of its frame navigations is its main frame's, a link page's loads and history steps
+/// included.
+#[must_use]
+pub fn page_navigation_action(
+    url: Url,
+    target: DecisionTarget,
+    link_clicked: bool,
+    overlay: &HtmlOverlay,
+) -> HtmlNavigationAction {
+    let mut action = navigation_action(url, target, link_clicked);
+    if target == DecisionTarget::Frame && overlay.source.kind() == ngterm_core::html::HtmlPageKind::Markdown {
+        action.target = HtmlNavigationTarget::MainFrame;
+    }
+    action
 }
 
 #[cfg(target_os = "linux")]
@@ -111,6 +130,30 @@ pub fn is_replica_uri(uri: &str) -> bool {
 pub fn replica_read(uri: &str, page: uuid::Uuid) -> Option<String> {
     let url = Url::parse(uri).ok()?;
     replica_url_of(&url, page).then(|| replica_path(&url)).flatten()
+}
+
+/// Whether a link page's navigation to `url` reaches a file its source reads (`documents::read_linked`), checked before
+/// the navigation goes ahead on an engine that shows a custom protocol's failed read as a document (`WKWebView`,
+/// `WebView2`); any other navigation, and another page's, passes. The source judges the file again when it reads it.
+#[cfg(any(target_os = "macos", windows))]
+#[must_use]
+pub fn link_readable(overlay: &HtmlOverlay, url: &Url) -> bool {
+    let Some(grant) = overlay.markdown_links.as_ref() else {
+        return true;
+    };
+    if !replica_url_of(url, overlay.id) {
+        return true;
+    }
+    markdown_link_path(url)
+        .and_then(|path| ngterm_core::html::markdown_page::linked_document(&path, grant))
+        .is_some_and(|file| ngterm_app::documents::check_markdown(Path::new(&file)).is_ok())
+}
+
+/// The file on this machine a link page's read of `uri` asks for; `None` for an address that names another page.
+#[must_use]
+pub fn markdown_link_read(uri: &str, page: uuid::Uuid) -> Option<String> {
+    let url = Url::parse(uri).ok()?;
+    replica_url_of(&url, page).then(|| markdown_link_path(&url)).flatten()
 }
 
 #[cfg(target_os = "linux")]
@@ -307,6 +350,19 @@ impl LoadTracker {
         self.fail(format!("navigation blocked: {url}"))
     }
 
+    /// A link page's load failed (upstream's `reportFailure` for a page with a link grant): a followed link that cannot
+    /// be read leaves the shown document in place, while a first load with nothing shown fails.
+    pub fn failed_over_shown(&mut self, message: String) -> LoadOutcome {
+        if !self.pending {
+            return LoadOutcome::None;
+        }
+        if self.committed {
+            self.settle()
+        } else {
+            self.fail(message)
+        }
+    }
+
     /// A failure outside `WebKit`'s events (a store or a file that cannot be read).
     pub fn fail(&mut self, message: String) -> LoadOutcome {
         self.end();
@@ -368,6 +424,14 @@ pub fn page_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -
     {
         return file_url(path);
     }
+    // a link page shows the file it last committed, its own before that
+    if overlay.markdown_links.is_some()
+        && let HtmlSource::Markdown { path } = &overlay.source
+    {
+        return shown
+            .and_then(markdown_link_path)
+            .map_or_else(|| file_url(path), |shown| file_url(&shown));
+    }
     // a replica's scheme address names this machine's page id; what it shows is that path on the other machine
     if let Some(path) = web.and_then(replica_path) {
         return file_url(&path);
@@ -424,6 +488,19 @@ pub fn browser_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>
 pub fn shown_after_change(shown: Option<&Url>, web: Option<&Url>) -> Option<Url> {
     match (shown, web) {
         (Some(shown), Some(web)) if HtmlSource::origin_of(web) == HtmlSource::origin_of(shown) => Some(web.clone()),
+        (shown, _) => shown.cloned(),
+    }
+}
+
+/// [`shown_after_change`] for a page of `overlay`'s: a link page's pending load names a file not read yet, which may
+/// never load, so only a change within the shown file (a fragment) is taken before the commit (upstream's `urlChanged`).
+#[must_use]
+pub fn shown_after_page_change(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -> Option<Url> {
+    if overlay.markdown_links.is_none() {
+        return shown_after_change(shown, web);
+    }
+    match (shown, web) {
+        (Some(shown), Some(web)) if shown.path() == web.path() => Some(web.clone()),
         (shown, _) => shown.cloned(),
     }
 }
@@ -1242,5 +1319,114 @@ mod tests {
         let markdown = HtmlOverlay::new(HtmlSource::Markdown { path }, HtmlPageFlags::default());
         assert!(browser_url(&markdown, None, None).is_none());
         assert!(!strip_items(&markdown, false).unwrap().contains(&StripItem::Files));
+    }
+
+    /// A Markdown page in a real folder with its link grant.
+    fn link_page() -> (tempfile::TempDir, HtmlOverlay) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("README.md"), "x").unwrap();
+        std::fs::write(dir.path().join("sub/guide.md"), "x").unwrap();
+        let readme = dir.path().join("README.md").to_string_lossy().into_owned();
+        let grant = ngterm_core::html::markdown_page::link_grant(&readme, "/nowhere");
+        let flags = HtmlPageFlags {
+            navigation: true,
+            ..HtmlPageFlags::default()
+        };
+        (
+            dir,
+            HtmlOverlay::linked(HtmlSource::Markdown { path: readme }, flags, grant),
+        )
+    }
+
+    fn in_root(page: &HtmlOverlay, name: &str) -> Url {
+        let root = Path::new(&page.markdown_links.as_ref().unwrap().root).join(name);
+        ngterm_core::html::markdown_link_url(page.id, &root.to_string_lossy()).unwrap()
+    }
+
+    /// A link page shows its own file until a followed one commits (upstream's `pageURL` for a page with a grant), and
+    /// takes a pending address only within the shown file (upstream's `urlChanged`).
+    #[test]
+    fn a_link_page_shows_its_committed_file() {
+        let (_dir, page) = link_page();
+        let readme = in_root(&page, "README.md");
+        let guide = in_root(&page, "sub/guide.md");
+        let file = |url: &Url| page_url(&page, Some(url), Some(&guide)).and_then(|url| url.to_file_path().ok());
+        let root = Path::new(&page.markdown_links.as_ref().unwrap().root).to_path_buf();
+        assert_eq!(file(&readme), Some(root.join("README.md")));
+        assert_eq!(file(&guide), Some(root.join("sub").join("guide.md")));
+        assert_eq!(
+            page_url(&page, None, Some(&guide)).and_then(|url| url.to_file_path().ok()),
+            Some(PathBuf::from(page.source.text())),
+            "before a commit, the page's own file"
+        );
+
+        let mut fragment = readme.clone();
+        fragment.set_fragment(Some("usage"));
+        assert_eq!(
+            shown_after_page_change(&page, Some(&readme), Some(&fragment)),
+            Some(fragment)
+        );
+        assert_eq!(
+            shown_after_page_change(&page, Some(&readme), Some(&guide)),
+            Some(readme.clone())
+        );
+        let plain = HtmlOverlay::new(page.source.clone(), HtmlPageFlags::default());
+        assert_eq!(
+            shown_after_page_change(&plain, Some(&readme), Some(&guide)),
+            Some(guide.clone())
+        );
+        let guide_file = root.join("sub").join("guide.md").to_string_lossy().into_owned();
+        assert_eq!(markdown_link_read(guide.as_str(), page.id), Some(guide_file));
+        assert_eq!(markdown_link_read(guide.as_str(), uuid::Uuid::new_v4()), None);
+    }
+
+    /// Upstream's `reportFailure` for a link page: a failed link over a shown file settles loaded, a failed first load
+    /// fails, and nothing pending ends nothing.
+    #[test]
+    fn a_link_pages_failed_load_keeps_a_shown_file() {
+        let mut load = LoadTracker::default();
+        assert_eq!(load.failed_over_shown("gone".to_owned()), LoadOutcome::None);
+        load.begin();
+        assert_eq!(
+            load.failed_over_shown("gone".to_owned()),
+            LoadOutcome::Failed("gone".to_owned())
+        );
+        load.begin();
+        load.handle(&LoadEvent::Committed);
+        load.handle(&LoadEvent::Finished);
+        load.handle(&LoadEvent::Started);
+        assert_eq!(load.failed_over_shown("gone".to_owned()), LoadOutcome::Loaded);
+    }
+
+    /// A Markdown page holds no frame, so `WebKitGTK`'s unnamed frame navigations are its main frame's: a link page's
+    /// loads and history steps reach the policy's link rule, which admits main-frame loads only.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_markdown_pages_frame_navigations_are_its_main_frames() {
+        let (_dir, page) = link_page();
+        let guide = in_root(&page, "sub/guide.md");
+        let action = page_navigation_action(guide.clone(), DecisionTarget::Frame, false, &page);
+        assert_eq!(action.target, HtmlNavigationTarget::MainFrame);
+        assert_eq!(decide(&action, &page), HtmlNavigationDecision::Allow);
+        let response = page_navigation_action(guide.clone(), DecisionTarget::SubframeResponse, false, &page);
+        assert_eq!(decide(&response, &page), HtmlNavigationDecision::Cancel);
+        let file = file_page(Some("/site"), HtmlPageFlags::default());
+        let action = page_navigation_action(url("file:///site/a.html"), DecisionTarget::Frame, false, &file);
+        assert_eq!(action.target, HtmlNavigationTarget::Subframe);
+    }
+
+    /// On an engine that shows a custom protocol's failed read as a document, a link the page's source would refuse
+    /// goes nowhere: a missing file, one outside the folder or not Markdown; other pages' and other addresses pass.
+    #[test]
+    #[cfg(any(target_os = "macos", windows))]
+    fn a_link_pages_unreadable_link_is_refused_before_it_loads() {
+        let (_dir, page) = link_page();
+        assert!(link_readable(&page, &in_root(&page, "sub/guide.md")));
+        assert!(!link_readable(&page, &in_root(&page, "sub/missing.md")));
+        assert!(!link_readable(&page, &in_root(&page, "../outside.md")));
+        assert!(link_readable(&page, &url("https://example.com/x.md")));
+        let plain = HtmlOverlay::new(page.source.clone(), HtmlPageFlags::default());
+        assert!(link_readable(&plain, &in_root(&page, "sub/missing.md")));
     }
 }

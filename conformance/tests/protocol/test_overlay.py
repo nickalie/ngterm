@@ -947,7 +947,7 @@ LOOPBACK_HOST = "session.overlay.open: --chromeless with --url requires a loopba
         ),
         pytest.param(
             {"command": "true", "navigation": True},
-            "session.overlay.open: --navigation requires --html or --url",
+            "session.overlay.open: --navigation requires --html, --url or --markdown",
             id="navigation-program",
         ),
         pytest.param(

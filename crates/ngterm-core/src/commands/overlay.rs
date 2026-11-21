@@ -66,7 +66,7 @@ const WAIT_WITH_HTML: &str = "session.overlay.open: --wait cannot be combined wi
 const WAIT_WITH_URL: &str = "session.overlay.open: --wait cannot be combined with --url";
 const CWD_WITH_URL: &str = "session.overlay.open: --cwd cannot be combined with --url";
 const INVALID_URL: &str = "session.overlay.open: --url must be an absolute http or https URL";
-const NAVIGATION_WITHOUT_PAGE: &str = "session.overlay.open: --navigation requires --html or --url";
+const NAVIGATION_WITHOUT_PAGE: &str = "session.overlay.open: --navigation requires --html, --url or --markdown";
 const JAVASCRIPT_WITHOUT_PAGE: &str = "session.overlay.open: --js requires --html or --url";
 const CHROMELESS_REQUIRES_FILE: &str = "session.overlay.open: --chromeless requires --html or a loopback --url";
 /// The strip is what names a URL page's origin, so only this machine's may drop it.
@@ -161,10 +161,16 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
 /// A local document's path and flags, before resolving any target (upstream imageContent/markdownContent).
 fn document_content(path: &str, args: &Args, image: bool) -> Result<OverlayContent, ControlError> {
     let kind = if image { "image" } else { "markdown" };
-    if document_flags(args) {
-        return Err(ControlError::rejected(format!(
-            "session.overlay.open: --{kind} takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse"
-        )));
+    if image && document_flags(args) {
+        return Err(ControlError::rejected(
+            "session.overlay.open: --image takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse",
+        ));
+    }
+    // a Markdown page follows its links with navigation
+    if !image && !markdown_flags(args) {
+        return Err(ControlError::rejected(
+            "session.overlay.open: --markdown takes no --wait, --cwd, --js, --chromeless, --persistent or --browse",
+        ));
     }
     if !html::is_absolute(path) {
         return Err(ControlError::rejected(format!(
@@ -260,6 +266,19 @@ fn document_flags(args: &Args) -> bool {
         || [
             args.wait,
             args.navigation,
+            args.javascript,
+            args.chromeless,
+            args.persistent,
+            args.browse,
+        ]
+        .contains(&Some(true))
+}
+
+/// Whether a Markdown source carries no flag but `--navigation`, the one it takes beside its source.
+fn markdown_flags(args: &Args) -> bool {
+    args.cwd.is_none()
+        && ![
+            args.wait,
             args.javascript,
             args.chromeless,
             args.persistent,

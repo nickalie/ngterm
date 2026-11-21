@@ -994,3 +994,30 @@ fn a_presenter_only_origin_closes_a_log_page() {
     let found = store.session(session).unwrap();
     assert!(!found.overlay.active && found.remote_overlays().slot(None).is_none());
 }
+
+/// A Markdown page with navigation comes back with its navigation and its links judged again.
+#[test]
+fn a_markdown_link_page_round_trips_with_its_links_judged_again() {
+    let files = Files::new();
+    let (mut store, session) = store_with_split();
+    let markdown = HtmlSource::Markdown {
+        path: files.path("notes.md"),
+    };
+    let navigation = HtmlPageFlags {
+        navigation: true,
+        ..HtmlPageFlags::default()
+    };
+    let grant = crate::html::markdown_page::link_grant(&files.path("notes.md"), "/nowhere");
+    assert!(grant.is_some());
+    open(
+        &mut store,
+        session,
+        None,
+        HtmlOverlay::linked(markdown.clone(), navigation, grant.clone()),
+        OverlaySize::default(),
+    );
+    let back = round_trip(&store);
+    assert_eq!(shown(only_session(&back)), [(None, markdown, navigation)]);
+    let (_, restored) = only_session(&back).html_overlays()[0];
+    assert_eq!(restored.markdown_links, grant);
+}

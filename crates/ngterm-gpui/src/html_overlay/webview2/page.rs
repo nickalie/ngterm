@@ -566,7 +566,12 @@ impl Page {
             target,
             user_activated: navigation.user && target != HtmlNavigationTarget::Subframe,
         };
-        Some((decide(&action, &state.overlay), url))
+        let decision = decide(&action, &state.overlay);
+        // the engine shows a custom protocol's failed read as a document, so a link that cannot be read goes nowhere
+        if decision == HtmlNavigationDecision::Allow && !policy::link_readable(&state.overlay, &url) {
+            return Some((HtmlNavigationDecision::Cancel, url));
+        }
+        Some((decision, url))
     }
 
     /// Whether `navigation` goes ahead, answered at once (module docs); the app's own text load is its own.
@@ -686,7 +691,8 @@ impl Page {
             }
             // its end, a cancellation, is this refusal's
             state.refused = Some(navigation.id);
-            if !navigation.user || navigation.redirect {
+            // a link page's refused link leaves the file it shows in place
+            if (!navigation.user || navigation.redirect) && state.overlay.markdown_links.is_none() {
                 state.load.refused(&scheme::app_uri(&navigation.uri));
             }
             state
@@ -794,7 +800,7 @@ impl Page {
         if moved {
             let web = self.web_url();
             let mut state = self.state.borrow_mut();
-            state.shown_url = policy::shown_after_change(state.shown_url.as_ref(), web.as_ref());
+            state.shown_url = policy::shown_after_page_change(&state.overlay, state.shown_url.as_ref(), web.as_ref());
         }
         self.report_page();
     }
@@ -993,13 +999,19 @@ impl Page {
 
     // MARK: - load state and the page shown
 
+    /// Settles `event`; a link page keeps the file it shows when a followed link cannot be read.
     fn load_event(&self, event: &LoadEvent) {
         let outcome = {
             let mut state = self.state.borrow_mut();
             if !state.active() {
                 return;
             }
-            state.load.handle(event)
+            match event {
+                LoadEvent::Failed(message) if state.overlay.markdown_links.is_some() => {
+                    state.load.failed_over_shown(message.clone())
+                }
+                event => state.load.handle(event),
+            }
         };
         self.report_outcome(outcome);
     }
@@ -1139,7 +1151,15 @@ impl Page {
             text.load_document(true);
             return;
         }
+        let links = self.state.borrow().overlay.markdown_links.clone();
         let address = match source {
+            // a link page loads through the replica protocol, which reads each file it follows
+            HtmlSource::Markdown { .. } if let Some(grant) = links => {
+                match scheme::markdown_address(self.id, &grant.path) {
+                    Some(address) => address,
+                    None => return self.fail(format!("not an absolute path: {}", grant.path)),
+                }
+            }
             source @ (HtmlSource::Image { .. }
             | HtmlSource::Markdown { .. }
             | HtmlSource::Text { .. }

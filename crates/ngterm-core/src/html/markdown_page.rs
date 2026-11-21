@@ -25,6 +25,14 @@ pub struct MarkdownDocument {
     pub images: Embedded,
 }
 
+/// What a Markdown page may follow links within (upstream's `MarkdownLinkGrant`): its file and that file's folder, both
+/// with symlinks resolved when the page opens and fixed for its life.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownLinkGrant {
+    pub path: String,
+    pub root: String,
+}
+
 /// A decoded image reference and its lexically-contained candidate path; canonical containment is still required.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageReference {
@@ -57,18 +65,64 @@ pub fn image_references(markdown: &str, folder: &Path) -> Vec<ImageReference> {
 /// folder there, in document order, each decoded reference once (upstream's `remoteImageReferences`). They are listed
 /// by that machine's path rules, read from `file`'s own shape (`origin_path`), not by this OS's, so a viewer on Windows
 /// lists a POSIX machine's pictures and the other way round; none for a `file` that is absolute on no machine. That
-/// machine's page channel resolves symlinks before it serves a picture.
+/// machine's page channel resolves symlinks before it serves a picture. A Markdown-spelled reference is left out: that
+/// machine serves it as text.
 #[must_use]
 pub fn remote_image_references(markdown: &str, file: &str) -> Vec<RemoteImageReference> {
     let Some(folder) = super::origin_path::OriginFolder::of_file(file) else {
         return Vec::new();
     };
     decoded_references(markdown)
+        .filter(|reference| !is_markdown(Path::new(reference)))
         .filter_map(|reference| {
             let path = folder.lexical_path(&reference)?;
             Some(RemoteImageReference { reference, path })
         })
         .collect()
+}
+
+/// What a page opened on `path` may follow links within (upstream's `linkGrant`), `None` when its links stay text: a
+/// path that is not absolute, a target that is not Markdown, or a folder that is a file system root or `home`, all
+/// judged with symlinks resolved.
+#[must_use]
+pub fn link_grant(path: &str, home: &str) -> Option<MarkdownLinkGrant> {
+    if !super::is_absolute(path) {
+        return None;
+    }
+    let file = super::real_path(Path::new(path));
+    let root = file.parent()?;
+    if !is_markdown(&file) || root.parent().is_none() || root == super::real_path(Path::new(home)) {
+        return None;
+    }
+    Some(MarkdownLinkGrant {
+        path: file.to_string_lossy().into_owned(),
+        root: root.to_string_lossy().into_owned(),
+    })
+}
+
+/// The path a link page reads for `requested`, an absolute path already percent-decoded (upstream's
+/// `linkedDocument`): the request normalized, so its pictures come from the folder its links resolve against. `None`
+/// unless both the request and its symlink-resolved target are Markdown strictly inside the grant's root, so a
+/// `guide.md` alias of a `.env` is refused.
+#[must_use]
+pub fn linked_document(requested: &str, grant: &MarkdownLinkGrant) -> Option<String> {
+    if !super::is_absolute(requested) || !is_markdown(Path::new(requested)) {
+        return None;
+    }
+    let root = Path::new(&grant.root);
+    let lexical = lexical_path(requested, root)?;
+    let file = super::real_path(&lexical);
+    (is_markdown(&file) && super::strictly_inside(&file, root)).then(|| lexical.to_string_lossy().into_owned())
+}
+
+/// Whether `path` names a Markdown file by its extension, in any case.
+#[must_use]
+pub fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            crate::link_policy::MARKDOWN_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        })
 }
 
 /// The decoded picture references of `markdown`, in document order, each once.
@@ -152,15 +206,17 @@ pub fn escaped(text: &str) -> String {
 
 /// Authored text and the sorted picture index are data, never scripts or authored HTML. The holder is a `div`: the
 /// HTML parser drops a newline right after `<pre>`, which would move a `---` up to the first line (frontmatter).
+/// `links` lets the renderer keep relative links to neighbouring Markdown files (`data-links`).
 #[must_use]
-pub fn html(markdown: &str, images: &Embedded, style: &str) -> String {
+pub fn html(markdown: &str, images: &Embedded, style: &str, links: bool) -> String {
     let map = serde_json::to_string(images).unwrap_or_else(|_| "{}".to_owned());
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" \
          content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'\"><style>{style}</style></head><body>\
-         <div id=\"ngterm-markdown\" hidden data-images=\"{}\">{}</div>\
+         <div id=\"ngterm-markdown\" hidden data-images=\"{}\"{}>{}</div>\
          <main id=\"ngterm-page\"></main></body></html>",
         escaped(&map),
+        if links { " data-links=\"local\"" } else { "" },
         escaped(markdown)
     )
 }

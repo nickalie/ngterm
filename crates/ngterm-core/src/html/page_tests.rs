@@ -229,3 +229,88 @@ fn a_minimal_html_host_refuses_document_reads_and_persistent_clears() {
     );
     assert_eq!(host.saved_store_clear(), ClearProgress::Done);
 }
+
+fn link_page(source: HtmlSource) -> HtmlOverlay {
+    HtmlOverlay::linked(
+        source,
+        HtmlPageFlags {
+            navigation: true,
+            ..HtmlPageFlags::default()
+        },
+        Some(markdown_page::MarkdownLinkGrant {
+            path: "/tmp/notes/readme.md".to_owned(),
+            root: "/tmp/notes".to_owned(),
+        }),
+    )
+}
+
+/// Upstream's `aLinkPageIsNamedByTheFileItShows` and `aLinkPageKeepsItsOriginalForReadBack`.
+#[test]
+fn a_link_page_is_named_by_the_file_it_shows_and_keeps_its_original() {
+    let mut page = link_page(HtmlSource::Markdown {
+        path: "/tmp/notes/readme.md".to_owned(),
+    });
+    assert_eq!(page.identity(), "readme.md");
+    page.current = Some(shown("/tmp/notes/sub/guide.md", Some("enter your password"), true));
+    assert_eq!(page.identity(), "guide.md");
+    assert_eq!(page.source.text(), "/tmp/notes/readme.md");
+    assert!(!page.text_loaded() && page.themed() && !page.bridged());
+}
+
+/// Upstream's `aMarkdownPageHasNavigationOnlyWithALinkGrant`.
+#[test]
+fn a_markdown_page_has_navigation_only_with_a_link_grant() {
+    let markdown = HtmlSource::Markdown {
+        path: "/tmp/notes/readme.md".to_owned(),
+    };
+    let navigation = HtmlPageFlags {
+        navigation: true,
+        ..HtmlPageFlags::default()
+    };
+    let linked = link_page(markdown.clone());
+    assert!(linked.flags.navigation && linked.markdown_links.is_some());
+    let plain = HtmlOverlay::new(markdown.clone(), navigation);
+    assert!(!plain.flags.navigation && plain.text_loaded());
+    let without = HtmlOverlay::linked(markdown, HtmlPageFlags::default(), linked.markdown_links.clone());
+    assert_eq!(without.markdown_links, None);
+    assert!(
+        HtmlOverlay::new(file("/tmp/a/x.html", None).source, navigation)
+            .flags
+            .navigation
+    );
+}
+
+#[test]
+fn a_link_pages_address_names_its_file_in_the_pages_own_host() {
+    let page = uuid::Uuid::new_v4();
+    let path = if cfg!(windows) {
+        r"C:\docs\a b#%.md"
+    } else {
+        "/docs/a b#%.md"
+    };
+    let url = markdown_link_url(page, path).unwrap();
+    assert!(replica_url_of(&url, page));
+    assert_eq!(markdown_link_path(&url).as_deref(), Some(path));
+    let linked = url.join("sub/b.md").unwrap();
+    let expected = if cfg!(windows) {
+        r"C:\docs\sub\b.md"
+    } else {
+        "/docs/sub/b.md"
+    };
+    assert_eq!(markdown_link_path(&linked).as_deref(), Some(expected));
+    assert_eq!(markdown_link_url(page, "docs/a.md"), None);
+    assert_eq!(markdown_link_path(&Url::parse("file:///docs/a.md").unwrap()), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_link_pages_address_keeps_a_shares_server() {
+    let page = uuid::Uuid::new_v4();
+    let url = markdown_link_url(page, r"\\server\share\docs\a.md").unwrap();
+    assert!(replica_url_of(&url, page));
+    let linked = url.join("sub/b.md").unwrap();
+    assert_eq!(
+        markdown_link_path(&linked).as_deref(),
+        Some(r"\\server\share\docs\sub\b.md")
+    );
+}

@@ -345,6 +345,38 @@ pub fn replica_url_of(url: &Url, page: uuid::Uuid) -> bool {
             .is_some_and(|host| host.eq_ignore_ascii_case(&page.hyphenated().to_string()))
 }
 
+/// The address a Markdown link page `page` loads `path`, a file on this machine, from (upstream's
+/// `HtmlPageSchemeHandler.url`): the page's scheme with its id as the host and the path as its `file:` URL spells it (a
+/// share's server first), so a relative link resolves in the file's folder on every OS; `None` for a relative path.
+#[must_use]
+pub fn markdown_link_url(page: uuid::Uuid, path: &str) -> Option<Url> {
+    let file = Url::from_file_path(path).ok()?;
+    let mut url = Url::parse(&format!("{REPLICA_SCHEME}://{}/", page.hyphenated())).ok()?;
+    let server = file
+        .host_str()
+        .filter(|server| !server.is_empty())
+        .map(|server| format!("//{server}"))
+        .unwrap_or_default();
+    url.set_path(&format!("{server}{}", file.path()));
+    Some(url)
+}
+
+/// The file on this machine a Markdown link page's address names, its path decoded ([`markdown_link_url`]); `None` for
+/// an address of another scheme or one no local path spells.
+#[must_use]
+pub fn markdown_link_path(url: &Url) -> Option<String> {
+    if url.scheme() != REPLICA_SCHEME {
+        return None;
+    }
+    let path = url.path();
+    let file = if path.starts_with("//") {
+        format!("file:{path}")
+    } else {
+        format!("file://{path}")
+    };
+    Url::parse(&file).ok()?.to_file_path().ok()?.to_str().map(str::to_owned)
+}
+
 impl HtmlSource {
     /// The origin of an HTTP(S) URL without credentials, `None` for other schemes (upstream's `HtmlSource.origin`).
     #[must_use]
@@ -540,6 +572,9 @@ pub struct HtmlOverlay {
     /// Whether a text page wraps its long lines (upstream's `textWrap`): off at open, never in a snapshot; a page shown
     /// here for another machine keeps its own in the page.
     pub text_wrap: bool,
+    /// What a Markdown page may follow links within (upstream's `markdownLinks`), set only with navigation; a
+    /// snapshot never writes it, a restore judges the file again.
+    pub markdown_links: Option<markdown_page::MarkdownLinkGrant>,
 }
 
 impl HtmlOverlay {
@@ -558,9 +593,23 @@ impl HtmlOverlay {
         }
     }
 
-    /// A loading page with a fresh id.
+    /// A loading page with a fresh id and no link grant: a Markdown page drops navigation ([`Self::linked`]).
     #[must_use]
     pub fn new(source: HtmlSource, flags: HtmlPageFlags) -> Self {
+        Self::linked(source, flags, None)
+    }
+
+    /// A loading page with a fresh id whose Markdown file may follow `markdown_links` (upstream's `HtmlOverlay.init`):
+    /// the grant is kept only with navigation, and a Markdown page without one drops navigation, so its strip never
+    /// offers Back and Forward its links cannot use.
+    #[must_use]
+    pub fn linked(
+        source: HtmlSource,
+        mut flags: HtmlPageFlags,
+        markdown_links: Option<markdown_page::MarkdownLinkGrant>,
+    ) -> Self {
+        let markdown_links = markdown_links.filter(|_| flags.navigation);
+        flags.navigation &= source.kind() != HtmlPageKind::Markdown || markdown_links.is_some();
         Self {
             id: uuid::Uuid::new_v4(),
             replica_of: None,
@@ -579,6 +628,7 @@ impl HtmlOverlay {
             search_revision: 0,
             text_changes: None,
             text_wrap: false,
+            markdown_links,
         }
     }
 
@@ -647,10 +697,9 @@ impl HtmlOverlay {
             HtmlSource::File { grant_root, .. } => grant_root.is_none(),
             HtmlSource::Replica { content, .. } => *content != ReplicaContent::Html,
             HtmlSource::Url(_) => false,
-            HtmlSource::Image { .. }
-            | HtmlSource::Markdown { .. }
-            | HtmlSource::Text { .. }
-            | HtmlSource::Document { .. } => true,
+            // a link page loads its files through the page scheme
+            HtmlSource::Markdown { .. } => self.markdown_links.is_none(),
+            HtmlSource::Image { .. } | HtmlSource::Text { .. } | HtmlSource::Document { .. } => true,
         }
     }
 
@@ -660,13 +709,13 @@ impl HtmlOverlay {
     #[must_use]
     pub fn identity(&self) -> String {
         match &self.source {
-            HtmlSource::Image { path }
-            | HtmlSource::Markdown { path }
-            | HtmlSource::Text { path, .. }
-            | HtmlSource::Document { path } => last_path_component(path),
+            HtmlSource::Image { path } | HtmlSource::Text { path, .. } | HtmlSource::Document { path } => {
+                last_path_component(path)
+            }
             // a replica the app builds sits at about:blank: its file is what it shows
             HtmlSource::Replica { path, content } if *content != ReplicaContent::Html => last_path_component(path),
-            HtmlSource::File { path, .. } | HtmlSource::Replica { path, .. } => {
+            // a Markdown page names the file it shows, a linked one once it committed
+            HtmlSource::File { path, .. } | HtmlSource::Replica { path, .. } | HtmlSource::Markdown { path } => {
                 let shown = self
                     .current
                     .as_ref()
