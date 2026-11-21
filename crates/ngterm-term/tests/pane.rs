@@ -333,6 +333,50 @@ fn held_input_is_typed_when_the_program_never_turns_bracketed_paste_on() {
 }
 
 #[test]
+fn held_input_is_typed_while_a_clipboard_read_waits_past_its_patience() {
+    let fixture = holding(
+        r#"printf '\033]52;c;?\007'; IFS= read -r line; printf '%s' "$line" > "$DIR/got""#,
+        Duration::from_millis(300),
+    )
+    .unwrap();
+    wait_events(&fixture.pane, |events| {
+        events.iter().any(|event| matches!(event, PaneEvent::ClipboardRead(_)))
+    });
+    // nobody answers the read: the held input must not wait for its 30 s timeout
+    let got = wait_file_containing(&fixture.path("got"), b"typed");
+    assert_eq!(got, b"typed");
+}
+
+#[test]
+fn input_written_while_the_input_is_held_goes_in_after_it() {
+    let fixture = holding(
+        r#"sleep 0.3; printf '\033[?2004h'; IFS= read -r a; IFS= read -r b; printf '%s|%s' "$a" "$b" > "$DIR/got""#,
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    fixture.pane.write(b"early\n").unwrap();
+    let got = wait_file_containing(&fixture.path("got"), b"|");
+    assert_eq!(got, b"\x1b[200~pasted\x1b[201~|early");
+}
+
+#[test]
+fn input_held_behind_the_held_input_is_refused_past_the_write_limit() {
+    let config = PaneConfig {
+        held_input: Some(HeldInput {
+            pasted: Vec::new(),
+            typed: Vec::new(),
+            patience: Duration::from_secs(60),
+        }),
+        write_limit: 8,
+        ..PaneConfig::new(SIZE)
+    };
+    let fixture = spawn_with("exec sleep 30", &config).unwrap();
+    fixture.pane.write(b"12345").unwrap();
+    assert!(matches!(fixture.pane.write(b"67890"), Err(PaneError::Backpressure)));
+    fixture.pane.write(b"678").unwrap();
+}
+
+#[test]
 fn a_program_that_cannot_start_is_a_spawn_error() {
     let dir = tempfile::tempdir().unwrap();
     let command = PaneCommand::new(dir.path().join("no-such-program")).cwd(dir.path());

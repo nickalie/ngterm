@@ -10,7 +10,8 @@
 //!   below (carrying the wrap configuration from [`Runtime`]) and the working directory; a plain pane runs its seed's
 //!   command, or the login shell with its `initial_input` typed in. Upstream types it too (libghostty's
 //!   `initial_input`), but a bash, zsh or fish line editor gets it as a bracketed paste once it turns that mode on, so
-//!   a plugin bound to a key (fish's autopair on a quote) cannot change the line ([`Prepared::pasted_input`]). A
+//!   a plugin bound to a key (fish's autopair on a quote) cannot change the line ([`Prepared::pasted_input`]). Keys
+//!   written while it waits go in after it, as they follow upstream's `initial_input`. A
 //!   pane's shell profile takes the login shell's place, run from its structured argv, and runs the command itself when
 //!   it is a CMD or WSL one ([`Launch::shell_profile`]).
 //! - **Windows**: a command line runs as `cmd.exe`'s command text, `%ComSpec% /D /S /C "<line>"` (no `AutoRun`, as

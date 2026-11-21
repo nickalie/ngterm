@@ -119,11 +119,23 @@ pub struct HeldInput {
     pub patience: Duration,
 }
 
+/// [`HeldInput`] while the pane holds it: when its patience ends, and the input written meanwhile, which goes in after
+/// it.
+#[derive(Debug)]
+struct Held {
+    input: HeldInput,
+    deadline: Instant,
+    typeahead: Vec<u8>,
+}
+
 impl HeldInput {
-    /// This input and when its patience, counted from now, ends.
-    fn due(self) -> (Self, Instant) {
-        let deadline = Instant::now() + self.patience;
-        (self, deadline)
+    /// This input held, its patience counted from now.
+    fn due(self) -> Held {
+        Held {
+            deadline: Instant::now() + self.patience,
+            input: self,
+            typeahead: Vec::new(),
+        }
     }
 }
 
@@ -281,8 +293,8 @@ pub(crate) struct Shared {
     writes: Arc<Mutex<vt::DeferredClipboardWrites>>,
     /// Where the terminal's PTY writes go instead of the reply queue while a paste runs.
     pub(crate) divert: DivertSlot,
-    /// [`PaneConfig::held_input`] and when its patience ends.
-    held_input: Mutex<Option<(HeldInput, Instant)>>,
+    /// [`PaneConfig::held_input`] until it goes in.
+    held_input: Mutex<Option<Held>>,
     pub(crate) search: Mutex<SearchSlot>,
     /// Wakes the search worker early (a new needle, the pane going away).
     pub(crate) search_wake: Condvar,
@@ -365,6 +377,19 @@ impl Shared {
     /// Queue bytes the pane itself sends the program (never refused): a reply on a PTY, a live pane's input.
     pub(crate) fn push_input(&self, bytes: &[u8]) {
         self.replies.push_input(bytes);
+    }
+
+    /// Keep `bytes` after the held input while the pane holds it; whether it did.
+    fn hold_typeahead(&self, bytes: &[u8]) -> Result<bool, PaneError> {
+        let mut slot = lock(&self.held_input);
+        let Some(held) = slot.as_mut() else {
+            return Ok(false);
+        };
+        if !held.typeahead.is_empty() && held.typeahead.len() + bytes.len() > self.write_limit {
+            return Err(PaneError::Backpressure);
+        }
+        held.typeahead.extend_from_slice(bytes);
+        Ok(true)
     }
 
     /// A live pane's Kitty graphics answers since the last call.
@@ -674,6 +699,9 @@ impl Pane {
     /// [`PaneError::Backpressure`] when the queue is full (the child is not reading), [`PaneError::Closed`] once the
     /// PTY ended or refused a write (the child side is gone).
     pub fn write(&self, bytes: &[u8]) -> Result<(), PaneError> {
+        if self.shared.hold_typeahead(bytes)? {
+            return Ok(());
+        }
         match &self.io {
             #[cfg(feature = "local")]
             Io::Pty { actor, .. } => actor.write_input(bytes).map_err(PaneError::from),
@@ -1485,27 +1513,25 @@ impl Worker {
     /// When a synchronized-output hold expires or the held input's patience ends, whichever is first.
     fn hold_deadline(&self) -> Option<Instant> {
         let hold = lock(&self.shared.capture).hold_deadline();
-        let patience = lock(&self.shared.held_input).as_ref().map(|(_, deadline)| *deadline);
+        let patience = lock(&self.shared.held_input).as_ref().map(|held| held.deadline);
         hold.into_iter().chain(patience).min()
     }
 
     /// Send the held input once the program reads a bracketed paste, or typed once its patience ended.
+    /// The typeahead goes in after it, and the slot stays locked until both are queued, so later writes follow them.
     fn release_held_input(&self) {
+        if lock(&self.shared.held_input).is_none() {
+            return;
+        }
         let vt = lock(&self.shared.vt);
         let mut slot = lock(&self.shared.held_input);
-        let Some((held, deadline)) = slot.as_ref() else {
-            return;
-        };
-        let bytes = if vt.terminal.mode(vt::Mode::dec(2004)) {
-            held.pasted.clone()
-        } else if Instant::now() >= *deadline {
-            held.typed.clone()
-        } else {
-            return;
-        };
-        *slot = None;
-        drop(slot);
+        let pasted = vt.terminal.mode(vt::Mode::dec(2004));
         drop(vt);
+        let Some(held) = slot.take_if(|held| pasted || Instant::now() >= held.deadline) else {
+            return;
+        };
+        let mut bytes = if pasted { held.input.pasted } else { held.input.typed };
+        bytes.extend_from_slice(&held.typeahead);
         self.shared.push_input(&bytes);
     }
 
@@ -1696,6 +1722,7 @@ impl Worker {
                         return Some(ClipboardAnswer::Denied);
                     }
                     self.expire_deadlines();
+                    self.release_held_input();
                 }
             }
         }
