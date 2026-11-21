@@ -135,18 +135,21 @@ pub fn replica_read(uri: &str, page: uuid::Uuid) -> Option<String> {
 /// Whether a link page's navigation to `url` reaches a file its source reads (`documents::read_linked`), checked before
 /// the navigation goes ahead on an engine that shows a custom protocol's failed read as a document (`WKWebView`,
 /// `WebView2`); any other navigation, and another page's, passes. The source judges the file again when it reads it.
+///
+/// # Errors
+/// The source's refusal of the read.
 #[cfg(any(target_os = "macos", windows))]
-#[must_use]
-pub fn link_readable(overlay: &HtmlOverlay, url: &Url) -> bool {
+pub fn link_readable(overlay: &HtmlOverlay, url: &Url) -> Result<(), String> {
     let Some(grant) = overlay.markdown_links.as_ref() else {
-        return true;
+        return Ok(());
     };
     if !replica_url_of(url, overlay.id) {
-        return true;
+        return Ok(());
     }
-    markdown_link_path(url)
+    let file = markdown_link_path(url)
         .and_then(|path| ngterm_core::html::markdown_page::linked_document(&path, grant))
-        .is_some_and(|file| ngterm_app::documents::check_markdown_text(Path::new(&file)).is_ok())
+        .ok_or_else(|| super::documents::NOT_A_LINKED_FILE.to_owned())?;
+    ngterm_app::documents::check_markdown_text(Path::new(&file))
 }
 
 /// The file on this machine a link page's read of `uri` asks for; `None` for an address that names another page.
@@ -1424,12 +1427,17 @@ mod tests {
     #[cfg(any(target_os = "macos", windows))]
     fn a_link_pages_unreadable_link_is_refused_before_it_loads() {
         let (_dir, page) = link_page();
-        assert!(link_readable(&page, &in_root(&page, "sub/guide.md")));
-        assert!(!link_readable(&page, &in_root(&page, "sub/missing.md")));
-        assert!(!link_readable(&page, &in_root(&page, "../outside.md")));
-        assert!(!link_readable(&page, &in_root(&page, "sub/latin1.md")));
-        assert!(link_readable(&page, &url("https://example.com/x.md")));
+        assert_eq!(link_readable(&page, &in_root(&page, "sub/guide.md")), Ok(()));
+        assert!(link_readable(&page, &in_root(&page, "sub/missing.md")).is_err());
+        assert_eq!(
+            link_readable(&page, &in_root(&page, "../outside.md")),
+            Err(super::super::documents::NOT_A_LINKED_FILE.to_owned())
+        );
+        let latin1 = link_readable(&page, &in_root(&page, "sub/latin1.md")).unwrap_err();
+        assert!(latin1.starts_with("not a UTF-8 text file: "), "{latin1}");
+        assert!(latin1.ends_with("latin1.md"), "{latin1}");
+        assert_eq!(link_readable(&page, &url("https://example.com/x.md")), Ok(()));
         let plain = HtmlOverlay::new(page.source.clone(), HtmlPageFlags::default());
-        assert!(link_readable(&plain, &in_root(&page, "sub/missing.md")));
+        assert_eq!(link_readable(&plain, &in_root(&page, "sub/missing.md")), Ok(()));
     }
 }

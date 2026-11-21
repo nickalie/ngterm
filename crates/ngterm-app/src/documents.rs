@@ -157,11 +157,13 @@ pub fn check_markdown(path: &Path) -> Result<(), String> {
 /// # Errors
 /// [`probe_markdown`]'s refusals.
 pub fn check_markdown_text(path: &Path) -> Result<(), String> {
+    markdown_text(path).map(|_| ())
+}
+
+fn markdown_text(path: &Path) -> Result<String, String> {
     let bytes = bounded_file::read(path, markdown_page::MAX_BYTES)
         .map_err(|failure| markdown_failure(failure, &path.display()))?;
-    std::str::from_utf8(&bytes)
-        .map(|_| ())
-        .map_err(|_| format!("not a UTF-8 text file: {}", path.display()))
+    String::from_utf8(bytes).map_err(|_| format!("not a UTF-8 text file: {}", path.display()))
 }
 
 /// Read UTF-8 Markdown and embed bounded, locally-contained raster references.
@@ -169,9 +171,7 @@ pub fn check_markdown_text(path: &Path) -> Result<(), String> {
 /// # Errors
 /// The upstream Markdown-probe refusal; invalid/unreadable pictures are omitted rather than failing the page.
 pub fn probe_markdown(path: &Path) -> Result<MarkdownDocument, String> {
-    let bytes = bounded_file::read(path, markdown_page::MAX_BYTES)
-        .map_err(|failure| markdown_failure(failure, &path.display()))?;
-    let markdown = String::from_utf8(bytes).map_err(|_| format!("not a UTF-8 text file: {}", path.display()))?;
+    let markdown = markdown_text(path)?;
     let images = path
         .parent()
         .map_or_else(Embedded::default, |folder| embed(&markdown, folder));

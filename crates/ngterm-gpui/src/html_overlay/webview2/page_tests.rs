@@ -858,6 +858,46 @@ fn a_link_pages_first_load_that_fails_fails_the_page(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_link_pages_first_load_of_a_file_that_is_not_utf8_fails_with_why(cx: &mut TestAppContext) {
+    let (_directory, source) = link_overlay();
+    let grant = source.markdown_links.clone().unwrap();
+    std::fs::write(&grant.path, [b'c', 0xe9]).unwrap();
+    let mut driven = realized(&source);
+    let first = navigation(
+        &scheme::markdown_address(source.id, &grant.path).unwrap(),
+        true,
+        false,
+        false,
+        1,
+    );
+    assert!(!driven.page.allows(&first));
+    driven.report(
+        Report::Navigation {
+            navigation: first,
+            allowed: false,
+        },
+        cx,
+    );
+    let why = driven.load();
+    assert_eq!(why.0, HtmlLoadState::Failed);
+    let error = why.1.clone().unwrap_or_default();
+    assert!(
+        error.starts_with("not a UTF-8 text file: ") && error.ends_with("README.md"),
+        "{error}"
+    );
+    driven.report(
+        Report::Completed {
+            id: 1,
+            success: false,
+            status: OPERATION_CANCELED,
+            http: 0,
+        },
+        cx,
+    );
+    assert_eq!(driven.load(), why);
+}
+
+#[gpui_kit::test]
 fn a_followed_link_that_fails_keeps_the_shown_file(cx: &mut TestAppContext) {
     let (_directory, source) = link_overlay();
     let mut driven = following_a_link(&source, cx);

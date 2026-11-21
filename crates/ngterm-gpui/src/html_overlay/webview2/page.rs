@@ -568,7 +568,7 @@ impl Page {
         };
         let decision = decide(&action, &state.overlay);
         // the engine shows a custom protocol's failed read as a document, so a link that cannot be read goes nowhere
-        if decision == HtmlNavigationDecision::Allow && !policy::link_readable(&state.overlay, &url) {
+        if decision == HtmlNavigationDecision::Allow && policy::link_readable(&state.overlay, &url).is_err() {
             return Some((HtmlNavigationDecision::Cancel, url));
         }
         Some((decision, url))
@@ -695,12 +695,23 @@ impl Page {
             if (!navigation.user || navigation.redirect) && state.overlay.markdown_links.is_none() {
                 state.load.refused(&scheme::app_uri(&navigation.uri));
             }
-            state
-                .load
-                .handle(&LoadEvent::Interrupted("navigation blocked".to_owned()))
+            let reason = Self::refusal(&state, navigation);
+            state.load.handle(&LoadEvent::Interrupted(reason))
         };
         self.report_outcome(outcome);
         self.offer(navigation, HtmlNavigationTarget::MainFrame, cx);
+    }
+
+    /// Why a refused main-frame navigation failed the load: a link page's first load names its source's refusal, as
+    /// the source does on an engine that fails the read.
+    fn refusal(state: &PageState, navigation: &Navigation) -> String {
+        if state.overlay.markdown_links.is_none() || state.load.committed() {
+            return "navigation blocked".to_owned();
+        }
+        Url::parse(&scheme::app_uri(&navigation.uri))
+            .ok()
+            .and_then(|url| policy::link_readable(&state.overlay, &url).err())
+            .unwrap_or_else(|| "navigation blocked".to_owned())
     }
 
     /// Asks whether to hand `navigation` to the browser when the policy offers that.
