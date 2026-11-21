@@ -1,16 +1,16 @@
 ---
 worth: yes
-where: crates/ngterm-gpui/src/html_overlay/webview2/page.rs:571
+where: crates/ngterm-gpui/src/html_overlay/webview2/page.rs:576
 added: 2026-11-22
 ---
 # A link page's link check reads the file on the UI thread on WKWebView and WebView2
 
 On WKWebView and WebView2, a failed read of the page protocol shows as a document. Thus, before a Markdown link page
-follows a link, `Page::decision` calls `policy::link_readable`, which resolves the path and reads the file up to the
-Markdown cap to check that it is UTF-8. This occurs in the engine's synchronous navigation callback on the main
-thread, for each link click, each Back/Forward step and the first load. On slow storage, such as a network share, the
-app stops until the read ends. Upstream's policy does no synchronous check, and the click path of `links.rs` keeps its
-file reads on a worker.
+follows a link, `Page::allows` checks the link through `Page::link_readable`, which calls `policy::link_readable`. That
+resolves the path and reads the file up to the Markdown cap to check that it is UTF-8. This occurs in the engine's
+synchronous navigation callback on the main thread, for each link click, each Back/Forward step and the first load. On
+slow storage, such as a network share, the app stops until the read ends. Upstream's policy does no synchronous
+check, and the click path of `links.rs` keeps its file reads on a worker.
 
 A file that changes between this check and the protocol's read also still shows the protocol's error answer as the
 page.
