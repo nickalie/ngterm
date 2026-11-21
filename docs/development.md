@@ -1484,8 +1484,8 @@ macOS' gate is [CI](#ci)'s run on a `ci/**` branch or a PR):
 - the tracing-features check and the lock-edges check run for a change to dependencies or `Cargo.lock`; a vendor script's `--check` runs for a
   change to its `vendor/` tree or `build/patches/`; a bindings check runs for the pin changes named below.
 - the selftests run for a change under `conformance/`.
-- `run-linux.sh` runs partially (`-- -k EXPR`, see [conformance/README.md](../conformance/README.md); node ids after `--`
-  add to the three layers instead of narrowing them), on the ids that cover the behavior the change touches, and not at all for a change with no app behavior (docs, CI, the
+- `run-linux.sh` runs partially (`-- -k EXPR`, see [conformance/README.md](../conformance/README.md); paths and node ids
+  after `--` replace the layers), on the ids that cover the behavior the change touches, and not at all for a change with no app behavior (docs, CI, the
   suite's selftests). It still builds the whole release workspace, since the staged app needs it.
 
 ```sh

@@ -169,6 +169,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="write each selected test's merged outcome as JSON lines to PATH, for the ratchet",
     )
     group.addoption(
+        "--narrowed",
+        action="store_true",
+        default=False,
+        help="the run's paths and node ids are a part of the suite: the nodeid report says partial",
+    )
+    group.addoption(
         "--ratchet-only",
         type=Path,
         default=None,
@@ -227,7 +233,9 @@ def pytest_configure(config: pytest.Config) -> None:
         if options.coverage_gate:
             raise pytest.UsageError("--nodeid-report cannot be combined with --coverage-gate")
         report_path = config.invocation_params.dir / nodeid_report
-        config.pluginmanager.register(NodeidReport(report_path), "agterm-nodeid-report")
+        report = NodeidReport(report_path)
+        report.partial = config.getoption("narrowed")
+        config.pluginmanager.register(report, "agterm-nodeid-report")
     ratchet_only = config.getoption("ratchet_only")
     if ratchet_only is None and (config.getoption("also") or config.getoption("also_k")):
         raise pytest.UsageError("--also and --also-k need --ratchet-only")

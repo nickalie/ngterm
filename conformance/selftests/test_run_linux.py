@@ -149,11 +149,12 @@ def run_env(**env: str) -> dict[str, str]:
 
 
 def run(
-    tmp_path: Path, stage: Path, layers: Path, listed: Path, *args: str, **env: str
+    tmp_path: Path, stage: Path, layers: Path, listed: Path, *args: str, cwd: Path | None = None, **env: str
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     out = tmp_path / "report"
     completed = subprocess.run(
         command(tmp_path, stage, layers, listed, *args),
+        cwd=cwd,
         env=run_env(**env),
         capture_output=True,
         text=True,
@@ -554,9 +555,81 @@ def test_pytest_args_reach_pytest(tmp_path: Path, stage: Path, layers: Path) -> 
     assert "rust: 1 pass, 0 fail" in report
 
 
+PARAM_TEST = """
+import pytest
+
+@pytest.mark.parametrize("name", ["one", "two"])
+def test_case(ctl, name):
+    pass
+"""
+
+
+@pytest.mark.parametrize(
+    ("selector", "where", "selected"),
+    [
+        (PROBE_ID, "repo", PROBE_ID),
+        (f"conformance/{PROBE_ID}", "repo", PROBE_ID),
+        (f"./{PROBE_ID}", "repo", PROBE_ID),
+        ("tests/protocol/test_param.py::test_case[one]", "repo", "tests/protocol/test_param.py::test_case[one]"),
+        (
+            "conformance/tests/protocol/test_param.py::test_case[one]",
+            "repo",
+            "tests/protocol/test_param.py::test_case[one]",
+        ),
+        ("protocol/test_probe.py::test_reports_version", "tests", PROBE_ID),
+        ("tests/protocol/test_probe.py", "absolute", PROBE_ID),
+    ],
+)
+def test_a_node_id_after_the_separator_runs_only_that_node(
+    tmp_path: Path, stage: Path, layers: Path, selector: str, where: str, selected: str
+) -> None:
+    """Workers pass node ids after `--`: the run selects only them, and a listed id it left out is not judged."""
+    (layers / "protocol" / "test_other.py").write_text(FAILING_TEST)
+    (layers / "protocol" / "test_param.py").write_text(PARAM_TEST)
+    cwd = layers if where == "tests" else SCRIPT.parents[2]
+    if where == "absolute":
+        selector = str(layers.parent / selector)
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, OTHER_ID, PROBE_ID), "--", selector, cwd=cwd)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "rust: 1 pass, 0 fail" in report
+    records = [json.loads(line) for line in (tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()]
+    assert {key: records[0][key] for key in ("partial", "mode")} == {"partial": True, "mode": "partial"}
+    assert [record["nodeid"] for record in records if record["kind"] == "test"] == [selected]
+
+
+def test_a_node_id_and_k_narrow_together(tmp_path: Path, stage: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_param.py").write_text(PARAM_TEST)
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", "tests/protocol/test_param.py", "-k", "two"
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "rust: 1 pass, 0 fail" in report
+    records = [json.loads(line) for line in (tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()]
+    assert [record["nodeid"] for record in records if record["kind"] == "test"] == [
+        "tests/protocol/test_param.py::test_case[two]"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (("--", "tests/protcol/test_probe.py::test_reports_version"), "no test path tests/protcol/test_probe.py"),
+        (("--ratchet-only", "--", PROBE_ID), "--ratchet-only takes its extra node ids and paths with --also"),
+    ],
+)
+def test_a_selector_after_the_separator_that_cannot_work_exits_2_before_anything_runs(
+    tmp_path: Path, stage: Path, layers: Path, args: tuple[str, ...], message: str
+) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), *args)
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert message in completed.stderr
+    assert report == ""
+    assert not (tmp_path / "report" / "pytest.log").exists()
+
+
 def test_pytest_refusing_its_arguments_leaves_no_usable_report(tmp_path: Path, stage: Path, layers: Path) -> None:
-    """A typo in a path after `--`: nothing runs, so the run must not read as a holding ratchet."""
-    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", str(layers / "protcol"))
+    """An option pytest does not know after `--`: nothing runs, so the run must not read as a holding ratchet."""
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", "--no-such-option")
     assert completed.returncode == 2, completed.stdout + completed.stderr
     assert "pytest status: 4" in report
     assert "exit status: 2" in report

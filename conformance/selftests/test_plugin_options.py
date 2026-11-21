@@ -751,6 +751,14 @@ def test_nodeid_report_partial(pytester: pytest.Pytester, args: tuple[str, ...],
     assert [nodeid for nodeid, *_ in outcomes(records)] == expected
 
 
+def test_a_narrowed_run_is_partial_though_nothing_is_deselected(pytester: pytest.Pytester) -> None:
+    """run-linux.sh passes the paths and node ids it was given instead of the layers, with --narrowed."""
+    pytester.makepyfile(test_partial="def test_one():\n    pass\n")
+    _, records = run_nodeid_report(pytester, "--narrowed")
+    assert run_header(records) == {"kind": "run", "partial": True, "mode": "partial"}
+    assert [nodeid for nodeid, *_ in outcomes(records)] == ["test_partial.py::test_one"]
+
+
 RATCHET_ONLY_TESTS = """
 import pytest
 

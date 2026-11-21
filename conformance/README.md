@@ -284,7 +284,7 @@ and each `--also-k` `-k` expression, repeatable: a task names what it is working
 An `--also` or `--also-k` that matches no collected test is a usage error (exit 2), unless `-k`, `-m` or node ids
 narrowed the run. The plugin options behind it are `--ratchet-only LIST`, `--also` and `--also-k`. The nodeid report's run header then says `"mode": "ratchet-only"`, and
 `check_ratchet.py` judges it as a full run: every listed id must pass, a listed id that was not collected is warned
-about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`, `-m` or node ids after `--`) makes
+about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`, `-m` or paths or node ids after `--`) makes
 the mode `partial`: the listed ids that did not run are not judged, so a partial run can neither break nor shrink
 the list through what it left out. The report names the mode and the suite time.
 `--build-only` builds and stages and runs nothing; `--shard I/N` runs part I of the suite split by test file into N

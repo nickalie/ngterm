@@ -33,6 +33,8 @@
 # and summary.md, the total line % and its distance to 90%, the share the e2e-coverage markers exclude, per crate);
 # a run that left no profile, or a stage that is not the instrumented build, exits 2 with the reason.
 # Without the app's binary in the stage every test skips and parity reads 0%.
+# Paths and node ids among the PYTEST_ARGS run instead of the layers (an unknown path exits 2); -k and the rest narrow
+# what runs. --ratchet-only takes its extra paths and node ids with --also, never after --.
 # Writes report.md (with the ui ids a passing test exercised), junit.xml, pytest.log and nodeids.jsonl into DIR.
 # Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), 1 when a run left an instance
 # root behind, or 2 when --coverage yields no code coverage report; pytest's own status does not count, since most
@@ -75,7 +77,7 @@ while (($#)); do
         --coverage) coverage=1; shift ;;
         --build-only) build_only=1; shift ;;
         --shard) shard="$2"; shift 2 ;;
-        -h|--help) sed -n '2,42s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,45s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -135,6 +137,47 @@ if [[ -n "$ratchet_only" ]]; then
         if [[ -z "$inside" ]]; then layers+=("$path"); fi
     done
     for expression in "${also_k[@]}"; do selection+=(--also-k "$expression"); done
+fi
+
+# Paths and node ids after `--` replace the layers, which pytest would otherwise run whole beside them. Each is spelled
+# as the list's ids are (from the suite's root), with conformance/ in front (from the repo's root), absolute, or from
+# the working directory. The value of an option that takes one stays the option's.
+narrowed=()
+pytest_args=()
+value_of=""
+for arg in "${extra[@]}"; do
+    if [[ -n "$value_of" || "$arg" == -* || ("$arg" != *::* && "$arg" != */* && "$arg" != *.py) ]]; then
+        pytest_args+=("$arg")
+        value_of=""
+        case "$arg" in
+            -k|-m|-p|-c|-o|-W|--deselect|--ignore|--ignore-glob|--rootdir|--basetemp|--confcutdir|--junitxml \
+                |--junit-xml|--log-file|--catalog|--ui-ids|--bin|--ctl) value_of=1 ;;
+        esac
+        continue
+    fi
+    if [[ -n "$ratchet_only" ]]; then
+        echo "--ratchet-only takes its extra node ids and paths with --also, not after --: $arg" >&2
+        exit 2
+    fi
+    path="${arg%%::*}"
+    node="${arg:${#path}}"
+    relative="${path#./}"
+    relative="${relative#conformance/}"
+    candidates=("$path")
+    [[ "$path" == /* ]] || candidates=("$(dirname "$tests")/$relative" "$path")
+    found=""
+    for candidate in "${candidates[@]}"; do
+        if [[ -e "$candidate" ]]; then found="$(realpath -- "$candidate")"; break; fi
+    done
+    if [[ -z "$found" ]]; then
+        echo "no test path $path for $arg: give it from the repo's root or from conformance/" >&2
+        exit 2
+    fi
+    narrowed+=("$found$node")
+done
+if ((${#narrowed[@]})); then
+    layers=("${narrowed[@]}")
+    pytest_args+=(--narrowed)
 fi
 
 # UI selections need real accessibility bindings even before the AT-SPI driver is enabled.
@@ -276,7 +319,7 @@ started=$SECONDS
 # -rfE: the hundreds of skips of a build short of parity would bury the failures; the summary line counts them.
 "$python" -m pytest "${layers[@]}" --impl rust "${bin_args[@]}" -rfE \
     --junitxml "$out/junit.xml" --nodeid-report "$out/nodeids.jsonl" "${selection[@]}" "${shard_args[@]}" \
-    "${extra[@]}" 2>&1 \
+    "${pytest_args[@]}" 2>&1 \
     | tee "$out/pytest.log"
 pytest_status=${PIPESTATUS[0]}
 elapsed=$((SECONDS - started))
