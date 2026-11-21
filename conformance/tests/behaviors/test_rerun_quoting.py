@@ -109,6 +109,8 @@ def _ready(ctl, sid, shell="bash", refused=None, **pane):
     def printed():
         if refused is not None and _runs(ctl, sid, refused, pane.get("pane", "left")):
             return RAN
+        # before a typed key, which closes a pane whose command exited
+        _started(ctl, sid, **pane)
         if not ctl.request("session.type", sid, text=line, **pane).ok:
             return None
         try:
@@ -241,7 +243,8 @@ CSH_RECEIVERS = {
     "env-nbsp": "/usr/bin/env NOTE=1\u00a0bash {tcsh}",
     "comment": "{tcsh} # bash",
     "space-and-x64-path": "'{spaced}'",
-    # upstream on macOS runs the value as `exec -l <value>`: a receiver after the `;` starts only behind a bare exec
+    # upstream on macOS runs the value as `exec -l <value>`: a receiver after the `;` starts only behind a bare exec.
+    # ngterm refuses it at the `>`; shell_dialect's unit tests cover the refusal at a `;`.
     "separator": "2>&2; {tcsh}",
 }
 FIRST_WORD_MISSES = {
