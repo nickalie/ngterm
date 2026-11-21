@@ -158,14 +158,37 @@ value_options=(
     --force-reruns --only-rerun --reruns --reruns-delay --reruns-delay-backoff-factor --rerun-except
     --rerun-exclude-path --reruns-mode --max-suite-reruns
 )
+# A short option takes its value attached (-ktwo) or as the next argument, also at the end of a cluster (-vk two), as
+# argparse reads it. Sets value_of when the next argument is the value, and selects when it is -k or -m.
+read_option() {
+    local arg="$1" letter i
+    if [[ "$arg" == --* ]]; then
+        if [[ " ${value_options[*]} " == *" $arg "* ]]; then value_of=1; fi
+        return
+    fi
+    for ((i = 1; i < ${#arg}; i++)); do
+        letter="${arg:i:1}"
+        [[ "$letter" == [a-zA-Z] ]] || return
+        if [[ " ${value_options[*]} " == *" -$letter "* ]]; then
+            if [[ "$letter" == [km] ]]; then selects=1; fi
+            if ((i == ${#arg} - 1)); then value_of=1; fi
+            return
+        fi
+    done
+}
 narrowed=()
 pytest_args=()
 value_of=""
+selects=""
 for arg in "${extra[@]}"; do
-    if [[ -n "$value_of" || "$arg" == -* ]]; then
+    if [[ -n "$value_of" ]]; then
         pytest_args+=("$arg")
         value_of=""
-        if [[ "$arg" == -* && " ${value_options[*]} " == *" $arg "* ]]; then value_of=1; fi
+        continue
+    fi
+    if [[ "$arg" == -* ]]; then
+        pytest_args+=("$arg")
+        read_option "$arg"
         continue
     fi
     if [[ -n "$ratchet_only" ]]; then
@@ -188,15 +211,12 @@ for arg in "${extra[@]}"; do
     fi
     narrowed+=("$found$node")
 done
-partial=""
+partial="$selects"
 if ((${#narrowed[@]})); then
     layers=("${narrowed[@]}")
     pytest_args+=(--narrowed)
     partial=1
 fi
-for arg in "${pytest_args[@]}"; do
-    if [[ "$arg" == -k* || "$arg" == -m* ]]; then partial=1; fi
-done
 
 # UI selections need real accessibility bindings even before the AT-SPI driver is enabled.
 for layer in "${layers[@]}"; do
@@ -393,6 +413,12 @@ fi
 # files the run used (nodeids.jsonl names them, --catalog/--ui-ids in the pytest args included).
 catalog_line="$("$python" -m agterm_conformance.coverage "$out/nodeids.jsonl" 2>&1)" || true
 
+# The plugin's run header holds the mode the ratchet check judged; the arguments only guess it when pytest wrote none.
+mode="$("$python" -c 'import json, sys; print(json.loads(open(sys.argv[1]).readline())["mode"])' \
+    "$out/nodeids.jsonl" 2>/dev/null)" || mode=""
+if [[ -z "$mode" ]]; then
+    if [[ -n "$partial" ]]; then mode=partial; else mode=full; fi
+fi
 build_commit="$(git -C "$repo" rev-parse --short HEAD)"
 if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)"; fi
 
@@ -403,7 +429,7 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
     if [[ -n "$ratchet_only" ]]; then
         echo "- mode: ratchet-only, the ids of \`$ratchet\`$( ((${#also[@]})) && printf ' + --also %s' "${also[@]}")$( \
             ((${#also_k[@]})) && printf ' + --also-k %s' "${also_k[@]}")"
-    elif [[ -n "$partial" ]]; then
+    elif [[ "$mode" == partial ]]; then
         echo "- mode: partial, the tests that \`-- ${extra[*]}\` selected"
     else
         echo "- mode: full"

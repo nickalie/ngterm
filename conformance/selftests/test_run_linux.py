@@ -554,6 +554,54 @@ def test_pytest_args_reach_pytest(tmp_path: Path, stage: Path, layers: Path) -> 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "pytest args: -k version" in report
     assert "rust: 1 pass, 0 fail" in report
+    assert "- mode: partial, the tests that `-- -k version` selected" in report
+
+
+@pytest.mark.parametrize(
+    ("args", "mode"),
+    [
+        (("--maxfail", "5"), "full"),
+        (("-r", "a"), "full"),
+        (("-p", "no:cacheprovider"), "full"),
+        (("-k", "test_"), "full"),
+        (("--deselect", OTHER_ID), "partial"),
+        (("-k", "version"), "partial"),
+    ],
+)
+def test_the_reports_mode_is_the_one_the_ratchet_judged(
+    tmp_path: Path, stage: Path, layers: Path, args: tuple[str, ...], mode: str
+) -> None:
+    (layers / "protocol" / "test_other.py").write_text(FAILING_TEST)
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", *args)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    header = json.loads((tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()[0])
+    assert header["mode"] == mode
+    assert f"- mode: {mode}\n" in report if mode == "full" else "- mode: partial, the tests that" in report
+
+
+def test_without_a_run_header_the_report_takes_the_mode_from_the_arguments(
+    tmp_path: Path, stage: Path, layers: Path
+) -> None:
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", "-vk", "version", "--no-such-option"
+    )
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert not (tmp_path / "report" / "nodeids.jsonl").exists()
+    assert "- mode: partial, the tests that" in report
+
+
+@pytest.mark.parametrize("args", [("-vk", "two"), ("-vktwo",), ("-qvm", "not slow", "-k", "two")])
+def test_a_clustered_short_option_keeps_its_value(
+    tmp_path: Path, stage: Path, layers: Path, args: tuple[str, ...]
+) -> None:
+    (layers / "protocol" / "test_param.py").write_text(PARAM_TEST)
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", *args)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    records = [json.loads(line) for line in (tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()]
+    assert [record["nodeid"] for record in records if record["kind"] == "test"] == [
+        "tests/protocol/test_param.py::test_case[two]"
+    ]
+    assert "- mode: partial, the tests that" in report
 
 
 PARAM_TEST = """
