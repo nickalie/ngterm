@@ -123,7 +123,7 @@ struct Registry {
     /// Where a content replica's worker asks for a file of its origin's: the pump [`init`] spawned.
     replica_reads: Option<async_channel::Sender<ReplicaRead>>,
     /// Where a link page's worker answers a read of its page scheme: the pump [`init`] spawned.
-    linked_reads: Option<async_channel::Sender<(SchemeToken, SchemeResponse)>>,
+    linked_reads: Option<async_channel::Sender<(SchemeToken, Result<PageResource, String>)>>,
     /// How the pages shown here for another machine reach it: the core's page channels, or a test's stand-in.
     replica: Option<Rc<dyn ReplicaLink>>,
 }
@@ -362,11 +362,11 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
-    let (linked, answered) = async_channel::unbounded::<(SchemeToken, SchemeResponse)>();
+    let (linked, answered) = async_channel::unbounded::<(SchemeToken, Result<PageResource, String>)>();
     with(|registry| registry.linked_reads = Some(linked));
     cx.spawn(async move |cx| {
-        while let Ok((token, response)) = answered.recv().await {
-            cx.update(|_| answer_with(|web| web.finish_scheme_request(token, response)));
+        while let Ok((token, result)) = answered.recv().await {
+            cx.update(|_| answer_resource(token, result));
         }
     })
     .detach();
@@ -1173,7 +1173,8 @@ pub fn answer_resource(token: SchemeToken, result: Result<PageResource, String>)
 
 /// A read of the replica scheme (upstream's `HtmlPageSchemeHandler`): served only for the replica page whose id the
 /// address names as its host, from the file of that path on the machine that opened it; a read naming another page,
-/// or from a page that is no replica, fails without reaching that machine.
+/// or from a page that is no replica, fails without reaching that machine. A Markdown link page's read is served
+/// from this machine's file through its link grant instead ([`serve_linked`]), which judges the file again.
 fn serve_replica(request: &SchemeRequest) {
     let page = request.view.and_then(page_of_view);
     if let Some(grant) = page.as_ref().and_then(|page| page.overlay().markdown_links) {
@@ -1212,25 +1213,26 @@ fn serve_replica(request: &SchemeRequest) {
 /// Serves a link page's read of `path` (upstream's `MarkdownPageSource.linkSource`): the document built on a worker,
 /// the grant judging the file again there, answered on the main thread; a read naming another page fails unread.
 fn serve_linked(token: SchemeToken, path: Option<String>, grant: ngterm_core::html::markdown_page::MarkdownLinkGrant) {
+    let Some(path) = path else {
+        return answer_with(|web| {
+            web.finish_scheme_request(
+                token,
+                SchemeResponse::Error {
+                    kind: SchemeError::PermissionDenied,
+                    message: policy::NOT_THIS_PAGE.to_owned(),
+                },
+            );
+        });
+    };
     let Some(answers) = with(|registry| registry.linked_reads.clone()) else {
         return;
     };
     std::thread::spawn(move || {
-        let response = match path.map(|path| super::documents::read_linked(&path, &grant)) {
-            Some(Ok(html)) => SchemeResponse::Bytes {
-                data: html.into_bytes(),
-                mime: "text/html; charset=utf-8".to_owned(),
-            },
-            Some(Err(message)) => SchemeResponse::Error {
-                kind: SchemeError::Failed,
-                message,
-            },
-            None => SchemeResponse::Error {
-                kind: SchemeError::PermissionDenied,
-                message: policy::NOT_THIS_PAGE.to_owned(),
-            },
-        };
-        let _ = answers.send_blocking((token, response));
+        let result = super::documents::read_linked(&path, &grant).map(|html| PageResource {
+            mime_type: "text/html; charset=utf-8".to_owned(),
+            body: html.into_bytes(),
+        });
+        let _ = answers.send_blocking((token, result));
     });
 }
 

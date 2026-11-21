@@ -167,7 +167,7 @@ fn document_content(path: &str, args: &Args, image: bool) -> Result<OverlayConte
         ));
     }
     // a Markdown page follows its links with navigation
-    if !image && !markdown_flags(args) {
+    if !image && page_only_flags(args) {
         return Err(ControlError::rejected(
             "session.overlay.open: --markdown takes no --wait, --cwd, --js, --chromeless, --persistent or --browse",
         ));
@@ -259,25 +259,17 @@ fn text_only_refusal(args: &Args) -> Option<&'static str> {
     wants_log(args).then_some(TAIL_WITHOUT_TEXT)
 }
 
-/// Whether a document source carries a flag only a program or a file/URL page takes: `--cwd`, `--wait`,
-/// `--navigation`, `--js`, `--chromeless`, `--persistent` or `--browse`.
+/// Whether a document source carries a flag only a program or a file/URL page takes: `--navigation` or one of
+/// [`page_only_flags`].
 fn document_flags(args: &Args) -> bool {
-    args.cwd.is_some()
-        || [
-            args.wait,
-            args.navigation,
-            args.javascript,
-            args.chromeless,
-            args.persistent,
-            args.browse,
-        ]
-        .contains(&Some(true))
+    page_only_flags(args) || args.navigation == Some(true)
 }
 
-/// Whether a Markdown source carries no flag but `--navigation`, the one it takes beside its source.
-fn markdown_flags(args: &Args) -> bool {
-    args.cwd.is_none()
-        && ![
+/// Whether a source carries `--cwd`, `--wait`, `--js`, `--chromeless`, `--persistent` or `--browse`, which a Markdown
+/// page refuses although it takes `--navigation`.
+fn page_only_flags(args: &Args) -> bool {
+    args.cwd.is_some()
+        || [
             args.wait,
             args.javascript,
             args.chromeless,

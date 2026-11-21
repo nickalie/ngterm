@@ -146,7 +146,7 @@ pub fn link_readable(overlay: &HtmlOverlay, url: &Url) -> bool {
     }
     markdown_link_path(url)
         .and_then(|path| ngterm_core::html::markdown_page::linked_document(&path, grant))
-        .is_some_and(|file| ngterm_app::documents::check_markdown(Path::new(&file)).is_ok())
+        .is_some_and(|file| ngterm_app::documents::check_markdown_text(Path::new(&file)).is_ok())
 }
 
 /// The file on this machine a link page's read of `uri` asks for; `None` for an address that names another page.
@@ -1327,6 +1327,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("README.md"), "x").unwrap();
         std::fs::write(dir.path().join("sub/guide.md"), "x").unwrap();
+        std::fs::write(dir.path().join("sub/latin1.md"), [b'c', 0xe9]).unwrap();
         let readme = dir.path().join("README.md").to_string_lossy().into_owned();
         let grant = ngterm_core::html::markdown_page::link_grant(&readme, "/nowhere");
         let flags = HtmlPageFlags {
@@ -1417,7 +1418,8 @@ mod tests {
     }
 
     /// On an engine that shows a custom protocol's failed read as a document, a link the page's source would refuse
-    /// goes nowhere: a missing file, one outside the folder or not Markdown; other pages' and other addresses pass.
+    /// goes nowhere: a missing file, one outside the folder, not Markdown or not UTF-8; other pages' and other addresses
+    /// pass.
     #[test]
     #[cfg(any(target_os = "macos", windows))]
     fn a_link_pages_unreadable_link_is_refused_before_it_loads() {
@@ -1425,6 +1427,7 @@ mod tests {
         assert!(link_readable(&page, &in_root(&page, "sub/guide.md")));
         assert!(!link_readable(&page, &in_root(&page, "sub/missing.md")));
         assert!(!link_readable(&page, &in_root(&page, "../outside.md")));
+        assert!(!link_readable(&page, &in_root(&page, "sub/latin1.md")));
         assert!(link_readable(&page, &url("https://example.com/x.md")));
         let plain = HtmlOverlay::new(page.source.clone(), HtmlPageFlags::default());
         assert!(link_readable(&plain, &in_root(&page, "sub/missing.md")));

@@ -152,6 +152,18 @@ pub fn check_markdown(path: &Path) -> Result<(), String> {
         .map_err(|failure| markdown_failure(failure, &path.display()))
 }
 
+/// [`probe_markdown`] with its pictures left out: whether the file reads as a Markdown page's UTF-8 text.
+///
+/// # Errors
+/// [`probe_markdown`]'s refusals.
+pub fn check_markdown_text(path: &Path) -> Result<(), String> {
+    let bytes = bounded_file::read(path, markdown_page::MAX_BYTES)
+        .map_err(|failure| markdown_failure(failure, &path.display()))?;
+    std::str::from_utf8(&bytes)
+        .map(|_| ())
+        .map_err(|_| format!("not a UTF-8 text file: {}", path.display()))
+}
+
 /// Read UTF-8 Markdown and embed bounded, locally-contained raster references.
 ///
 /// # Errors

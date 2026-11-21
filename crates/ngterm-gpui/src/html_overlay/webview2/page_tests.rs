@@ -782,6 +782,126 @@ fn an_http_error_is_a_page_unless_the_apps_own_protocol_refused_the_read(cx: &mu
     );
 }
 
+/// A Markdown page that follows its links: `README.md` and `sub/guide.md` in a folder of their own.
+fn link_overlay() -> (TempDir, HtmlOverlay) {
+    let directory = TempDir::new().unwrap();
+    std::fs::create_dir(directory.path().join("sub")).unwrap();
+    std::fs::write(directory.path().join("README.md"), "# Read me").unwrap();
+    std::fs::write(directory.path().join("sub/guide.md"), "# Guide").unwrap();
+    let readme = directory.path().join("README.md").to_string_lossy().into_owned();
+    let grant = ngterm_core::html::markdown_page::link_grant(&readme, "/nowhere");
+    assert!(grant.is_some());
+    let flags = ngterm_core::html::HtmlPageFlags {
+        navigation: true,
+        ..ngterm_core::html::HtmlPageFlags::default()
+    };
+    (
+        directory,
+        HtmlOverlay::linked(HtmlSource::Markdown { path: readme }, flags, grant),
+    )
+}
+
+/// The engine's address of `name` in a link page's folder.
+fn linked_address(source: &HtmlOverlay, name: &str) -> String {
+    let root = std::path::Path::new(&source.markdown_links.as_ref().unwrap().root).join(name);
+    scheme::markdown_address(source.id, &root.to_string_lossy()).unwrap()
+}
+
+/// A loaded link page that follows a link to `sub/guide.md`, its load in flight.
+fn following_a_link(source: &HtmlOverlay, cx: &mut TestAppContext) -> Driven {
+    let mut driven = realized(source);
+    driven.report(Report::Committed, cx);
+    driven.report(
+        Report::Completed {
+            id: 1,
+            success: true,
+            status: 0,
+            http: 200,
+        },
+        cx,
+    );
+    assert_eq!(driven.load(), (HtmlLoadState::Loaded, None));
+    driven.report(
+        Report::Navigation {
+            navigation: navigation(&linked_address(source, "sub/guide.md"), true, true, false, 2),
+            allowed: true,
+        },
+        cx,
+    );
+    assert_eq!(driven.load().0, HtmlLoadState::Loading);
+    driven
+}
+
+#[test]
+fn a_link_page_loads_its_file_through_the_page_protocol() {
+    let (_directory, source) = link_overlay();
+    let grant = source.markdown_links.clone().unwrap();
+    let driven = realized(&source);
+    let address = scheme::markdown_address(source.id, &grant.path).unwrap();
+    assert!(driven.view.take().contains(&Call::Load(address)));
+}
+
+#[gpui_kit::test]
+fn a_link_pages_first_load_that_fails_fails_the_page(cx: &mut TestAppContext) {
+    let (_directory, source) = link_overlay();
+    let mut driven = realized(&source);
+    driven.report(
+        Report::Completed {
+            id: 1,
+            success: false,
+            status: 13,
+            http: 0,
+        },
+        cx,
+    );
+    assert_eq!(driven.load(), (HtmlLoadState::Failed, Some(error_text(13))));
+}
+
+#[gpui_kit::test]
+fn a_followed_link_that_fails_keeps_the_shown_file(cx: &mut TestAppContext) {
+    let (_directory, source) = link_overlay();
+    let mut driven = following_a_link(&source, cx);
+    driven.report(
+        Report::Completed {
+            id: 2,
+            success: false,
+            status: 13,
+            http: 0,
+        },
+        cx,
+    );
+    assert_eq!(driven.load(), (HtmlLoadState::Loaded, None));
+}
+
+#[gpui_kit::test]
+fn a_refused_step_of_a_followed_link_keeps_the_shown_file(cx: &mut TestAppContext) {
+    let (_directory, source) = link_overlay();
+    let mut driven = following_a_link(&source, cx);
+    driven.report(
+        Report::Navigation {
+            navigation: navigation(OUTSIDE, true, false, false, 3),
+            allowed: false,
+        },
+        cx,
+    );
+    assert_eq!(driven.load(), (HtmlLoadState::Loaded, None));
+}
+
+#[test]
+fn a_link_page_cancels_a_link_its_source_cannot_read() {
+    let (directory, source) = link_overlay();
+    std::fs::write(directory.path().join("sub/latin1.md"), [b'c', 0xe9]).unwrap();
+    let driven = realized(&source);
+    let follows = |name: &str| {
+        driven
+            .page
+            .allows(&navigation(&linked_address(&source, name), true, true, false, 2))
+    };
+    assert!(follows("sub/guide.md"));
+    assert!(!follows("sub/missing.md"));
+    assert!(!follows("sub/latin1.md"));
+}
+
 #[gpui_kit::test]
 fn a_failed_navigation_names_why_and_a_superseded_one_is_not_a_failure(cx: &mut TestAppContext) {
     let mut driven = realized(&url_overlay());

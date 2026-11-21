@@ -798,7 +798,8 @@ pub fn relay(page: Uuid, body: String, reply: u64) {
 
 /// A read of the replica protocol (upstream's `HtmlPageSchemeHandler`): served only for the replica page whose id the
 /// address names as its host, from the file of that path on the machine that opened it; a read naming another page,
-/// or from a page that is no replica, fails without reaching that machine.
+/// or from a page that is no replica, fails without reaching that machine. A Markdown link page's read is served from
+/// this machine's file through its link grant instead ([`serve_linked`]), which judges the file again.
 fn replica_read(page_id: Uuid, uri: &str, reply: ReadReply) {
     if let Some(grant) = page(page_id).and_then(|page| page.overlay().markdown_links) {
         return serve_linked(policy::markdown_link_read(uri, page_id), grant, reply);

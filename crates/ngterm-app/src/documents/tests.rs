@@ -294,6 +294,8 @@ fn markdown_plain_utf8_and_checks_have_exact_failures() {
         probe_markdown(&bad).unwrap_err(),
         format!("not a UTF-8 text file: {}", bad.display())
     );
+    check_markdown_text(&path).unwrap();
+    assert_eq!(check_markdown_text(&bad), probe_markdown(&bad).map(|_| ()));
     let big = write(dir.path(), "big.md", []);
     File::options()
         .write(true)
@@ -304,6 +306,7 @@ fn markdown_plain_utf8_and_checks_have_exact_failures() {
     let message = format!("markdown file too large (over 4 MB): {}", big.display());
     assert_eq!(check_markdown(&big).unwrap_err(), message);
     assert_eq!(probe_markdown(&big).unwrap_err(), message);
+    assert_eq!(check_markdown_text(&big).unwrap_err(), message);
 }
 
 /// Upstream's `TextProbeTests`: the text read back, and each refusal with its path.
