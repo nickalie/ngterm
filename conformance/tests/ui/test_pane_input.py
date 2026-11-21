@@ -177,5 +177,6 @@ def test_option_types_the_layouts_text_by_default_on_other_layouts(ctl, ui):
         pytest.skip(f"the keyboard layout {layout} makes Option Alt by default")
     with configured(ctl, OPTION_TYPES_TEXT):
         text = _option_echo(ctl, ui)
-    assert "^[" not in text
+    # `cat -v` shows a 0x9B byte of UTF-8 text (ś is C5 9B) as `M-^[`: only a `^[` without `M-` is an ESC
+    assert not re.search(r"(?<!M-)\^\[", text), text
     assert _option_echo(ctl, ui) == text
