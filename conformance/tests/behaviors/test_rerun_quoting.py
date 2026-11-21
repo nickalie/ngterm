@@ -9,6 +9,7 @@ import itertools
 import json
 import shlex
 import shutil
+import subprocess
 import sys
 import time
 
@@ -45,6 +46,7 @@ BANGS = ("!needle", "fix!x", "!")
 BASH = shutil.which("bash", path="/usr/bin:/bin")
 _markers = itertools.count(1)
 RAN = object()
+LAUNCH_FAILED = "failed to launch the requested command"
 
 
 def _quoted(word, shell):
@@ -112,9 +114,27 @@ def _ready(ctl, sid, shell="bash", refused=None, **pane):
         try:
             return ctl.wait_text(sid, rf"(?m)^{marker}\s*$", timeout=2, **pane)
         except AssertionError:
+            _started(ctl, sid, **pane)
             return None
 
     return wait_until(printed, timeout=SHELL_START)
+
+
+def _started(ctl, sid, **pane):
+    """Fails the test, never as an AssertionError an `upstream_bug` allowance would excuse, when the pane's command
+    did not start: its shell then never reads a line."""
+    response = ctl.request("session.text", sid, all=True, **pane)
+    text = response.result.get("text", "") if response.ok else ""
+    if LAUNCH_FAILED in text:
+        pytest.fail(f"the pane's command did not start: {text}", pytrace=False)
+
+
+def _env_has_argv0():
+    try:
+        run = subprocess.run(["/usr/bin/env", "--argv0", "sh", "/bin/sh", "-c", ":"], capture_output=True, check=False)
+    except OSError:
+        return False
+    return run.returncode == 0
 
 
 def _runs(ctl, sid, argv, pane):
@@ -217,22 +237,32 @@ CSH_RECEIVERS = {
     "env-quoted-assignment": "/usr/bin/env NOTE='use bash' {tcsh}",
     "env-split-string": "/usr/bin/env -S 'NOTE=\"use bash\" {tcsh} -l'",
     "env-argv0": "/usr/bin/env --argv0 bash {tcsh}",
+    "env-unset": "/usr/bin/env -u bash {tcsh}",
     "env-nbsp": "/usr/bin/env NOTE=1\u00a0bash {tcsh}",
     "comment": "{tcsh} # bash",
     "space-and-x64-path": "'{spaced}'",
-    "separator": "/usr/bin/env bash -c :;{tcsh}",
+    # upstream on macOS runs the value as `exec -l <value>`: a receiver after the `;` starts only behind a bare exec
+    "separator": "2>&2; {tcsh}",
 }
 FIRST_WORD_MISSES = {
-    "env", "env-quoted-assignment", "env-split-string", "env-argv0", "env-nbsp", "space-and-x64-path", "separator",
+    "env", "env-quoted-assignment", "env-split-string", "env-argv0", "env-unset", "env-nbsp", "space-and-x64-path",
+    "separator",
 }
 # A value whose receiver ngterm cannot tell (another command may follow) gets no replay at all.
 UNCERTAIN = {"separator"}
 
 
+def _receiver(name):
+    marks = [FIRST_WORD_RECEIVER] if name in FIRST_WORD_MISSES else []
+    if name == "env-argv0" and not _env_has_argv0():
+        marks.append(pytest.mark.skip(reason="this /usr/bin/env has no --argv0 (macOS's has none)"))
+    return pytest.param(name, marks=marks)
+
+
 @pytest.mark.covers("behavior:restore.rerun-replays-captured-command", "behavior:restore.rerun-types-pinned-command")
 @pytest.mark.parametrize(
     "receiver",
-    [pytest.param(name, marks=FIRST_WORD_RECEIVER) if name in FIRST_WORD_MISSES else name for name in CSH_RECEIVERS],
+    [_receiver(name) for name in CSH_RECEIVERS],
 )
 def test_rerun_starts_a_plain_csh_for_a_capture_with_a_bang(launch, tmp_path, receiver):
     shells = tmp_path / "shells"
@@ -250,13 +280,14 @@ def test_rerun_starts_a_plain_csh_for_a_capture_with_a_bang(launch, tmp_path, re
     pin = f"printf '%s%s|%s|\\n' {marker[:3]} {marker[3:]} '!'"
     assert_ok(ctl.request("session.restore", pinned, mode="set", command=pin))
     ctl = _relaunch(launch, ctl, refused, replayed, pinned)
+    # first, so the reference fails on the receiver its allowance names
+    _plain(ctl, refused, banged)
     if receiver in UNCERTAIN:
         _plain(ctl, replayed, safe)
     else:
         _replays(ctl, replayed, safe)
     _show(ctl, pinned)
     ctl.wait_text(pinned, rf"(?m)^{marker}\|!\|\s*$", timeout=SHELL_START)
-    _plain(ctl, refused, banged)
 
 
 @pytest.mark.covers("behavior:restore.rerun-replays-captured-command")
