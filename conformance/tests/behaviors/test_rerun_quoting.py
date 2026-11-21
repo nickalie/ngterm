@@ -7,6 +7,7 @@ receiver check reads only the shell's name, and no csh has to be installed."""
 
 import itertools
 import json
+import re
 import shlex
 import shutil
 import sys
@@ -40,6 +41,8 @@ MARKED = ("it'\u0301s; echo INJECTED", "x'\ufe0f", "y'\U0001f3fb", "'\u0301'")
 # Bytes a fish replay must keep: fish reads `\\` and a trailing `\` in single quotes its own way.
 BACKSLASHES = ("a\\\\b", "trail\\", "\\\\", "\\'", "c:\\path\\")
 OTHER = ("it's", "a b", "$HOME", "semi;colon", '"dq"', "")
+# Keys a pairing plugin binds (fish's autopair): quotes, brackets, parentheses and braces, paired or not.
+PAIRED = ("(paren)", "[brack]", "{brace}", "x(y", ")", "]", "}", "''", "mix'\"([{", "it's (a) [b] {c}")
 # Never typed into csh or tcsh: their history expansion reads `!` inside single quotes.
 BANGS = ("!needle", "fix!x", "!")
 # macOS has bash only at /bin/bash, usrmerged Linux at both paths.
@@ -206,11 +209,41 @@ def test_rerun_replays_the_same_bytes_into_each_shell(launch, shell):
     ctl = launch(settings={"restoreMode": "rerun"}, pane_shell=path)
     _shell_home(ctl)
     sid = _new(ctl)
-    argv = _run(ctl, sid, _program(*BANGS, *MARKED, *BACKSLASHES, *OTHER), shell)
+    argv = _run(ctl, sid, _program(*BANGS, *MARKED, *BACKSLASHES, *OTHER, *PAIRED), shell)
     ctl = _relaunch(launch, ctl, sid)
     _replays(ctl, sid, argv)
     text = assert_ok(ctl.request("session.text", sid, all=True))["text"]
     assert "INJECTED\n" not in text.replace("\r", "")
+
+
+@pytest.mark.covers("behavior:restore.rerun-types-pinned-command")
+@pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
+def test_rerun_types_a_pinned_line_with_quotes_and_brackets_into_each_shell(launch, shell):
+    path = shutil.which(shell, path="/usr/bin:/bin")
+    if path is None:
+        pytest.skip(f"no {shell} on this machine")
+    ctl = launch(settings={"restoreMode": "rerun"}, pane_shell=path)
+    _shell_home(ctl)
+    sid = _new(ctl)
+    marker = f"PQ{next(_markers):04d}X"
+    words = " ".join(_quoted(word, shell) for word in PAIRED)
+    pin = f"printf '%s%s' {marker[:3]} {marker[3:]}; printf '|%s' {words}; echo '|'"
+    assert_ok(ctl.request("session.restore", sid, mode="set", command=pin))
+    ctl = launch.relaunch(ctl)
+    _show(ctl, sid)
+    printed = "".join(f"|{word}" for word in PAIRED) + "|"
+    ctl.wait_text(sid, rf"(?m)^{marker}{re.escape(printed)}\s*$", timeout=SHELL_START)
+
+
+@pytest.mark.covers("behavior:restore.rerun-replays-captured-command")
+def test_rerun_reaches_a_bash_with_bracketed_paste_off(launch):
+    """A bash that never turns bracketed paste on still gets the replay, typed, once ngterm stops waiting for it."""
+    ctl = launch(settings={"restoreMode": "rerun"}, pane_shell=BASH)
+    (ctl.instance.home / ".bashrc").write_text("bind 'set enable-bracketed-paste off'\nPS1='$ '\n")
+    sid = _new(ctl)
+    argv = _run(ctl, sid, _program(*PAIRED, *OTHER))
+    ctl = _relaunch(launch, ctl, sid)
+    _replays(ctl, sid, argv)
 
 
 FIRST_WORD_RECEIVER = pytest.mark.upstream_bug(
