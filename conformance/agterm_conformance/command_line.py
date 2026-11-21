@@ -10,12 +10,22 @@ from __future__ import annotations
 
 import os
 import shlex
+import subprocess
 from dataclasses import dataclass
 
 import pytest
 
 POSIX = "posix-command-line"
 CMD = "cmd-command-line"
+
+
+def env_has_argv0(env: str = "/usr/bin/env") -> bool:
+    """Whether `env` takes `--argv0` (GNU env does, macOS's does not)."""
+    try:
+        run = subprocess.run([env, "--argv0", "sh", "/bin/sh", "-c", ":"], capture_output=True, check=False)
+    except OSError:
+        return False
+    return run.returncode == 0
 
 
 @dataclass(frozen=True)

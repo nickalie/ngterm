@@ -9,11 +9,11 @@ import itertools
 import json
 import shlex
 import shutil
-import subprocess
 import sys
 import time
 
 import pytest
+from agterm_conformance.command_line import env_has_argv0
 from agterm_conformance.match import assert_ok, find_session, program_argv, sessions
 from agterm_conformance.plugin import Ctl
 from agterm_conformance.shell_profiles import SHELL_PROFILES
@@ -129,14 +129,6 @@ def _started(ctl, sid, **pane):
     text = response.result.get("text", "") if response.ok else ""
     if LAUNCH_FAILED in text:
         pytest.fail(f"the pane's command did not start: {text}", pytrace=False)
-
-
-def _env_has_argv0():
-    try:
-        run = subprocess.run(["/usr/bin/env", "--argv0", "sh", "/bin/sh", "-c", ":"], capture_output=True, check=False)
-    except OSError:
-        return False
-    return run.returncode == 0
 
 
 def _runs(ctl, sid, argv, pane):
@@ -257,7 +249,7 @@ UNCERTAIN = {"separator"}
 
 def _receiver(name):
     marks = [FIRST_WORD_RECEIVER] if name in FIRST_WORD_MISSES else []
-    if name == "env-argv0" and not _env_has_argv0():
+    if name == "env-argv0" and not env_has_argv0():
         marks.append(pytest.mark.skip(reason="this /usr/bin/env has no --argv0 (macOS's has none)"))
     return pytest.param(name, marks=marks)
 
