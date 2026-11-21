@@ -417,7 +417,7 @@ catalog_line="$("$python" -m agterm_conformance.coverage "$out/nodeids.jsonl" 2>
 mode="$("$python" -c 'import json, sys; print(json.loads(open(sys.argv[1]).readline())["mode"])' \
     "$out/nodeids.jsonl" 2>/dev/null)" || mode=""
 if [[ -z "$mode" ]]; then
-    if [[ -n "$partial" ]]; then mode=partial; else mode=full; fi
+    if [[ -n "$ratchet_only" ]]; then mode=ratchet-only; elif [[ -n "$partial" ]]; then mode=partial; else mode=full; fi
 fi
 build_commit="$(git -C "$repo" rev-parse --short HEAD)"
 if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)"; fi
@@ -426,7 +426,9 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
     echo "## rust-linux conformance"
     echo
     echo "- build: $build_commit, \`$stage\`"
-    if [[ -n "$ratchet_only" ]]; then
+    if [[ "$mode" == ratchet-only && -z "$ratchet_only" ]]; then
+        echo "- mode: ratchet-only, the tests that \`-- ${extra[*]}\` selected"
+    elif [[ "$mode" == ratchet-only ]]; then
         echo "- mode: ratchet-only, the ids of \`$ratchet\`$( ((${#also[@]})) && printf ' + --also %s' "${also[@]}")$( \
             ((${#also_k[@]})) && printf ' + --also-k %s' "${also_k[@]}")"
     elif [[ "$mode" == partial ]]; then

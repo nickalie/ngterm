@@ -590,6 +590,36 @@ def test_without_a_run_header_the_report_takes_the_mode_from_the_arguments(
     assert "- mode: partial, the tests that" in report
 
 
+@pytest.mark.parametrize(
+    ("args", "mode", "line"),
+    [
+        (("--ratchet-only", "--", "-k", "version"), "partial", "- mode: partial, the tests that `-- -k version`"),
+        (("--", "--ratchet-only", "LISTED"), "ratchet-only", "- mode: ratchet-only, the tests that `-- --ratchet-only"),
+        (("--ratchet-only", "--", "--maxfail", "5"), "ratchet-only", "- mode: ratchet-only, the ids of"),
+    ],
+)
+def test_the_reports_mode_follows_the_run_header_in_a_ratchet_only_run(
+    tmp_path: Path, stage: Path, layers: Path, args: tuple[str, ...], mode: str, line: str
+) -> None:
+    (layers / "protocol" / "test_other.py").write_text(OTHER_TEST)
+    listed = ratchet(tmp_path, PROBE_ID, OTHER_ID)
+    args = tuple(str(listed) if arg == "LISTED" else arg for arg in args)
+    completed, report = run(tmp_path, stage, layers, listed, *args)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    header = json.loads((tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()[0])
+    assert header["mode"] == mode
+    assert line in report
+
+
+def test_without_a_run_header_a_ratchet_only_run_says_so(tmp_path: Path, stage: Path, layers: Path) -> None:
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--ratchet-only", "--", "-k", "version", "--no-such-option"
+    )
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert not (tmp_path / "report" / "nodeids.jsonl").exists()
+    assert "- mode: ratchet-only, the ids of" in report
+
+
 @pytest.mark.parametrize("args", [("-vk", "two"), ("-vktwo",), ("-qvm", "not slow", "-k", "two")])
 def test_a_clustered_short_option_keeps_its_value(
     tmp_path: Path, stage: Path, layers: Path, args: tuple[str, ...]
