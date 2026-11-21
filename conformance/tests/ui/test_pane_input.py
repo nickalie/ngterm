@@ -157,3 +157,25 @@ def test_option_is_alt_by_default_on_the_us_layouts(ctl, ui):
     with _reading(ctl, "cat -v") as sid:
         ui.press("alt+s", "alt+e", "e", "return")
         ctl.wait_text(sid, r"\^\[s\^\[ee\s+\^\[s\^\[ee", all=True)
+
+
+def _option_echo(ctl, ui):
+    """What `cat -v` prints back for Option-s and Option-g, between two marks."""
+    with _reading(ctl, "cat -v") as sid:
+        ui.type_text("[")
+        ui.press("alt+s", "alt+g")
+        ui.type_text("]")
+        ui.press("return")
+        return ctl.wait_text(sid, r"\[(.*)\]\s+\[(.*)\]", all=True).group(2)
+
+
+@MAC
+@pytest.mark.covers("session.text", "config.reload", "behavior:pane.typing")
+def test_option_types_the_layouts_text_by_default_on_other_layouts(ctl, ui):
+    layout = _keyboard_layout()
+    if layout in OPTION_AS_ALT_LAYOUTS:
+        pytest.skip(f"the keyboard layout {layout} makes Option Alt by default")
+    with configured(ctl, OPTION_TYPES_TEXT):
+        text = _option_echo(ctl, ui)
+    assert "^[" not in text
+    assert _option_echo(ctl, ui) == text
