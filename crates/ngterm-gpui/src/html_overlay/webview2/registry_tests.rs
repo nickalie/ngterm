@@ -369,6 +369,31 @@ fn a_spec_that_cannot_be_built_fails_the_page_with_the_reason(cx: &mut TestAppCo
 /// A page and what its web view must have been built with.
 type SourceCheck = (HtmlOverlay, fn(&Spec));
 
+/// A Markdown link page reads its files through the replica protocol with the Markdown renderer.
+fn link_page_case() -> SourceCheck {
+    (
+        HtmlOverlay::linked(
+            HtmlSource::Markdown {
+                path: "/g/README.md".to_owned(),
+            },
+            ngterm_core::html::HtmlPageFlags {
+                navigation: true,
+                ..ngterm_core::html::HtmlPageFlags::default()
+            },
+            Some(ngterm_core::html::markdown_page::MarkdownLinkGrant {
+                path: "/g/README.md".to_owned(),
+                root: "/g".to_owned(),
+            }),
+        ),
+        |spec: &Spec| {
+            assert!(
+                spec.replica.is_some() && spec.text.is_none() && spec.trusted_document_script.is_some(),
+                "a link page reads its files through the replica protocol with the Markdown renderer"
+            );
+        },
+    )
+}
+
 #[gpui_kit::test]
 fn each_source_gets_the_web_view_its_page_needs(cx: &mut TestAppContext) {
     let engine = pumped(cx);
@@ -378,7 +403,7 @@ fn each_source_gets_the_web_view_its_page_needs(cx: &mut TestAppContext) {
     let grant = directory.path().to_string_lossy().into_owned();
     let mut scripted = url_overlay();
     scripted.flags.javascript = true;
-    let cases: [SourceCheck; 8] = [
+    let cases: [SourceCheck; 9] = [
         (scripted, |spec: &Spec| assert!(spec.javascript && spec.theme.is_some())),
         (
             overlay(HtmlSource::Image {
@@ -432,27 +457,7 @@ fn each_source_gets_the_web_view_its_page_needs(cx: &mut TestAppContext) {
                 );
             },
         ),
-        (
-            HtmlOverlay::linked(
-                HtmlSource::Markdown {
-                    path: "/g/README.md".to_owned(),
-                },
-                ngterm_core::html::HtmlPageFlags {
-                    navigation: true,
-                    ..ngterm_core::html::HtmlPageFlags::default()
-                },
-                Some(ngterm_core::html::markdown_page::MarkdownLinkGrant {
-                    path: "/g/README.md".to_owned(),
-                    root: "/g".to_owned(),
-                }),
-            ),
-            |spec: &Spec| {
-                assert!(
-                    spec.replica.is_some() && spec.text.is_none() && spec.trusted_document_script.is_some(),
-                    "a link page reads its files through the replica protocol with the Markdown renderer"
-                );
-            },
-        ),
+        link_page_case(),
     ];
     for (index, (source, check)) in cases.iter().enumerate() {
         let model = Model::new(source);

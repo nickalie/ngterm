@@ -388,7 +388,12 @@ mod tests {
         std::fs::write(root.join("notes.txt"), "x").unwrap();
         let readme = root.join("README.md").to_string_lossy().into_owned();
         let grant = markdown_page::link_grant(&readme, "/nowhere").unwrap();
-        let at = |name: &str| root.join(name).to_string_lossy().into_owned();
+        let at = |name: &str| {
+            std::path::Path::new(&grant.root)
+                .join(name)
+                .to_string_lossy()
+                .into_owned()
+        };
 
         let first = read_linked(&grant.path, &grant).unwrap();
         assert!(first.contains("data-links=\"local\"") && first.contains("[guide](sub/guide.md)"));
