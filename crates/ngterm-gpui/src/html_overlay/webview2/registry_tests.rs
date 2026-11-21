@@ -252,7 +252,11 @@ fn a_mounted_page_is_made_by_the_pump_placed_and_loaded(cx: &mut TestAppContext)
     assert!(spec.grant.is_none() && spec.text.is_none() && spec.replica.is_none());
     assert_eq!(
         engine.probe(0).take(),
-        [Call::Load("https://example.invalid/start".to_owned())]
+        [
+            Call::Load("https://example.invalid/start".to_owned()),
+            Call::KeepProfile
+        ],
+        "the first load starts before what keeps the profile is made"
     );
 
     let again = cx.update(|window, cx| mount(&source, None, window, cx)).unwrap();
@@ -437,6 +441,32 @@ fn each_source_gets_the_web_view_its_page_needs(cx: &mut TestAppContext) {
         assert_eq!(engine.made(), index + 1);
         check(&engine.spec(index));
     }
+}
+
+#[gpui_kit::test]
+fn a_saved_page_loads_before_its_profile_is_kept_and_a_closed_one_keeps_nothing(cx: &mut TestAppContext) {
+    let engine = pumped(cx);
+    let directory = TempDir::new().unwrap();
+    state_dir_at(directory.path());
+    let source = url_overlay();
+    let model = Model::new(&source);
+    let page = page_of(&source, Storage::Saved, &model);
+    page.place_in(3);
+    build(page.id());
+    assert_eq!(
+        engine.probe(0).take(),
+        [
+            Call::Load("https://example.invalid/start".to_owned()),
+            Call::KeepProfile
+        ]
+    );
+
+    let closed = page_of(&source, Storage::Saved, &model);
+    closed.place_in(3);
+    cx.update(|cx| closed.close(cx));
+    build(closed.id());
+    assert_eq!(engine.made(), 2);
+    assert!(engine.probe(1).take().is_empty(), "a closed page's web view is buried");
 }
 
 #[gpui_kit::test]

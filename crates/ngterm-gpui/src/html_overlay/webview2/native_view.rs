@@ -40,6 +40,9 @@ pub trait NativeView {
     fn redeliver_key(&self, events: &[serde_json::Value]);
     /// Evaluates `expression` in the renderer's world; its answer arrives on the returned channel.
     fn call_renderer(&self, expression: &str) -> Receiver<Answer>;
+    /// Keeps the web view's profile and browser loaded for later pages, once the page's first load started: making
+    /// what keeps them waits on the engine, and the page's load must not wait on it.
+    fn keep_profile(&self) {}
 }
 
 /// Makes the web view `spec` describes, with the environment it runs in, which later pages share.

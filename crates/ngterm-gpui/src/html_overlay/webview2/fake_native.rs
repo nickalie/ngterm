@@ -37,6 +37,7 @@ pub(super) enum Call {
     Renderer(String),
     #[cfg(windows)]
     Redelivered(Vec<serde_json::Value>),
+    KeepProfile,
 }
 
 /// One web view as the test watches it: what it was asked, and whether its last holder let it go.
@@ -128,6 +129,9 @@ impl NativeView for FakeView {
     #[cfg(windows)]
     fn redeliver_key(&self, events: &[serde_json::Value]) {
         self.record(Call::Redelivered(events.to_vec()));
+    }
+    fn keep_profile(&self) {
+        self.record(Call::KeepProfile);
     }
     fn call_renderer(&self, expression: &str) -> Receiver<Answer> {
         self.record(Call::Renderer(expression.to_owned()));

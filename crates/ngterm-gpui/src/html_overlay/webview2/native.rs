@@ -223,6 +223,7 @@ pub struct Native {
     /// The renderer's execution context, from its binding's last report: where a call into its world runs.
     renderer: Rc<Cell<Option<i64>>>,
     post: Post,
+    store: Store,
 }
 
 impl Native {
@@ -235,6 +236,7 @@ impl Native {
             theme: Rc::default(),
             renderer: Rc::default(),
             post: Rc::clone(&spec.post),
+            store: spec.store.clone(),
         };
         let webview = native.webview();
         let main_document = MainDocument::default();
@@ -265,7 +267,6 @@ impl Native {
             }
             native.add_isolated_document_script(script)?;
         }
-        hold_profile(&spec.store, &native);
         Ok(native)
     }
 
@@ -383,6 +384,10 @@ impl Native {
 }
 
 impl NativeView for Native {
+    fn keep_profile(&self) {
+        hold_profile(&self.store, self);
+    }
+
     /// Evaluates `expression` in the renderer's world (CDP's `Runtime.evaluate` in its context, a promise awaited);
     /// its answer arrives on the returned channel. Before the renderer's first report there is no context to run in.
     fn call_renderer(&self, expression: &str) -> async_channel::Receiver<super::super::text_page::Answer> {
@@ -1324,7 +1329,8 @@ fn host_window() -> Result<isize, String> {
     Ok(window)
 }
 
-/// Makes the anchor beside page web view `native`: the saved store's for a page on it, else one that only keeps the
+/// Makes the anchor beside page web view `native` once its first load started, since making one waits on `WebView2`
+/// (over a second on CI for the saved store's first): the saved store's for a page on it, else one that only keeps the
 /// browser, unless an anchor already does. Its in-memory profile's name is a page's, so its folder is swept with theirs.
 fn hold_profile(store: &Store, native: &Native) {
     let keeper = store::page_profile(uuid::Uuid::nil());

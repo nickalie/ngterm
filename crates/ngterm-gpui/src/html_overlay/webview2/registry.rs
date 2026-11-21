@@ -423,7 +423,10 @@ fn build(id: Uuid) {
                     registry.environment.get_or_insert(environment);
                 });
             }
-            page.realized(native);
+            page.realized(Rc::clone(&native));
+            if page.active() {
+                native.keep_profile();
+            }
         }
         Err(failure) => {
             tracing::warn!(page = %id, failure, "WebView2 could not make the page's web view");
