@@ -9,6 +9,10 @@ internal final class KeyboardTests: XCTestCase {
     private static let wait: TimeInterval = 15
     // how long the slide-to-type introduction gets to come up after the keyboard, which it follows within a moment
     private static let introductionWait: TimeInterval = 5
+    // a letter of the soft keyboard: on the screen once the keyboard is, as every letter the tests tap
+    private static let readinessKey = "c"
+    // how far a frame's edge may lie past the screen's, in points, from rounding
+    private static let onScreenSlack: CGFloat = 1
     // how far apart a wait reads a line of the bench, which draws its lines again five times a second
     private static let readBeat: TimeInterval = 0.2
     // a touch held a moment: longer than an arrow's hold (100 ms), shorter than its first repeat (400 ms)
@@ -44,6 +48,40 @@ internal final class KeyboardTests: XCTestCase {
         }
         introduction.buttons["Continue"].tap()
         FakeApp.expectGone(introduction, "the slide-to-type introduction", lasting: wait)
+    }
+
+    // Waits until the soft keyboard's keys are on the screen, and returns the keyboard: nil, with the test failed, when
+    // they stay below it. A keyboard in the hierarchy is not yet one on the screen: the system keeps it below the
+    // screen while it takes a hardware keyboard as attached, and a key there can't be tapped. Only reads that completed
+    // and found no keyboard at all are a reason to skip: a wait on time alone can end with no read on a loaded runner.
+    @MainActor
+    private static func softKeyboard(in app: XCUIApplication) throws -> XCUIElement? {
+        let keyboard = app.keyboards.firstMatch
+        let screen = app.windows.firstMatch.frame.insetBy(dx: -onScreenSlack, dy: -onScreenSlack)
+        var seen: CGRect?
+        let shown = ScreenRead.Wait(reads: 1, lasting: wait).poll {
+            ScreenRead.shows(keyboard.keys[readinessKey]) { key in
+                seen = key.frame
+                return screen.contains(key.frame)
+            }
+        }
+        if shown.held {
+            return keyboard
+        }
+        guard shown.reads > 0 else {
+            FakeApp.attachScreen("no read of the soft keyboard")
+            XCTFail("no read of the soft keyboard completed in \(Int(shown.seconds)) s (\(shown.failed) failed)")
+            return nil
+        }
+        guard let seen else {
+            throw XCTSkip("the simulator has the Mac's keyboard attached, so no soft keyboard shows")
+        }
+        FakeApp.attachScreen("the soft keyboard below the screen")
+        XCTFail(
+            "the soft keyboard's '\(readinessKey)' stays at \(seen), off the screen \(screen): the simulator takes a "
+                + "hardware keyboard as attached (HardwareKeyboardLastSeen, which build-ios.sh clears before a run)"
+        )
+        return nil
     }
 
     // Reads the bench's `line` again until its text `matches` or the wait ends, and returns the last text read: nil
@@ -119,17 +157,8 @@ internal final class KeyboardTests: XCTestCase {
     @MainActor
     internal func testTheSoftKeyboardAndTheExtraKeysType() throws {
         let app = launch()
-        let keyboard = app.keyboards.firstMatch
-        // only a read that completed and found no soft keyboard is a reason to skip: a wait on time alone can end with
-        // no read on a loaded runner
-        let shown = ScreenRead.Wait(reads: 1, lasting: Self.wait).poll { ScreenRead.isShown(keyboard) }
-        guard shown.held else {
-            guard shown.reads > 0 else {
-                FakeApp.attachScreen("no read of the soft keyboard")
-                XCTFail("no read of the soft keyboard completed in \(Int(shown.seconds)) s (\(shown.failed) failed)")
-                return
-            }
-            throw XCTSkip("the simulator has the Mac's keyboard attached, so no soft keyboard shows")
+        guard let keyboard = try Self.softKeyboard(in: app) else {
+            return
         }
         Self.closeTheKeyboardIntroduction(in: app)
         // each key reaches the program as it goes down, not when a space or Return ends the word
@@ -168,11 +197,8 @@ internal final class KeyboardTests: XCTestCase {
     @MainActor
     internal func testAnExtraKeyActsOnTheLiftAndASlideOrASwipeSendsNothing() throws {
         let app = launch()
-        let keyboard = app.keyboards.firstMatch
-        let shown = ScreenRead.Wait(reads: 1, lasting: Self.wait).poll { ScreenRead.isShown(keyboard) }
-        guard shown.held else {
-            XCTAssertGreaterThan(shown.reads, 0, "no read of the soft keyboard completed")
-            throw XCTSkip("the simulator has the Mac's keyboard attached, so no soft keyboard shows")
+        guard let keyboard = try Self.softKeyboard(in: app) else {
+            return
         }
         Self.closeTheKeyboardIntroduction(in: app)
         var sent = tapsAndSlides(in: app)

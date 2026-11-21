@@ -74,6 +74,23 @@ simctl_bounded() {
   bounded "$limit" "$simctl" "$@"
 }
 
+# Gives the keyboard of the booted simulator $1 the state of a new simulator's, before a UI test run:
+# - the slide-to-type introduction marked as shown. A new simulator shows it the first time a keyboard that can slide
+#   to type comes up, over the soft keyboard's lower half and the extra keys, and it stays until its Continue is
+#   tapped: the taps the UI tests make there land on it, and the keys type nothing (KeyboardTests). The system writes
+#   the same preference once it has shown the introduction;
+# - no hardware keyboard last seen. A hardware key event (XCUITest's typeKey) makes the system write
+#   HardwareKeyboardLastSeen, and from the next boot on it keeps each app's soft keyboard below the screen, as for an
+#   attached hardware keyboard, until a hardware keyboard comes and goes: a soft keyboard test that ran first after
+#   that boot found no key on the screen (task 706). A new simulator has no such preference.
+# The simulator is booted (setup-ios.sh --simulator boots it right before), so its preferences daemon takes them.
+ios_sim_keyboard_as_new() {
+  simctl_bounded "$SIMCTL_SECONDS" spawn "$1" defaults write com.apple.keyboard.preferences \
+    DidShowContinuousPathIntroduction -bool true &&
+    simctl_bounded "$SIMCTL_SECONDS" spawn "$1" defaults write com.apple.keyboard.preferences \
+      HardwareKeyboardLastSeen -bool false
+}
+
 # The iOS build lock: a per-user flock(2) file, so one xcodebuild at a time runs on a Mac (build-ios.sh's header says
 # why). BUILD_IOS_LOCK_HELD names it in the environment of a run that holds it.
 IOS_BUILD_LOCK="${XDG_CACHE_HOME:-$HOME/.cache}/ngterm/build-ios.flock"

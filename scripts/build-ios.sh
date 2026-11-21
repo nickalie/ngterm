@@ -29,8 +29,9 @@
 #    - build: the app, its tests and its packages for the simulator (Debug);
 #    - test: the Unit and then the UI test plan on the pinned phone and tablet simulators (IOS_SIM_PHONE_NAME and
 #      IOS_SIM_TABLET_NAME, made by setup-ios.sh), one at a time (each plan is built once before any boots; each
-#      simulator boots right before its run, and shuts down before the next one boots), each with its keyboard's
-#      slide-to-type introduction marked as shown (it would cover the keys the UI tests tap) and, while it is shut
+#      simulator boots right before its run, and shuts down before the next one boots), each with its keyboard in a
+#      new simulator's state (lib/native.sh's ios_sim_keyboard_as_new: no slide-to-type introduction over the keys
+#      the UI tests tap, no hardware keyboard that keeps the soft keyboard below the screen) and, while it is shut
 #      down before its boot, its wallpaper cache kept to BUILD_IOS_SIM_CACHE_MB MiB (default 1024,
 #      lib/ios-sim-cache.sh); result bundles in
 #      mobile/ios/build/, and a failed snapshot's image in mobile/ios/build/snapshot-failures/ (its diff is in the
@@ -403,16 +404,6 @@ action_build() {
   project_xcodebuild build-for-testing "${SIMULATOR_BUILD[@]}" -quiet
 }
 
-# Tells the keyboard of the simulator $1 that its slide-to-type introduction was shown. A simulator made or erased since
-# shows that introduction the first time a keyboard that can slide to type comes up, over the soft keyboard's lower
-# half and the extra keys, and it stays until its Continue is tapped: the taps the UI tests make there land on it, and
-# the keys type nothing (KeyboardTests). The system writes the same preference once it has shown the introduction. The
-# simulator is booted (setup-ios.sh --simulator boots it right before), so its preferences daemon takes the setting.
-quiet_keyboard_introduction() {
-  simctl_bounded "$SIMCTL_SECONDS" spawn "$1" defaults write com.apple.keyboard.preferences \
-    DidShowContinuousPathIntroduction -bool true || die "couldn't set simulator $1's keyboard preferences"
-}
-
 # Keeps the wallpaper cache of the pinned simulator $1 to BUILD_IOS_SIM_CACHE_MB MiB while it is shut down
 # (lib/ios-sim-cache.sh). Each boot adds up to about 350 MB, so with the default of 1024 the two simulators keep less
 # than 3 GB of it. PosterBoard writes it again at each boot: a boot after a removal took 11 s on the shared Mac. A
@@ -463,7 +454,7 @@ run_test_plan() {
     udid="$("$NATIVE_ROOT/scripts/setup-ios.sh" --simulator "$name")" ||
       die "the $name simulator on iOS $IOS_SIMULATOR_RUNTIME is not ready (see above)"
     booted="$udid"
-    quiet_keyboard_introduction "$udid"
+    ios_sim_keyboard_as_new "$udid" || die "couldn't set simulator $udid's keyboard preferences"
     bundle="$BUILD_DIR/$plan-$name.xcresult"
     start=$SECONDS
     project_xcodebuild test-without-building -scheme NgTerm -configuration Debug -testPlan "$plan" \
