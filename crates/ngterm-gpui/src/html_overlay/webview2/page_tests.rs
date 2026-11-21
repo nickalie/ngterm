@@ -898,6 +898,36 @@ fn a_link_pages_first_load_of_a_file_that_is_not_utf8_fails_with_why(cx: &mut Te
 }
 
 #[gpui_kit::test]
+fn a_link_pages_first_load_fails_with_the_refusal_its_decision_saw(cx: &mut TestAppContext) {
+    let (_directory, source) = link_overlay();
+    let grant = source.markdown_links.clone().unwrap();
+    std::fs::write(&grant.path, [b'c', 0xe9]).unwrap();
+    let mut driven = realized(&source);
+    let first = navigation(
+        &scheme::markdown_address(source.id, &grant.path).unwrap(),
+        true,
+        false,
+        false,
+        1,
+    );
+    assert!(!driven.page.allows(&first));
+    std::fs::write(&grant.path, "# fixed").unwrap();
+    driven.report(
+        Report::Navigation {
+            navigation: first,
+            allowed: false,
+        },
+        cx,
+    );
+    let (state, error) = driven.load();
+    assert_eq!(state, HtmlLoadState::Failed);
+    assert!(
+        error.unwrap_or_default().starts_with("not a UTF-8 text file: "),
+        "the reason the load was cancelled for"
+    );
+}
+
+#[gpui_kit::test]
 fn a_followed_link_that_fails_keeps_the_shown_file(cx: &mut TestAppContext) {
     let (_directory, source) = link_overlay();
     let mut driven = following_a_link(&source, cx);

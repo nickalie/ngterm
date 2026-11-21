@@ -88,6 +88,8 @@ struct PageState {
     reported: Option<HtmlPageInfo>,
     /// The main-frame navigation the policy refused last, whose end is that refusal's.
     refused: Option<u64>,
+    /// The main-frame navigation a link page's source refused at its decision, with the source's reason.
+    link_refusal: Option<(u64, String)>,
     /// A text load the app started is the next main-frame navigation, at the text's address.
     text_pending: bool,
     network: NetworkGate,
@@ -235,6 +237,7 @@ impl Page {
                 engine: Shown::default(),
                 reported: None,
                 refused: None,
+                link_refusal: None,
                 text_pending: false,
                 network: NetworkGate::initial(overlay),
             }),
@@ -551,7 +554,7 @@ impl Page {
 
     /// The shared policy's decision on `navigation` and its address as the app spells it; `None` for an address that
     /// is never asked about (a real `file:` one would bypass the grant, the text protocol serves nothing else) or does
-    /// not parse.
+    /// not parse. A link page's link that its source cannot read is not part of it: [`Self::allows`] checks that.
     fn decision(&self, navigation: &Navigation, target: HtmlNavigationTarget) -> Option<(HtmlNavigationDecision, Url)> {
         if navigation.uri.starts_with("file:") || scheme::is_text_resource(&navigation.uri) {
             return None;
@@ -566,12 +569,21 @@ impl Page {
             target,
             user_activated: navigation.user && target != HtmlNavigationTarget::Subframe,
         };
-        let decision = decide(&action, &state.overlay);
-        // the engine shows a custom protocol's failed read as a document, so a link that cannot be read goes nowhere
-        if decision == HtmlNavigationDecision::Allow && policy::link_readable(&state.overlay, &url).is_err() {
-            return Some((HtmlNavigationDecision::Cancel, url));
+        Some((decide(&action, &state.overlay), url))
+    }
+
+    /// Whether a link page's source can read `url`; a refused main-frame read is kept for [`Self::refusal`].
+    fn link_readable(&self, navigation: &Navigation, url: &Url) -> bool {
+        let Ok(mut state) = self.state.try_borrow_mut() else {
+            return false;
+        };
+        let Err(reason) = policy::link_readable(&state.overlay, url) else {
+            return true;
+        };
+        if navigation.main_frame {
+            state.link_refusal = Some((navigation.id, reason));
         }
-        Some((decision, url))
+        false
     }
 
     /// Whether `navigation` goes ahead, answered at once (module docs); the app's own text load is its own.
@@ -590,8 +602,10 @@ impl Page {
         } else {
             HtmlNavigationTarget::Subframe
         };
-        self.decision(navigation, target)
-            .is_some_and(|(decision, _)| decision == HtmlNavigationDecision::Allow)
+        // the engine shows a custom protocol's failed read as a document, so a link that cannot be read goes nowhere
+        self.decision(navigation, target).is_some_and(|(decision, url)| {
+            decision == HtmlNavigationDecision::Allow && self.link_readable(navigation, &url)
+        })
     }
 
     // MARK: - the web view's reports
@@ -695,7 +709,7 @@ impl Page {
             if (!navigation.user || navigation.redirect) && state.overlay.markdown_links.is_none() {
                 state.load.refused(&scheme::app_uri(&navigation.uri));
             }
-            let reason = Self::refusal(&state, navigation);
+            let reason = Self::refusal(&mut state, navigation);
             state.load.handle(&LoadEvent::Interrupted(reason))
         };
         self.report_outcome(outcome);
@@ -704,14 +718,12 @@ impl Page {
 
     /// Why a refused main-frame navigation failed the load: a link page's first load names its source's refusal, as
     /// the source does on an engine that fails the read.
-    fn refusal(state: &PageState, navigation: &Navigation) -> String {
-        if state.overlay.markdown_links.is_none() || state.load.committed() {
-            return "navigation blocked".to_owned();
+    fn refusal(state: &mut PageState, navigation: &Navigation) -> String {
+        let link = state.link_refusal.take().filter(|(id, _)| *id == navigation.id);
+        match link {
+            Some((_, reason)) if !state.load.committed() => reason,
+            _ => "navigation blocked".to_owned(),
         }
-        Url::parse(&scheme::app_uri(&navigation.uri))
-            .ok()
-            .and_then(|url| policy::link_readable(&state.overlay, &url).err())
-            .unwrap_or_else(|| "navigation blocked".to_owned())
     }
 
     /// Asks whether to hand `navigation` to the browser when the policy offers that.
