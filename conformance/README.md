@@ -222,7 +222,8 @@ compact sidebar's metrics apply upstream's trims to this build's own row geometr
 On Windows the runner is `tools/run-windows.sh`, run from Git Bash: it builds the release app (with its WebView2 HTML
 overlays), `ngtermctl` and `ngterm-session`, stages them with `scripts/stage.sh` (`bin\ngterm.exe`, `bin\ngtermctl.exe`
 and `bin\ngterm-session.exe` beside `share\ghostty` and `share\terminfo`) into `target/conformance-stage`, runs the
-same layers with the same options and holds its own list, `conformance/rust-passing-windows.txt`, with the same
+same layers with the same options (except one: paths and node ids after `--` still run beside the layers there, not
+instead of them, which is left open) and holds its own list, `conformance/rust-passing-windows.txt`, with the same
 `check_ratchet.py` (`--list`). The panes run Git for Windows' `sh.exe` (`CONFORMANCE_POSIX_SHELL`, else the one
 beside `git`, else Git's default install directory) in place of `/bin/sh`, with `PATH` the system directories, then
 Git's `usr\bin` (the POSIX tools a command line's `cmd.exe` finds there, as `/bin/sh -c` finds them in `/usr/bin`). A
@@ -286,7 +287,8 @@ narrowed the run. The plugin options behind it are `--ratchet-only LIST`, `--als
 `check_ratchet.py` judges it as a full run: every listed id must pass, a listed id that was not collected is warned
 about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`, `-m` or paths or node ids after `--`) makes
 the mode `partial`: the listed ids that did not run are not judged, so a partial run can neither break nor shrink
-the list through what it left out. The report names the mode and the suite time.
+the list through what it left out. The plugin option `--narrowed` also makes the mode `partial`: `run-linux.sh` gives
+it when paths or node ids after `--` replace the layers. The report names the mode and the suite time.
 `--build-only` builds and stages and runs nothing; `--shard I/N` runs part I of the suite split by test file into N
 parts (`agterm_conformance/shards.py`; the plugin option is `--shard I/N`, with `--shard-weights FILE`). Its nodeid
 report's run header carries `"shard"`, and `check_ratchet.py` judges it on the listed ids it ran;

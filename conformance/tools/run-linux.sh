@@ -33,8 +33,8 @@
 # and summary.md, the total line % and its distance to 90%, the share the e2e-coverage markers exclude, per crate);
 # a run that left no profile, or a stage that is not the instrumented build, exits 2 with the reason.
 # Without the app's binary in the stage every test skips and parity reads 0%.
-# Paths and node ids among the PYTEST_ARGS run instead of the layers (an unknown path exits 2); -k and the rest narrow
-# what runs. --ratchet-only takes its extra paths and node ids with --also, never after --.
+# Paths and node ids among the PYTEST_ARGS run instead of the layers (a path that is not there exits 2); -k and the
+# rest narrow what runs. --ratchet-only takes its extra paths and node ids with --also, never after --.
 # Writes report.md (with the ui ids a passing test exercised), junit.xml, pytest.log and nodeids.jsonl into DIR.
 # Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), 1 when a run left an instance
 # root behind, or 2 when --coverage yields no code coverage report; pytest's own status does not count, since most
@@ -81,6 +81,8 @@ while (($#)); do
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+# One spelling of the suite, as the narrowed paths have it, for the prefix checks below.
+tests="$(realpath -m -- "$tests")"
 if [[ -z "$ratchet_only" ]] && ((${#also[@]} + ${#also_k[@]})); then
     echo "--also and --also-k need --ratchet-only" >&2
     exit 2
@@ -139,20 +141,31 @@ if [[ -n "$ratchet_only" ]]; then
     for expression in "${also_k[@]}"; do selection+=(--also-k "$expression"); done
 fi
 
-# Paths and node ids after `--` replace the layers, which pytest would otherwise run whole beside them. Each is spelled
-# as the list's ids are (from the suite's root), with conformance/ in front (from the repo's root), absolute, or from
-# the working directory. The value of an option that takes one stays the option's.
+# Paths and node ids after `--` replace the layers, which pytest would otherwise run whole beside them. pytest reads
+# every argument that is not an option or an option's value as a path, so each one must be there. Each is spelled as
+# the list's ids are (from the suite's root), with conformance/ in front (from the repo's root), absolute, or from the
+# working directory. These are the options of pytest, its plugins and the harness that take a separate value
+# (selftests/test_run_linux.py checks the list against pytest's parser).
+value_options=(
+    -k -m -p -c -o -r -W --maxfail --pdbcls --capture --cache-show --lfnf --last-failed-no-failures --durations
+    --durations-min --verbosity --report-chars --tb --show-capture --color --code-highlight --pastebin --junitxml
+    --junit-xml --junitprefix --junit-prefix --pythonwarnings --max-warnings --ignore --ignore-glob --deselect
+    --confcutdir --import-mode --doctest-report --doctest-glob --config-file --rootdir --basetemp --debug
+    --override-ini --assert --log-level --log-format --log-date-format --log-cli-level --log-cli-format
+    --log-cli-date-format --log-file --log-file-mode --log-file-level --log-file-format --log-file-date-format
+    --log-auto-indent --log-disable --trace-mode --trace-dir --impl --bin --ctl --macos-launch-mode --must-pass
+    --catalog --ui-ids --coverage-baseline --nodeid-report --ratchet-only --also --also-k --shard --shard-weights
+    --force-reruns --only-rerun --reruns --reruns-delay --reruns-delay-backoff-factor --rerun-except
+    --rerun-exclude-path --reruns-mode --max-suite-reruns
+)
 narrowed=()
 pytest_args=()
 value_of=""
 for arg in "${extra[@]}"; do
-    if [[ -n "$value_of" || "$arg" == -* || ("$arg" != *::* && "$arg" != */* && "$arg" != *.py) ]]; then
+    if [[ -n "$value_of" || "$arg" == -* ]]; then
         pytest_args+=("$arg")
         value_of=""
-        case "$arg" in
-            -k|-m|-p|-c|-o|-W|--deselect|--ignore|--ignore-glob|--rootdir|--basetemp|--confcutdir|--junitxml \
-                |--junit-xml|--log-file|--catalog|--ui-ids|--bin|--ctl) value_of=1 ;;
-        esac
+        if [[ "$arg" == -* && " ${value_options[*]} " == *" $arg "* ]]; then value_of=1; fi
         continue
     fi
     if [[ -n "$ratchet_only" ]]; then
@@ -175,10 +188,15 @@ for arg in "${extra[@]}"; do
     fi
     narrowed+=("$found$node")
 done
+partial=""
 if ((${#narrowed[@]})); then
     layers=("${narrowed[@]}")
     pytest_args+=(--narrowed)
+    partial=1
 fi
+for arg in "${pytest_args[@]}"; do
+    if [[ "$arg" == -k* || "$arg" == -m* ]]; then partial=1; fi
+done
 
 # UI selections need real accessibility bindings even before the AT-SPI driver is enabled.
 for layer in "${layers[@]}"; do
@@ -385,6 +403,8 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
     if [[ -n "$ratchet_only" ]]; then
         echo "- mode: ratchet-only, the ids of \`$ratchet\`$( ((${#also[@]})) && printf ' + --also %s' "${also[@]}")$( \
             ((${#also_k[@]})) && printf ' + --also-k %s' "${also_k[@]}")"
+    elif [[ -n "$partial" ]]; then
+        echo "- mode: partial, the tests that \`-- ${extra[*]}\` selected"
     else
         echo "- mode: full"
     fi

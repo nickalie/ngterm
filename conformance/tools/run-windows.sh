@@ -17,7 +17,8 @@
 # The options are run-linux.sh's, --coverage included (an instrumented build in target\llvm-cov-target staged into
 # target\conformance-stage-cov, its profiles in target\llvm-cov-target, read after the suite into the desktop app's
 # e2e report on Windows in DIR\coverage), and --build-only and --shard (weighed by
-# conformance/shard-weights-windows.txt).
+# conformance/shard-weights-windows.txt). One difference is left open: paths and node ids among the PYTEST_ARGS run
+# beside the layers here, not instead of them.
 # The build needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the terminal fonts
 # (scripts/fetch-fonts.sh); its HTML overlays need the WebView2 runtime. The panes run Git for Windows' sh.exe (the
 # harness's CONFORMANCE_POSIX_SHELL, else the one beside git). Reports go to conformance/reports/rust-windows by
@@ -57,7 +58,7 @@ while (($#)); do
         --coverage) coverage=1; shift ;;
         --build-only) build_only=1; shift ;;
         --shard) shard="$2"; shift 2 ;;
-        -h|--help) sed -n '2,26s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,27s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done

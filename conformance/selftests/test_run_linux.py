@@ -535,7 +535,8 @@ def test_a_headless_run_without_weston_or_a_bus_names_the_opt_out(
 ) -> None:
     bare = tmp_path / "bare-bin"
     bare.mkdir()
-    for tool in ("bash", "dirname", "readlink", "cat", "git", "grep", "mktemp", "rmdir", "rm", "mkdir", "env", "sed"):
+    tools = ("bash", "dirname", "readlink", "realpath", "cat", "git", "grep", "mktemp", "rmdir", "rm", "mkdir", "env")
+    for tool in (*tools, "sed"):
         if found := shutil.which(tool):
             (bare / tool).symlink_to(found)
     for helper in {"weston", "dbus-daemon"} - {missing}:
@@ -594,6 +595,7 @@ def test_a_node_id_after_the_separator_runs_only_that_node(
     assert "rust: 1 pass, 0 fail" in report
     records = [json.loads(line) for line in (tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()]
     assert {key: records[0][key] for key in ("partial", "mode")} == {"partial": True, "mode": "partial"}
+    assert "- mode: partial" in report
     assert [record["nodeid"] for record in records if record["kind"] == "test"] == [selected]
 
 
@@ -610,10 +612,85 @@ def test_a_node_id_and_k_narrow_together(tmp_path: Path, stage: Path, layers: Pa
     ]
 
 
+def test_a_bare_directory_after_the_separator_runs_only_that_directory(
+    tmp_path: Path, stage: Path, layers: Path
+) -> None:
+    (layers / "cli").mkdir()
+    (layers / "cli" / "test_cli.py").write_text(FAILING_TEST)
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", "protocol", cwd=layers)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "- mode: partial" in report
+    records = [json.loads(line) for line in (tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()]
+    assert [record["nodeid"] for record in records if record["kind"] == "test"] == [PROBE_ID]
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "selected"),
+    [
+        ("--deselect", OTHER_ID, [PROBE_ID]),
+        ("-k", "test_probe.py", [PROBE_ID]),
+        ("--trace-dir", "{tmp}/traces", [OTHER_ID, PROBE_ID]),
+        ("-W", "ignore::DeprecationWarning", [OTHER_ID, PROBE_ID]),
+    ],
+)
+def test_an_option_value_that_looks_like_a_path_stays_the_options(
+    tmp_path: Path, stage: Path, layers: Path, option: str, value: str, selected: list[str]
+) -> None:
+    (layers / "protocol" / "test_other.py").write_text(FAILING_TEST)
+    (tmp_path / "traces").mkdir()
+    value = value.format(tmp=tmp_path)
+    completed, _ = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", option, value)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    records = [json.loads(line) for line in (tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()]
+    assert sorted(record["nodeid"] for record in records if record["kind"] == "test") == selected
+
+
+def test_the_value_options_are_the_ones_pytest_parses() -> None:
+    """The script must know each option that takes a separate value, or it reads that value as a test path."""
+    from _pytest.config import get_config
+
+    config = get_config()
+    config.pluginmanager.load_setuptools_entrypoints("pytest11")
+    parser = config._parser
+    expected = {
+        name
+        for option in [*parser._anonymous.options, *(o for group in parser._groups for o in group.options)]
+        if option.attrs().get("action", "store") in ("store", "append") and option.attrs().get("nargs") != 0
+        for name in option.names()
+    }
+    listed = re.search(r"^value_options=\(\n(.*?)^\)", SCRIPT.read_text(), re.M | re.S)
+    assert listed is not None
+    assert set(listed.group(1).split()) == expected
+
+
+def test_a_ui_selector_under_another_spelling_of_the_suite_is_still_checked(
+    tmp_path: Path, stage: Path, layers: Path
+) -> None:
+    ui = layers / "ui"
+    ui.mkdir()
+    (ui / "test_ui.py").write_text("def test_ui(impl_options): pass\n")
+    (tmp_path / "link").symlink_to(tmp_path)
+    completed, report = run(
+        tmp_path,
+        stage,
+        layers,
+        ratchet(tmp_path, PROBE_ID),
+        "--tests",
+        f"{tmp_path}/link/tests/",
+        "--",
+        str(ui / "test_ui.py"),
+        CONFORMANCE_LINUX_DISPLAY="session",
+    )
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert "Linux UI instances require headless" in completed.stderr
+    assert not report
+
+
 @pytest.mark.parametrize(
     ("args", "message"),
     [
         (("--", "tests/protcol/test_probe.py::test_reports_version"), "no test path tests/protcol/test_probe.py"),
+        (("--", "protocl"), "no test path protocl"),
         (("--ratchet-only", "--", PROBE_ID), "--ratchet-only takes its extra node ids and paths with --also"),
     ],
 )
@@ -771,7 +848,8 @@ def test_ui_preflight_without_xvfb_names_component(tmp_path, stage, layers, west
     (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
     bare = tmp_path / 'bare-bin'
     bare.mkdir()
-    for tool in ('bash', 'dirname', 'readlink', 'cat', 'git', 'grep', 'mktemp', 'rmdir', 'rm', 'mkdir', 'env', 'sed'):
+    tools = ('bash', 'dirname', 'readlink', 'realpath', 'cat', 'git', 'grep', 'mktemp', 'rmdir', 'rm', 'mkdir', 'env')
+    for tool in (*tools, 'sed'):
         if found := shutil.which(tool):
             (bare / tool).symlink_to(found)
     for helper in ('weston', 'dbus-daemon'):
