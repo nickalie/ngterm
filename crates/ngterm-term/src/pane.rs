@@ -51,6 +51,7 @@ use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
 use crate::search::SearchSlot;
 #[cfg(feature = "local")]
 use crate::session_io::{self, Live};
+use crate::stream::REPLY_CAP;
 use crate::stream::{Gate, Outbound, Stream, StreamFeed, StreamOut};
 use crate::{PaneError, ScrollbackLimits};
 
@@ -111,7 +112,8 @@ pub struct PaneConfig {
 
 /// Input the pane holds for its program until the program turns bracketed paste (mode 2004) on, as a line editor does
 /// once it reads its prompt: `pasted` goes in then. Without it for `patience` after the pane starts, `typed` goes in
-/// instead.
+/// instead. [`Pane::write`] meanwhile keeps its input, which goes in after the held input, and refuses it past the
+/// write limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeldInput {
     pub pasted: Vec<u8>,
@@ -385,7 +387,13 @@ impl Shared {
         let Some(held) = slot.as_mut() else {
             return Ok(false);
         };
-        if !held.typeahead.is_empty() && held.typeahead.len() + bytes.len() > self.write_limit {
+        let queued = held.typeahead.len() + bytes.len();
+        if !held.typeahead.is_empty() && queued > self.write_limit {
+            return Err(PaneError::Backpressure);
+        }
+        // the release queues it as a reply, which is dropped past the reply cap
+        let replay = held.input.pasted.len().max(held.input.typed.len());
+        if queued + replay > REPLY_CAP.max(self.write_limit) {
             return Err(PaneError::Backpressure);
         }
         held.typeahead.extend_from_slice(bytes);
@@ -415,6 +423,7 @@ impl Shared {
     }
 
     fn mark_eof(&self) {
+        lock(&self.held_input).take();
         *lock(&self.eof.0) = true;
         self.eof.1.notify_all();
     }
@@ -696,8 +705,8 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// [`PaneError::Backpressure`] when the queue is full (the child is not reading), [`PaneError::Closed`] once the
-    /// PTY ended or refused a write (the child side is gone).
+    /// [`PaneError::Backpressure`] when the queue is full (the child is not reading, or the input waits behind a
+    /// [`HeldInput`]), [`PaneError::Closed`] once the PTY ended or refused a write (the child side is gone).
     pub fn write(&self, bytes: &[u8]) -> Result<(), PaneError> {
         if self.shared.hold_typeahead(bytes)? {
             return Ok(());
@@ -1530,9 +1539,11 @@ impl Worker {
         let Some(held) = slot.take_if(|held| pasted || Instant::now() >= held.deadline) else {
             return;
         };
-        let mut bytes = if pasted { held.input.pasted } else { held.input.typed };
-        bytes.extend_from_slice(&held.typeahead);
-        self.shared.push_input(&bytes);
+        let replay = if pasted { held.input.pasted } else { held.input.typed };
+        self.shared.push_input(&replay);
+        if !held.typeahead.is_empty() {
+            self.shared.push_input(&held.typeahead);
+        }
     }
 
     /// End an expired hold and wake the frontend. An animation wake only requests a capture: ticking stays under

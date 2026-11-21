@@ -377,6 +377,26 @@ fn input_held_behind_the_held_input_is_refused_past_the_write_limit() {
 }
 
 #[test]
+fn input_held_behind_the_held_input_is_refused_past_the_reply_cap_and_the_held_input_still_goes_in() {
+    let fixture = holding(
+        r#"sleep 0.3; printf '\033[?2004h'; IFS= read -r line; printf '%s' "$line" > "$DIR/got""#,
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    let flood = vec![b'x'; 16 * 1024 * 1024];
+    assert!(matches!(fixture.pane.write(&flood), Err(PaneError::Backpressure)));
+    let got = wait_file_containing(&fixture.path("got"), b"pasted");
+    assert_eq!(got, b"\x1b[200~pasted\x1b[201~");
+}
+
+#[test]
+fn writing_to_a_held_pane_whose_child_is_gone_reports_closed() {
+    let fixture = holding("exit 0", Duration::from_secs(60)).unwrap();
+    wait_events(&fixture.pane, exited);
+    assert_eq!(fixture.pane.write(b"x"), Err(PaneError::Closed));
+}
+
+#[test]
 fn a_program_that_cannot_start_is_a_spawn_error() {
     let dir = tempfile::tempdir().unwrap();
     let command = PaneCommand::new(dir.path().join("no-such-program")).cwd(dir.path());
