@@ -194,10 +194,26 @@ def _fake_csh(directory, name="tcsh"):
     return str(path)
 
 
-def _shell_home(ctl):
+# A typed `{` becomes `{}` with the cursor between, as a pairing plugin does it, so only a pasted replay stays exact.
+# Only `{`: the typed setup lines of `_ready` and `_run` have none.
+BRACE_PAIRING = {
+    ".bashrc": 'bind \'"{": "\\C-v{\\C-v}\\C-b"\'\n',
+    ".zshrc": "pair-brace() { LBUFFER+='{'; RBUFFER=\"}$RBUFFER\"; }\nzle -N pair-brace\nbindkey '{' pair-brace\n",
+    # the name of a vendor autopair plugin too, which this file overrides
+    ".config/fish/conf.d/autopair.fish": "function _pair_brace\n    commandline --insert '{}'\n"
+    "    commandline --cursor (math (commandline --cursor) - 1)\nend\nbind '{' _pair_brace\n",
+}
+
+
+def _shell_home(ctl, pairing=False):
     home = ctl.instance.home
     # without a startup file, an interactive zsh starts its new-user menu instead of a prompt
-    (home / ".zshrc").write_text("PS1='$ '\n")
+    files = {".zshrc": "PS1='$ '\n"}
+    for name, binding in BRACE_PAIRING.items() if pairing else ():
+        files[name] = files.get(name, "") + binding
+    for name, text in files.items():
+        (home / name).parent.mkdir(parents=True, exist_ok=True)
+        (home / name).write_text(text)
 
 
 @pytest.mark.covers("behavior:restore.rerun-replays-captured-command")
@@ -207,7 +223,7 @@ def test_rerun_replays_the_same_bytes_into_each_shell(launch, shell):
     if path is None:
         pytest.skip(f"no {shell} on this machine")
     ctl = launch(settings={"restoreMode": "rerun"}, pane_shell=path)
-    _shell_home(ctl)
+    _shell_home(ctl, pairing=True)
     sid = _new(ctl)
     argv = _run(ctl, sid, _program(*BANGS, *MARKED, *BACKSLASHES, *OTHER, *PAIRED), shell)
     ctl = _relaunch(launch, ctl, sid)
@@ -223,7 +239,7 @@ def test_rerun_types_a_pinned_line_with_quotes_and_brackets_into_each_shell(laun
     if path is None:
         pytest.skip(f"no {shell} on this machine")
     ctl = launch(settings={"restoreMode": "rerun"}, pane_shell=path)
-    _shell_home(ctl)
+    _shell_home(ctl, pairing=True)
     sid = _new(ctl)
     marker = f"PQ{next(_markers):04d}X"
     words = " ".join(_quoted(word, shell) for word in PAIRED)
