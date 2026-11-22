@@ -13,7 +13,10 @@ import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.RemoteAskInput
 import com.nickalie.ngterm.core.ffi.RemoteNotice
 import com.nickalie.ngterm.core.ffi.RemoteStatus
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
@@ -56,11 +59,14 @@ class AlertsTest {
     }
 
     // m1 (build-01) connected and listed with docs-site (s1), attached
-    private suspend fun TestScope.attached() {
+    private suspend fun TestScope.attached(
+        alertsScope: CoroutineScope = backgroundScope,
+        prefs: Flow<Set<AlertKind>> = enabled,
+    ) {
         connections = Connections(this, { 0L }) { s -> FakeMobileCore(s).also { core = it } }
         asks = Asks(backgroundScope, connections)
         val live = LiveSessions(backgroundScope, connections) { ClipboardWriteStatus.DONE }
-        Alerts(backgroundScope, connections, asks, flowOf(listOf(testMachine())), enabled, sink, live.sessions)
+        Alerts(alertsScope, connections, asks, flowOf(listOf(testMachine())), prefs, sink, live.sessions)
         core.sessions["m1"] =
             mutableListOf(fakeSession("s1", name = "docs-site").copy(context = "Rewrite the install guide"))
         connections.connect(testMachine().toCore())
@@ -153,6 +159,80 @@ class AlertsTest {
             assertEquals(emptyList<Alert>(), sink.posted)
             core.emit(status("completed"))
             assertEquals(listOf(AlertKind.Done), sink.posted.filterIsInstance<Alert.Status>().map { it.kind })
+        }
+
+    @Test
+    fun everyKindOffPostsNothing() =
+        runTest {
+            attached()
+            enabled.value = emptySet()
+            settle()
+            core.emit(MobileEvent.Ask("m1", "s1", testAsk()))
+            core.emit(status("blocked"))
+            core.emit(status("completed"))
+            core.emit(MobileEvent.Notify("m1", "s1", RemoteNotice("t", "b", null, "notify")))
+            core.emit(MobileEvent.HostKeyChanged("m1", "SHA256:old", "SHA256:new"))
+            core.emit(MobileEvent.MachineState("m1", MachineState.Unreachable("refused")))
+            settle()
+            assertEquals(emptyList<Alert>(), sink.posted)
+            // the question still waits, for the app's sheet
+            assertEquals(1, asks.open.value.size)
+        }
+
+    @Test
+    fun questionsTurnedOffAreTakenDownAndComeBackWhenTurnedOn() =
+        runTest {
+            attached()
+            core.emit(MobileEvent.Ask("m1", "s1", testAsk()))
+            settle()
+            val posted = sink.posted.filterIsInstance<Alert.Ask>().single()
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Questions
+            settle()
+            assertTrue(askTag(posted.open) in sink.cancelled)
+            enabled.value = AlertKind.entries.toSet()
+            settle()
+            assertEquals(2, sink.posted.filterIsInstance<Alert.Ask>().size)
+        }
+
+    @Test
+    fun aKindTurnedOffTakesItsNotificationsDown() =
+        runTest {
+            attached()
+            core.emit(status("blocked"))
+            core.emit(MobileEvent.Notify("m1", "s1", RemoteNotice("t", "b", null, "notify")))
+            core.emit(MobileEvent.MachineState("m1", MachineState.Unreachable("refused")))
+            settle()
+            val notice = sink.posted.filterIsInstance<Alert.Notice>().single()
+            core.emit(MobileEvent.MachineState("m1", MachineState.Unreachable("refused")))
+            sink.cancelled.clear()
+            enabled.value = setOf(AlertKind.Done, AlertKind.Notices, AlertKind.Errors, AlertKind.Questions)
+            settle()
+            assertEquals(listOf(statusTag(key)), sink.cancelled)
+            enabled.value = setOf(AlertKind.Questions)
+            settle()
+            assertEquals(setOf(statusTag(key), notice.tag, lostTag("m1")), sink.cancelled.toSet())
+        }
+
+    @Test
+    fun anEventBeforeTheChoicesAreReadWaitsForThem() =
+        runTest {
+            // the alerts' own scope never runs: their collectors have not read the choices when the events come
+            val idle = TestScope()
+            attached(idle, flowOf(emptySet()))
+            core.emit(MobileEvent.Notify("m1", "s1", RemoteNotice("t", "b", null, "notify")))
+            core.emit(status("blocked"))
+            assertEquals(emptyList<Alert>(), sink.posted)
+            idle.cancel()
+        }
+
+    @Test
+    fun anEventBeforeTheChoicesAreReadPostsWhenTheySayOn() =
+        runTest {
+            val idle = TestScope()
+            attached(idle, flowOf(setOf(AlertKind.Notices)))
+            core.emit(MobileEvent.Notify("m1", "s1", RemoteNotice("t", "b", null, "notify")))
+            assertEquals(1, sink.posted.filterIsInstance<Alert.Notice>().size)
+            idle.cancel()
         }
 
     @Test

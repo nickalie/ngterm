@@ -7,10 +7,7 @@ import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-/**
- * The kinds of notification the user can turn off, each on until then. An ask is not among them: it waits for an
- * answer, so it always reaches the user.
- */
+/** The kinds of notification the user can turn off, each on until then. */
 enum class AlertKind(
     internal val key: Preferences.Key<Boolean>,
 ) {
@@ -25,6 +22,9 @@ enum class AlertKind(
 
     /** A machine with attached sessions was lost for good (it needs the user to connect it again). */
     Errors(booleanPreferencesKey("notify_errors")),
+
+    /** An agent's question out of sight; off, it shows only in the app, while its session is on screen. */
+    Questions(booleanPreferencesKey("notify_questions")),
 }
 
 /**

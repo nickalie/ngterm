@@ -356,13 +356,15 @@
   <string name="settings_notifications_turn_on">Turn on</string>
   <string name="settings_alert_notices">Agent notifications</string>
   <string name="settings_alert_notices_note">What an agent sends with ngtermctl notify</string>
+  <string name="settings_alert_questions">Questions</string>
+  <string name="settings_alert_questions_note">An agent asks you something. Off, you see it only in ngterm</string>
   <string name="settings_alert_waiting">Waiting for you</string>
   <string name="settings_alert_waiting_note">An agent stopped and waits for your answer</string>
   <string name="settings_alert_done">Finished</string>
   <string name="settings_alert_done_note">An agent finished its work</string>
   <string name="settings_alert_errors">Lost machines</string>
   <string name="settings_alert_errors_note">A machine with attached sessions can\'t be reached</string>
-  <string name="settings_alert_asks">Questions from agents always notify: they wait for your answer.</string>
+  <string name="settings_alert_attached">While sessions are attached, Android keeps one quiet notification for them, which keeps them connected. It goes when you detach the last one.</string>
   <string name="settings_clipboard">Clipboard</string>
   <string name="settings_clipboard_note">Machines whose programs read your clipboard without asking</string>
   <string name="settings_clipboard_empty">Every machine asks before its programs read your clipboard.</string>

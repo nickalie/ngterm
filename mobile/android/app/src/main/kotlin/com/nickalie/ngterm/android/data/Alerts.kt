@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -157,11 +159,12 @@ fun askTag(
  *   by the next change and taken down by one to anything else, by the session coming on screen or being detached;
  * - a machine with attached sessions lost for good ([AlertKind.Errors]: unreachable, or its host key changed), taken
  *   down when it connects again;
- * - every open ask out of sight (the ask rule: a dialog while its session is on screen, a notification otherwise),
- *   taken down when it is answered, dismissed, or comes on screen.
+ * - every open ask out of sight ([AlertKind.Questions]; the ask rule: a dialog while its session is on screen, a
+ *   notification otherwise), taken down when it is answered, dismissed, or comes on screen.
  *
- * The kinds the user turned off ([enabled]) are not posted. Names come from [machines] and the machines' listings, and
- * a session's context from its stream ([live]) once it has said one, its listing's until then.
+ * The kinds the user turned off ([enabled]) are not posted, and turning one off takes its notifications down. Until
+ * [enabled] has said which kinds are on, nothing posts on a guess. Names come from [machines] and the machines'
+ * listings, and a session's context from its stream ([live]) once it has said one, its listing's until then.
  * Events arrive on the core's thread; [sink] is called from it and from [scope].
  */
 @Suppress("LongParameterList") // a parameter per source the alerts read, and the sink they post to
@@ -176,7 +179,13 @@ class Alerts(
 ) {
     @Volatile private var names: Map<String, String> = emptyMap()
 
-    @Volatile private var kinds: Set<AlertKind> = AlertKind.entries.toSet()
+    private val enabled = enabled.catch { emit(AlertKind.entries.toSet()) }
+
+    // null until enabled has said
+    @Volatile private var kinds: Set<AlertKind>? = null
+
+    // the kinds on: on the core's thread before enabled has said, it waits for its first word
+    private val kindsOn: Set<AlertKind> get() = kinds ?: runBlocking { enabled.first() }
     private val notices = AtomicLong()
 
     // the machines whose host key changed since they were last connected
@@ -188,6 +197,10 @@ class Alerts(
     // the agents' notices up, by session: taken down with its detach, since their tap leads to an attached session
     private val noticeTags = ConcurrentHashMap<SessionKey, MutableSet<String>>()
 
+    // the status notifications up, by session, and the machines whose lost notification is up
+    private val statusUp = ConcurrentHashMap<SessionKey, AlertKind>()
+    private val lostUp: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
     init {
         connections.listen(::onEvent)
         scope.launch {
@@ -196,14 +209,18 @@ class Alerts(
                     list.associate { it.id to it.title }
             }
         }
-        scope.launch { enabled.catch { emit(AlertKind.entries.toSet()) }.collect { kinds = it } }
-        scope.launch { combine(asks.open, asks.onScreen, ::Pair).collect { (open, shown) -> syncAsks(open, shown) } }
+        scope.launch { this@Alerts.enabled.collect(::onKinds) }
+        scope.launch {
+            combine(asks.open, asks.onScreen, this@Alerts.enabled, ::Triple).collect { (open, shown, on) ->
+                syncAsks(open.takeIf { AlertKind.Questions in on }.orEmpty(), shown)
+            }
+        }
         scope.launch {
             var before = emptySet<SessionKey>()
             connections.attached.collect { attached ->
                 val now = attached.flatMap { (machine, ids) -> ids.map { SessionKey(machine, it) } }.toSet()
                 (before - now).forEach { gone ->
-                    sink.cancel(statusTag(gone))
+                    cancelStatus(gone)
                     noticeTags.remove(gone)?.forEach(sink::cancel)
                 }
                 before = now
@@ -241,6 +258,7 @@ class Alerts(
 
                     MachineState.Connected -> {
                         keyChanged -= event.machineId
+                        lostUp -= event.machineId
                         sink.cancel(lostTag(event.machineId))
                     }
 
@@ -264,7 +282,7 @@ class Alerts(
         body: String,
         pane: String?,
     ) {
-        if (AlertKind.Notices !in kinds) return
+        if (AlertKind.Notices !in kindsOn) return
         val session = sessionName(key)
         val tag = "notice:${key.machineId}:${key.sessionId}:${notices.incrementAndGet()}"
         noticeTags.computeIfAbsent(key) { ConcurrentHashMap.newKeySet() } += tag
@@ -282,13 +300,14 @@ class Alerts(
                 "completed" -> AlertKind.Done
                 else -> null
             }
-        if (kind == null || kind !in kinds || asks.onScreen.value == key) {
-            sink.cancel(statusTag(key))
+        if (kind == null || kind !in kindsOn || asks.onScreen.value == key) {
+            cancelStatus(key)
             return
         }
         val stream = live.value[key]
         val context =
             if (stream?.contextSaid == true) stream.context else listing(key)?.context?.takeIf { it.isNotBlank() }
+        statusUp[key] = kind
         sink.post(Alert.Status(key, machineName(key.machineId), sessionName(key), kind, context, pane))
     }
 
@@ -297,7 +316,8 @@ class Alerts(
         machineId: String,
         reason: LostReason,
     ) {
-        if (AlertKind.Errors !in kinds || connections.attached.value[machineId].isNullOrEmpty()) return
+        if (AlertKind.Errors !in kindsOn || connections.attached.value[machineId].isNullOrEmpty()) return
+        lostUp += machineId
         sink.post(Alert.Lost(machineId, machineName(machineId), reason))
     }
 
@@ -305,7 +325,7 @@ class Alerts(
         open: List<OpenAsk>,
         shown: SessionKey?,
     ) {
-        shown?.let { sink.cancel(statusTag(it)) }
+        shown?.let(::cancelStatus)
         val wanted = open.filter { it.key != shown }.associateBy(::askTag)
         (posted - wanted.keys).forEach(sink::cancel)
         posted.retainAll(wanted.keys)
@@ -313,6 +333,24 @@ class Alerts(
             if (!posted.add(tag)) continue
             sink.post(Alert.Ask(ask, machineName(ask.key.machineId), sessionName(ask.key), deliveryOf(ask.ask)))
         }
+    }
+
+    // a kind turned off takes its notifications down
+    private fun onKinds(on: Set<AlertKind>) {
+        kinds = on
+        if (AlertKind.Notices !in on) noticeTags.keys.forEach { key -> noticeTags.remove(key)?.forEach(sink::cancel) }
+        statusUp.filterValues { it !in on }.keys.forEach(::cancelStatus)
+        if (AlertKind.Errors !in on) {
+            lostUp.toList().forEach { machineId ->
+                lostUp -= machineId
+                sink.cancel(lostTag(machineId))
+            }
+        }
+    }
+
+    private fun cancelStatus(key: SessionKey) {
+        statusUp.remove(key)
+        sink.cancel(statusTag(key))
     }
 
     private fun machineName(machineId: String): String = names[machineId] ?: machineId

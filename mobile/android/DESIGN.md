@@ -1099,8 +1099,9 @@ The plan, reviewed against the brief:
 - **Agents:** Agent chat view, a switch, on by default: a pane running Claude Code or Codex shows as a chat, with the
   terminal one tap away in the session's bar (The view switch, above). Off, a session's panes show their terminal and
   its bar has no switch. It is the default: a session's More menu sets its own either way (Chat view, above).
-- **Notifications:** a switch per kind (Waiting for you, Finished, Agent notifications, Lost machines), and the line
-  that questions always notify. While the system lets the app post none (the permission refused, Not now, or turned
+- **Notifications:** a switch per kind (Questions, Waiting for you, Finished, Agent notifications, Lost machines;
+  with Questions off, a question shows only as its sheet while its session is on screen), and the note that the
+  attached sessions keep one quiet notification, which Android needs to keep them connected. While the system lets the app post none (the permission refused, Not now, or turned
   off), a `Banner` with the attention diamond says so, and Turn on opens the system's notification settings for the
   app; it is read again when the app resumes.
 - **Clipboard:** the machines whose programs read the clipboard unasked (Always allow), each with its mono address

@@ -41,6 +41,7 @@ private class AlertRow(
 
 private val AlertRows =
     listOf(
+        AlertRow(AlertKind.Questions, R.string.settings_alert_questions, R.string.settings_alert_questions_note),
         AlertRow(AlertKind.Waiting, R.string.settings_alert_waiting, R.string.settings_alert_waiting_note),
         AlertRow(AlertKind.Done, R.string.settings_alert_done, R.string.settings_alert_done_note),
         AlertRow(AlertKind.Notices, R.string.settings_alert_notices, R.string.settings_alert_notices_note),
@@ -48,7 +49,8 @@ private val AlertRows =
     )
 
 /**
- * The notification kinds' switches ([on] are on), and while the system lets the app post none ([allowed] false) a
+ * The notification kinds' switches ([on] are on), the note that the attached sessions keep one quiet notification
+ * whatever they say, and while the system lets the app post none ([allowed] false) a
  * banner whose Turn on opens the system's settings for the app.
  */
 @Composable
@@ -78,7 +80,7 @@ internal fun NotificationsSection(
                 onCheckedChange = { actions.onAlert(row.kind, it) },
             )
         }
-        SettingsNote(stringResource(R.string.settings_alert_asks))
+        SettingsNote(stringResource(R.string.settings_alert_attached))
     }
 }
 

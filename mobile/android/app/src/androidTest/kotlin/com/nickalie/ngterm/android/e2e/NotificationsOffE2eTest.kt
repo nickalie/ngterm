@@ -1,0 +1,231 @@
+package com.nickalie.ngterm.android.e2e
+
+import android.app.NotificationManager
+import android.os.Build
+import android.os.ParcelFileDescriptor
+import android.util.Base64
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.SdkSuppress
+import androidx.test.platform.app.InstrumentationRegistry
+import com.nickalie.ngterm.android.MainActivity
+import com.nickalie.ngterm.android.NgtermApplication
+import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.AlertKind
+import com.nickalie.ngterm.android.platform.LINK_NOTIFICATION_ID
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.ExternalResource
+import org.junit.rules.RuleChain
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
+import org.junit.runner.RunWith
+import java.io.File
+
+/**
+ * Every notification switch turned off in Settings, end to end: with the app in the background, the session's agent
+ * sets its status to waiting, sends a notification and asks a question, and none of them posts. The attached
+ * session's quiet notification, which Android needs to keep the connection, is the only one up. Then Questions is
+ * turned on again, and the question that still waits posts: the events did come, and only the switches held them.
+ *
+ * The machine is the private `ngterm-headless` behind the private `sshd` that `scripts/test-android-e2e.sh` starts;
+ * without the script's arguments the test is skipped. No live ngterm.
+ */
+@RunWith(AndroidJUnit4::class)
+@SdkSuppress(minSdkVersion = Build.VERSION_CODES.TIRAMISU)
+class NotificationsOffE2eTest {
+    private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private val arguments = InstrumentationRegistry.getArguments()
+    private val compose = createAndroidComposeRule<MainActivity>()
+    private val context get() = instrumentation.targetContext
+
+    private val stack =
+        object : ExternalResource() {
+            override fun before() {
+                assumeTrue(
+                    "no machine: run it through scripts/test-android-e2e.sh",
+                    listOf(HOST, PORT, USER, KEY).all { !arguments.getString(it).isNullOrBlank() },
+                )
+            }
+        }
+
+    /** A fresh install (no key, no machine, no pin) that may post notifications, set before the activity starts. */
+    private val freshInstall =
+        object : ExternalResource() {
+            override fun before() {
+                File(context.filesDir, "datastore").deleteRecursively()
+                File(context.noBackupFilesDir, "keys").deleteRecursively()
+                shell("pm grant ${context.packageName} android.permission.POST_NOTIFICATIONS")
+                manager().cancelAll()
+            }
+        }
+
+    private val evidence =
+        object : TestWatcher() {
+            override fun failed(
+                e: Throwable?,
+                description: Description,
+            ) = screenshot("failed")
+        }
+
+    @get:Rule
+    val rules: RuleChain =
+        RuleChain
+            .outerRule(stack)
+            .around(freshInstall)
+            .around(compose)
+            .around(evidence)
+
+    @Test
+    fun withEverySwitchOffNothingButTheAttachedSessionsNotificationPosts() {
+        signIn()
+        addMachine()
+        turnEverySwitchOff()
+        openANewSession()
+
+        // the agent's three signals, a moment after the app goes to the background
+        compose.waitUntil(CONNECT_WAIT_MS) { nodes(terminal()) > 0 }
+        compose.onNode(terminal()).performClick()
+        compose.waitForIdle()
+        shell("input text '$SIGNALS'")
+        shell("input keyevent KEYCODE_ENTER")
+        shell("input keyevent KEYCODE_HOME")
+
+        // the question reaches the app (it waits for its answer) while nothing posts
+        val asks = graph().asks
+        compose.waitUntil(CONNECT_WAIT_MS) { asks.open.value.isNotEmpty() }
+        Thread.sleep(SETTLE_MS)
+        assertEquals("notifications up with every switch off", emptyList<String>(), alertsUp())
+        assertTrue("the attached session's notification is down", LINK_NOTIFICATION_ID in manager().activeIds())
+
+        runBlocking { graph().notificationPrefs.set(AlertKind.Questions, true) }
+        compose.waitUntil(CONNECT_WAIT_MS) { alertsUp().any { it.startsWith("ask:") } }
+        screenshot("question-on")
+    }
+
+    private fun turnEverySwitchOff() {
+        compose.onNodeWithText(text(R.string.nav_settings)).performClick()
+        for (label in SWITCHES) {
+            val row = hasText(text(label)) and SemanticsMatcher.keyIsDefined(TOGGLE)
+            compose.onNode(row).performScrollTo().performClick()
+            compose.waitUntil(CONNECT_WAIT_MS) {
+                compose
+                    .onNode(row)
+                    .fetchSemanticsNode()
+                    .config[TOGGLE] == ToggleableState.Off
+            }
+        }
+        screenshot("all-off")
+        compose.onNodeWithText(text(R.string.nav_machines)).performClick()
+    }
+
+    private fun signIn() {
+        val key = String(Base64.decode(arguments.getString(KEY), Base64.DEFAULT))
+        awaitText(text(R.string.welcome_import))
+        compose.onNodeWithText(text(R.string.welcome_import)).performClick()
+        compose.onNodeWithText(text(R.string.import_key_label)).performTextInput(key)
+        compose.onNodeWithText(text(R.string.import_action)).performScrollTo().performClick()
+        awaitText(text(R.string.key_done))
+        compose.onNodeWithText(text(R.string.key_done)).performScrollTo().performClick()
+        awaitText(text(R.string.machines_add))
+    }
+
+    private fun addMachine() {
+        compose.onAllNodesWithText(text(R.string.machines_add))[0].performClick()
+        compose.onNodeWithText(text(R.string.form_label)).performTextInput(MACHINE)
+        compose.onNodeWithText(text(R.string.form_host)).performTextInput(arguments.getString(HOST).orEmpty())
+        compose.onNodeWithText(text(R.string.form_port)).performTextReplacement(arguments.getString(PORT).orEmpty())
+        compose.onNodeWithText(text(R.string.form_user)).performTextInput(arguments.getString(USER).orEmpty())
+        compose.onNodeWithText(text(R.string.form_save)).performClick()
+        awaitText(text(R.string.hostkey_trust))
+        compose.onNodeWithText(text(R.string.hostkey_trust)).performClick()
+        awaitText(MACHINE)
+    }
+
+    private fun openANewSession() {
+        compose.onNodeWithText(MACHINE).performClick()
+        awaitText(text(R.string.machine_sessions_new))
+        compose.onAllNodesWithText(text(R.string.machine_sessions_new))[0].performTouchInput { longClick() }
+        awaitText(text(R.string.new_session_create))
+        compose.onNodeWithText(text(R.string.new_session_name)).performTextInput(SESSION)
+        compose.onNodeWithText(text(R.string.new_session_create)).performClick()
+    }
+
+    private fun graph() = (context.applicationContext as NgtermApplication).graph
+
+    private fun manager() = context.getSystemService(NotificationManager::class.java)
+
+    private fun NotificationManager.activeIds() = activeNotifications.map { it.id }
+
+    // the tags of the app's notifications up, the attached session's one aside
+    private fun alertsUp(): List<String> =
+        manager().activeNotifications.filter { it.id != LINK_NOTIFICATION_ID }.map { it.tag.orEmpty() }
+
+    private fun nodes(matcher: SemanticsMatcher): Int = compose.onAllNodes(matcher).fetchSemanticsNodes().size
+
+    private fun terminal(): SemanticsMatcher = hasContentDescription(text(R.string.terminal_description))
+
+    private fun awaitText(text: String) = compose.waitUntil(CONNECT_WAIT_MS) { nodes(hasText(text)) > 0 }
+
+    private fun text(id: Int): String = context.getString(id)
+
+    private fun screenshot(name: String) {
+        shell("screencap -p $EVIDENCE_DIR/notifications-off-$name.png")
+    }
+
+    private fun shell(command: String): String =
+        ParcelFileDescriptor
+            .AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+            .bufferedReader()
+            .use { it.readText() }
+
+    private companion object {
+        /** The instrumentation arguments the script passes: the host, the machine's port, the user and key. */
+        const val HOST = "e2eHost"
+        const val PORT = "e2ePort"
+        const val USER = "e2eUser"
+        const val KEY = "e2eKey"
+
+        const val MACHINE = "qa-quiet"
+        const val SESSION = "qa-quiet-work"
+
+        /** Typed into the session's shell (`%s` is a space to `input text`): waiting, a notification, a question. */
+        const val SIGNALS =
+            "sleep%s4;ngtermctl%ssession%sstatus%sblocked;ngtermctl%snotify%sqaoffbody%s--title%sQaOff;" +
+                "ngtermctl%sask%sopen%sQaOffQuestion%s--button%syes%s--button%sno"
+
+        val SWITCHES =
+            listOf(
+                R.string.settings_alert_questions,
+                R.string.settings_alert_waiting,
+                R.string.settings_alert_done,
+                R.string.settings_alert_notices,
+                R.string.settings_alert_errors,
+            )
+
+        val TOGGLE = SemanticsProperties.ToggleableState
+
+        const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
+        const val CONNECT_WAIT_MS = 60_000L
+
+        // how long the status and the notice have to post, had a switch let them
+        const val SETTLE_MS = 5_000L
+    }
+}
