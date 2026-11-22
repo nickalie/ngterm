@@ -133,6 +133,35 @@ def test_a_markdown_page_with_navigation_reads_back_its_link_page(ctl):
 
 
 @pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.overlay.open", "session.overlay.reload", "theme.set", "field:tree.session.htmlOverlays")
+def test_a_markdown_link_page_keeps_its_navigation_across_a_theme_change_and_a_reload(ctl):
+    readme = _readme(ctl.instance.root / f"docs-{uuid.uuid4().hex}")
+    found = assert_ok(ctl.request("theme.list"))
+    sid = _new(ctl)
+    expected = {"markdown": str(readme), "navigation": True, "canGoBack": False, "canGoForward": False}
+    try:
+        assert_ok(ctl.request("session.overlay.open", sid, markdownFile=str(readme), navigation=True))
+        _page(ctl, sid)
+        other = next(name for name in found["themes"] if name != found.get("theme"))
+        assert_ok(ctl.request("theme.set", name=other, dark="none"))
+        page = _page(ctl, sid)
+        assert_subset(page, expected)
+        assert foundation_resolved(page["page"]) == foundation_resolved(os.path.realpath(readme)), page
+        assert_ok(ctl.request("session.overlay.reload", sid))
+        page = _page(ctl, sid)
+        assert_subset(page, expected)
+        assert foundation_resolved(page["page"]) == foundation_resolved(os.path.realpath(readme)), page
+    finally:
+        ctl.request("session.close", sid)
+        if found.get("sync"):
+            ctl.request("theme.set", light=found["light"], dark=found["dark"])
+        elif found.get("theme"):
+            ctl.request("theme.set", name=found["theme"], dark="none")
+        else:
+            ctl.request("theme.set")
+
+
+@pytest.mark.since("0.42.0")
 @pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
 def test_a_markdown_file_in_the_home_folder_opens_without_navigation(ctl):
     readme = ctl.instance.home / f"home-{uuid.uuid4().hex}.md"
