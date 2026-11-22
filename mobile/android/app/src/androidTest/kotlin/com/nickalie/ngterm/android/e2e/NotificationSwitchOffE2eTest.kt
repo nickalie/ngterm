@@ -24,8 +24,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import com.nickalie.ngterm.android.MainActivity
+import com.nickalie.ngterm.android.NgtermApplication
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.platform.LINK_NOTIFICATION_ID
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -40,7 +43,7 @@ import java.io.File
 
 /**
  * A notification switch turned off in Settings while its notifications are up, end to end: the session's agent asks
- * a question and sets its status to waiting while the user is in Settings, so both post; turning Questions off takes
+ * a question and sets its status to waiting once the user is in Settings, so both post; turning Questions off takes
  * the question's notification down, and turning Waiting for you off takes the status down. The agent then sets its
  * status to finished, which posts, and turning Finished off takes it down. The attached session's quiet notification
  * stays through all of it.
@@ -114,6 +117,7 @@ class NotificationSwitchOffE2eTest {
         compose.waitUntil(CONNECT_WAIT_MS) { nodes(hasText(text(R.string.nav_settings))) > 0 }
         compose.onAllNodesWithText(text(R.string.nav_settings))[0].performClick()
         awaitText(text(R.string.settings_alert_questions))
+        go(FIRST_GO)
         compose.waitUntil(CONNECT_WAIT_MS) { alertsUp().any { it.startsWith("ask:") } }
         compose.waitUntil(CONNECT_WAIT_MS) { alertsUp().any { it.startsWith("status:") } }
         screenshot("switch-off-up")
@@ -125,13 +129,28 @@ class NotificationSwitchOffE2eTest {
         assertEquals("notifications up with Questions and Waiting for you off", emptyList<String>(), alertsUp())
 
         // the agent finishes: Finished is still on, so it posts
-        compose.waitUntil(FINISH_WAIT_MS) { alertsUp().any { it.startsWith("status:") } }
+        go(SECOND_GO)
+        compose.waitUntil(CONNECT_WAIT_MS) { alertsUp().any { it.startsWith("status:") } }
         turnOff(R.string.settings_alert_done)
         compose.waitUntil(CONNECT_WAIT_MS) { alertsUp().none { it.startsWith("status:") } }
         screenshot("switch-off-down")
         assertEquals("notifications up with the three switches off", emptyList<String>(), alertsUp())
         assertTrue("the attached session's notification is down", LINK_NOTIFICATION_ID in manager().activeIds())
     }
+
+    /** Lets the signals that wait on [name] go: they wait until the machine lists a session of that name. */
+    private fun go(name: String) {
+        runBlocking {
+            val machine =
+                graph()
+                    .machines.machines
+                    .first()
+                    .single { it.label == MACHINE }
+            graph().connections.createSession(machine.id, name)
+        }
+    }
+
+    private fun graph() = (context.applicationContext as NgtermApplication).graph
 
     private fun turnOff(label: Int) {
         val row = hasText(text(label)) and SemanticsMatcher.keyIsDefined(TOGGLE)
@@ -241,16 +260,23 @@ class NotificationSwitchOffE2eTest {
 
         /**
          * Typed into the session's shell (fish; `%s` is a space to `input text`), a line each, since a long line loses
-         * its end: `t` names this session, as the origin's active one is another; separate processes (fish runs a
-         * `begin` block in the foreground) ask, set waiting and later finished once the test is in Settings.
+         * its end: `t` names this session, as the origin's active one is another; `g` is a script that waits until
+         * the machine lists a session named by its argument. Separate processes (fish runs a `begin` block in the
+         * foreground) ask and set waiting once the test makes [FIRST_GO], and set finished once it makes [SECOND_GO].
          */
         val SIGNALS =
             listOf(
                 "set%s-x%st%s\$NGTERM_SESSION_ID",
-                "fish%s-c%s'sleep%s12;ngtermctl%sask%sopen%sQaUp%s--button%syes%s--button%sno%s--target%s\$t'%s&",
-                "fish%s-c%s'sleep%s12;ngtermctl%ssession%sstatus%sblocked%s--target%s\$t'%s&",
-                "fish%s-c%s'sleep%s40;ngtermctl%ssession%sstatus%scompleted%s--target%s\$t'%s&",
+                "set%s-x%sg%s(mktemp)",
+                "echo%s'while%snot%sngtermctl%stree|string%smatch%s-qr%s\$argv[1];sleep%s1;end'>\$g",
+                "fish%s-c%s'fish%s\$g%sqago1;ngtermctl%sask%sopen%sQaUp%s" +
+                    "--button%syes%s--button%sno%s--target%s\$t'%s&",
+                "fish%s-c%s'fish%s\$g%sqago1;ngtermctl%ssession%sstatus%sblocked%s--target%s\$t'%s&",
+                "fish%s-c%s'fish%s\$g%sqago2;ngtermctl%ssession%sstatus%scompleted%s--target%s\$t'%s&",
             )
+
+        const val FIRST_GO = "qago1"
+        const val SECOND_GO = "qago2"
 
         /** Typed until the shell prints [READY], which the typed line itself does not hold. */
         const val PING = "string%supper%sqaready"
@@ -262,7 +288,6 @@ class NotificationSwitchOffE2eTest {
 
         const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
         const val CONNECT_WAIT_MS = 60_000L
-        const val FINISH_WAIT_MS = 90_000L
 
         const val PING_WAIT_MS = 3_000L
     }
