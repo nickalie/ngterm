@@ -21,13 +21,16 @@ UNAME = """#!/bin/sh
 echo MINGW64_NT-10.0-26100
 """
 
-# -u turns a Windows path's backslashes into slashes, -w keeps a POSIX path (pytest on Linux reads it), -ua makes it
-# absolute.
-CYGPATH = """#!/bin/sh
+# As Git Bash's cygpath, -u turns a drive (C:\, here CYGPATH_DRIVE) and backslashes into a POSIX path, -ua makes it
+# absolute, and -w keeps a POSIX path (pytest on Linux reads it). A node id is not a path: the real one mangles it.
+CYGPATH = r"""#!/bin/sh
+case "$2" in
+    *::* | *[[]*) echo "cygpath stand-in: not a path: $2" >&2; exit 1 ;;
+esac
 case "$1" in
-    -u) printf '%s\\n' "$2" | tr '\\\\' / ;;
+    -u) printf '%s\n' "$2" | sed 's|^[A-Za-z]:\\|'"$CYGPATH_DRIVE"'/|' | tr '\\' / ;;
     -ua) realpath -m -- "$2" ;;
-    -w) printf '%s\\n' "$2" ;;
+    -w) printf '%s\n' "$2" ;;
     *) echo "cygpath stand-in: $*" >&2; exit 2 ;;
 esac
 """
@@ -88,7 +91,12 @@ def run(
     env = {key: value for key, value in os.environ.items() if not key.startswith(("NGTERM_", "AGTERM_"))}
     env.pop("PYTHONPATH", None)
     env.pop("GITHUB_STEP_SUMMARY", None)
-    env.update(PATH=f"{git_bash}{os.pathsep}{os.environ['PATH']}", PYTHON=str(git_bash / "python"), TEMP=str(tmp_path / "temp"))
+    env.update(
+        PATH=f"{git_bash}{os.pathsep}{os.environ['PATH']}",
+        PYTHON=str(git_bash / "python"),
+        TEMP=str(tmp_path / "temp"),
+        CYGPATH_DRIVE=str(tmp_path),
+    )
     completed = subprocess.run(
         [str(SCRIPT), "--stage", str(stage), "--tests", str(layers), "--ratchet", str(listed), "--out", str(out), *args],
         cwd=cwd,
@@ -130,6 +138,7 @@ def test_without_a_selector_every_layer_runs(tmp_path: Path, git_bash: Path, lay
         ("protocol/test_probe.py::test_probe", "tests", [PROBE_ID]),
         ("protocol\\test_probe.py", "tests", [PROBE_ID]),
         ("tests/protocol/test_probe.py", "absolute", [PROBE_ID]),
+        ("C:\\tests\\protocol\\test_param.py::test_case[two]", "repo", ["tests/protocol/test_param.py::test_case[two]"]),
     ],
 )
 def test_a_node_id_after_the_separator_runs_only_that_node(
