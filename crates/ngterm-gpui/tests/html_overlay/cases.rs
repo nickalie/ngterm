@@ -5,7 +5,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,7 +29,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 35] = [
+pub const CASES: [(&str, Case); 36] = [
     (
         "an_image_document_renders_and_current_reload_rereads_the_source",
         image_document,
@@ -45,6 +45,10 @@ pub const CASES: [(&str, Case); 35] = [
     (
         "a_markdown_link_page_keeps_its_file_when_a_clicked_link_cannot_be_read",
         markdown_link_unreadable,
+    ),
+    (
+        "a_markdown_link_page_keeps_the_linked_file_across_a_theme_rebuild",
+        markdown_link_themed,
     ),
     (
         "a_text_page_starts_with_the_models_search_and_steps_through_its_renderer",
@@ -1848,6 +1852,44 @@ fn markdown_link_unreadable(fixture: &mut Fixture, _: &Gpu) -> Result<(), String
         std::thread::sleep(Duration::from_millis(10));
     }
     Ok(())
+}
+
+/// Upstream's `applyTheme` on a Markdown link page: a theme rebuild reloads the linked file it shows, not the page's
+/// first file, and the reloaded file wears the new palette (its quote's rule is palette color 4).
+fn markdown_link_themed(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let overlay = link_page(fixture, "sub/guide.md")?;
+    let HtmlSource::Markdown { path } = &overlay.source else {
+        return Err("a link page shows a Markdown file".to_owned());
+    };
+    let guide = Path::new(path).with_file_name("sub").join("guide.md");
+    std::fs::write(guide, "![blue](blue.png)\n\n> quoted\n").map_err(|error| error.to_string())?;
+    let element = fixture.mount(&overlay, 320.0, 300.0)?;
+    fixture.until("the first file's picture", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), RED)
+    })?;
+    fixture.click(point(px(160.), px(130.)))?;
+    fixture.until("the linked file's picture", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), BLUE)
+    })?;
+    let accent = [0x00, 0xff, 0x00, 0xff];
+    let mut palette = vec![String::new(); 16];
+    palette[4] = "#00ff00".to_owned();
+    let colors = html_overlay::TerminalColors {
+        background: Some("#102030".to_owned()),
+        foreground: Some("#f0f0f0".to_owned()),
+        palette,
+    };
+    fixture.cx.update(|cx| html_overlay::refresh_themes(&colors, cx));
+    fixture.until(
+        "the linked file reloaded in the new palette",
+        &element,
+        |_, width, pixels| {
+            close(pixel(pixels, width, 160, 130), BLUE)
+                && pixels
+                    .chunks_exact(4)
+                    .any(|rgba| close(rgba.try_into().unwrap_or_default(), accent))
+        },
+    )
 }
 
 /// A text page's renderer (`text.js` in its world) starts with the model's query from its document and counts it; a
