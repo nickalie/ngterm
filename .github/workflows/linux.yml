@@ -250,7 +250,10 @@ jobs:
       - &arch-fill
         name: the snapshot's packages, on a cache miss
         if: steps.arch-cache.outputs.cache-hit != 'true'
-        run: pacman-archive --fill $ARCH_PACKAGES
+        shell: bash
+        run: |
+          read -ra packages <<< "$ARCH_PACKAGES"
+          pacman-archive --fill "${packages[@]}"
       # every ref saves on a miss: a branch reads main's entry first, so it saves only when main has none for the key
       - name: save the package cache
         if: steps.arch-cache.outputs.cache-hit != 'true'
