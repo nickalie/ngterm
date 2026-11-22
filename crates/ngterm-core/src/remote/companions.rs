@@ -737,11 +737,10 @@ impl Core {
     /// or the workspace close.
     fn place_origin_page(&mut self, attach: &PageAttach, seed: ReplicaPageSeed) -> Result<Uuid, String> {
         let home = self.library().home().to_owned();
-        let refused = |refusal: ReplicaPageRefusal| match refusal {
-            ReplicaPageRefusal::NotOpened(failure) => {
-                crate::commands::overlay_page::open_failure(failure, None).to_owned()
-            }
-            other => other.message().unwrap_or_default().to_owned(),
+        let refused = |refusal: ReplicaPageRefusal| {
+            refusal
+                .message(|failure| crate::commands::overlay_page::open_failure(failure, None))
+                .to_owned()
         };
         match attach.spot {
             PageSpot::Companion(parent) => self

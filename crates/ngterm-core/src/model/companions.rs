@@ -210,8 +210,8 @@ impl AppStore {
         session.companion.parent.and_then(|id| self.session(id))
     }
 
-    /// The app remote row `session`'s origin runs: its own binding's, else its parent's, as a page row has no binding of
-    /// its own. `None` for a local row or one bound without an origin.
+    /// The app remote row `session`'s origin runs: its own binding's, else its parent's, for a row bound without an
+    /// origin. `None` for a local row or one bound without an origin.
     #[must_use]
     pub fn remote_peer_of(&self, session: &Session) -> Option<crate::remote::peer::RemotePeer> {
         session

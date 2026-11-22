@@ -167,8 +167,8 @@ impl Placement {
 }
 
 impl Core {
-    /// `live.attach` once its host's list arrived: a page companion attaches under the one row here showing its
-    /// parent ([`super::companions`]); a terminal companion joins its unique matching parent in this window.
+    /// `live.attach` once its host's list arrived: a page attaches through [`super::companions`], a top-level page as a
+    /// top-level row and a page companion under the one row here showing its parent; a terminal companion joins its unique matching parent in this window.
     fn attach_answered(&mut self, result: &RemoteCommandResult, request: &AttachRequest) -> Dispatched {
         let remote_tree = match read_remote_tree(result, &request.host) {
             Ok(tree) => tree,
@@ -437,8 +437,8 @@ struct AttachAllReport {
 }
 
 /// The sessions Attach All attaches, parents before their companions so each companion finds its parent's row: what
-/// `tree` offers that `rows` does not show yet. A page companion attaches only under a parent the picker cannot name,
-/// so it stays out, as it stays out of the picker's rows.
+/// `tree` offers that `rows` does not show yet. It attaches no page: a page companion has no row to go under, and a
+/// top-level page is picked on its own.
 fn attach_all_sessions<'a>(tree: &'a ControlRemoteTree, rows: &HashMap<String, Uuid>) -> Vec<&'a ControlRemoteSession> {
     pickable_sessions(tree)
         .into_iter()
@@ -777,11 +777,7 @@ impl Core {
         let mut sessions: Vec<PickItem> = Vec::new();
         for app in tree.apps() {
             let rows = self.rows_attached_from(host, &app.endpoint);
-            // Attach All attaches no page, so a page row is no session it would attach
-            unattached += pickable_sessions(app)
-                .into_iter()
-                .filter(|session| !rows.contains_key(&session.id))
-                .count();
+            unattached += attach_all_sessions(app, &rows).len();
             let named = tree.beside.is_some().then(|| app.endpoint.peer());
             sessions.extend(app_items(app, named.filter(|peer| *peer != RemotePeer::Ngterm)));
         }

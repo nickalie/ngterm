@@ -2578,6 +2578,38 @@ fn a_host_running_both_apps_offers_both_and_attaches_each_through_its_own_app() 
     assert!(line.contains("close") && line.contains(AGTERM_SESSION), "{line}");
 }
 
+/// A top-level page that agterm lists on a Mac that runs both apps asks agterm's CLI for its handover, as the page's
+/// origin is agterm's endpoint, though the host is ngterm's for a line no row names.
+#[test]
+fn a_page_root_agterm_lists_beside_ngterm_is_handed_over_by_agterm() {
+    let host = "both-pages.example";
+    let mut attach = Attach::new(Some(&format!("{host} Both\n")));
+    let window = attach.fixture.window;
+    attach.core().attach_remote(window);
+    attach.wait_for_runs(1);
+    let mut dash = page_session(5, 0);
+    dash["name"] = json!("dash");
+    dash.as_object_mut().unwrap().remove("parent");
+    let answer = || both_listing(&[build_session()], std::slice::from_ref(&dash));
+    attach.runner.answer(0, answer());
+    attach.drive("the session picker opens", |attach| attach.pending().is_some());
+    let picker = attach.pending().unwrap();
+    assert_eq!(labels(&picker), ["Attach All", "New Session", "build", "dash"]);
+
+    attach.resolve(&picker, picker.picked(FIRST_SESSION + 1).unwrap());
+    attach.wait_for_runs(2);
+    attach.runner.answer(1, answer());
+    attach.wait_for_runs(3);
+    assert_eq!(
+        crate::remote::peer::peer_of(host),
+        crate::remote::peer::RemotePeer::Ngterm
+    );
+    let line = attach.runner.lines()[2].clone();
+    assert!(line.contains("page-attach"), "{line}");
+    assert!(line.contains("agtermctl") && !line.contains("ngtermctl"), "{line}");
+    assert!(line.contains(&Uuid::from_u128(5).to_string().to_uppercase()), "{line}");
+}
+
 /// Attach All on a Mac that runs both apps attaches the sessions of both, each through its own endpoint.
 #[test]
 fn attach_all_on_a_host_running_both_apps_attaches_the_sessions_of_both() {

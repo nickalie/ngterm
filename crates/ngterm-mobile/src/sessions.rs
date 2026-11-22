@@ -97,7 +97,7 @@ impl RemoteSession {
     }
 }
 
-/// The sessions of `tree` the app lists: desktop's picker's (no page companions, parents first), each naming the app
+/// The sessions of `tree` the app lists: the desktop's terminal sessions (no pages, parents first), each naming the app
 /// that listed it. On a machine that runs both apps, agterm's follow ngterm's.
 #[must_use]
 pub fn listed_sessions(tree: &ControlRemoteTree) -> Vec<RemoteSession> {

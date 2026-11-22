@@ -42,13 +42,13 @@ pub enum ReplicaPageRefusal {
 }
 
 impl ReplicaPageRefusal {
-    /// Upstream's `ReplicaPageRefusal` message; a slot's refusal is worded by its caller.
+    /// Upstream's `ReplicaPageRefusal` message; `slot` words a slot's refusal, as the caller knows its wording.
     #[must_use]
-    pub fn message(&self) -> Option<&'static str> {
+    pub fn message(&self, slot: fn(HtmlOverlayOpenFailure) -> &'static str) -> &'static str {
         match self {
-            Self::ParentGone => Some("the parent row here is gone"),
-            Self::WorkspaceGone => Some("the workspace here is gone"),
-            Self::NotOpened(_) => None,
+            Self::ParentGone => "the parent row here is gone",
+            Self::WorkspaceGone => "the workspace here is gone",
+            Self::NotOpened(failure) => slot(*failure),
         }
     }
 }
@@ -286,16 +286,21 @@ mod tests {
         let before = store.sessions().count();
         let result = store.add_replica_page_root(root_in(Uuid::new_v4(), None), page(), true, "/home/u");
         assert_eq!(result, Err(ReplicaPageRefusal::WorkspaceGone));
+        let slot = |_: HtmlOverlayOpenFailure| "slot refused";
         assert_eq!(
-            ReplicaPageRefusal::WorkspaceGone.message(),
-            Some("the workspace here is gone")
+            ReplicaPageRefusal::WorkspaceGone.message(slot),
+            "the workspace here is gone"
         );
         assert_eq!(store.sessions().count(), before);
         assert_eq!(
-            ReplicaPageRefusal::ParentGone.message(),
-            Some("the parent row here is gone")
+            ReplicaPageRefusal::ParentGone.message(slot),
+            "the parent row here is gone"
         );
         let refused = ReplicaPageRefusal::NotOpened(HtmlOverlayOpenFailure::AlreadyOpen);
-        assert_eq!(refused.message(), None, "the caller words a slot's refusal");
+        assert_eq!(
+            refused.message(slot),
+            "slot refused",
+            "the caller words a slot's refusal"
+        );
     }
 }

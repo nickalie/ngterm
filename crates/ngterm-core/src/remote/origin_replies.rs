@@ -191,14 +191,14 @@ pub fn read_peer_tree(result: &RemoteCommandResult, host: &str) -> Result<Contro
     Ok(remote.stamped(host))
 }
 
-/// Whether a listed session is one a picker offers: a page companion attaches only under its parent's row, which a
-/// picker has no place for.
+/// Whether a listed session is a terminal session, one Attach All and the mobile list take: a page attaches only when
+/// picked on its own or under its parent's row.
 #[must_use]
 pub fn is_pickable(session: &ControlRemoteSession) -> bool {
     session.content.is_none()
 }
 
-/// The sessions of `tree` a picker offers, parents before their companions so each companion finds its parent's row.
+/// The terminal sessions of `tree` ([`is_pickable`]), parents before their companions so each companion finds its parent's row.
 #[must_use]
 pub fn pickable_sessions(tree: &ControlRemoteTree) -> Vec<&ControlRemoteSession> {
     let mut sessions: Vec<&ControlRemoteSession> =
