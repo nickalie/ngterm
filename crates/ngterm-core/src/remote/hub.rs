@@ -255,6 +255,10 @@ pub const STATUS_SHAPES_KIND: &str = "status.shapes";
 /// which draws its own settings shape instead. It names no frame body.
 pub const STATUS_CHECKMARK_KIND: &str = "status.checkmark";
 
+/// A viewer forwards a path clicked in an attached pane for the origin to open, and takes the refusal that answers
+/// one (upstream's `linkClickKind`; [`super::link_click`]). A viewer lists it only with the page kinds.
+pub const LINK_CLICK_KIND: &str = "link.click";
+
 /// A presenter attaches the page companions a headless origin creates under the session it presents
 /// ([`super::frames::Body::CompanionPage`]). This build's addition, listed with the page kinds.
 pub const COMPANION_PAGE_KIND: &str = "companion.page";
@@ -269,7 +273,7 @@ pub const PAGE_DETACHED_KIND: &str = "page.detached";
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
-pub const SUPPORTED_KINDS: [&str; 23] = [
+pub const SUPPORTED_KINDS: [&str; 24] = [
     "status",
     "hud",
     "notify",
@@ -284,6 +288,7 @@ pub const SUPPORTED_KINDS: [&str; 23] = [
     PAGE_DOCUMENT_KIND,
     STATUS_SHAPES_KIND,
     STATUS_CHECKMARK_KIND,
+    LINK_CLICK_KIND,
     super::page_tunnel::TUNNEL_KIND,
     COMPANION_PAGE_KIND,
     PAGE_DETACHED_KIND,
@@ -589,7 +594,9 @@ impl PresentationHub {
                     self.reroute_surfaces(session);
                 }
             }
-            body @ (Body::AskResolve(_) | Body::AskRejected(_)) if self.grant.holder(session) == Some(from) => {
+            body @ (Body::AskResolve(_) | Body::AskRejected(_) | Body::LinkClick(_))
+                if self.grant.holder(session) == Some(from) =>
+            {
                 self.events.push(HubEvent::PresenterFrame(session, Box::new(body)));
             }
             body @ (Body::OverlayRejected(_) | Body::OverlayClosed(_))
@@ -1345,6 +1352,7 @@ mod tests {
                 "page.document",
                 "status.shapes",
                 "status.checkmark",
+                "link.click",
                 "page.tunnel",
                 "companion.page",
                 "page.detached",
@@ -1608,6 +1616,31 @@ mod tests {
                 HubEvent::PresenterFrame(session, Box::new(closed)),
                 HubEvent::PresenterFrame(session, Box::new(detached))
             ]
+        );
+    }
+
+    /// Upstream's `onlyThePresentersLinkClickReachesTheHost`: a mirror's forwarded click is dropped, the presenter's reaches
+    /// the owner.
+    #[test]
+    fn only_the_presenters_link_click_reaches_the_owner() {
+        use crate::remote::frames::PresentationLinkClick;
+        let (mut hub, _) = hub();
+        let session = Uuid::new_v4();
+        let (presenter, _) = subscribe(&mut hub, session, PresentationMode::Presenter);
+        let (mirror, _) = subscribe(&mut hub, session, PresentationMode::Mirror);
+        hub.receive(frame(presenter, Body::PresenterAcquire), presenter);
+        hub.take_events();
+        let click = Body::LinkClick(PresentationLinkClick {
+            raw: "a.md".to_owned(),
+            pane: Uuid::new_v4(),
+            mode: crate::persist::settings::LinkOpenMode::Overlay,
+        });
+        hub.receive(frame(mirror, click.clone()), mirror);
+        assert!(hub.take_events().is_empty());
+        hub.receive(frame(presenter, click.clone()), presenter);
+        assert_eq!(
+            hub.take_events(),
+            vec![HubEvent::PresenterFrame(session, Box::new(click))]
         );
     }
 

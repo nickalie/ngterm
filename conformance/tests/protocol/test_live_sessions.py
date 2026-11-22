@@ -1525,6 +1525,46 @@ def test_content_pages_go_only_to_a_presenter_listing_page_content(live, tmp_pat
         assert "remoteOverlays" not in find_session(live.tree(), sid)
 
 
+# A presenter that forwards a path clicked in a pane it shows lists `link.click` (#923).
+LINK_CLICK_PRESENTER_KINDS = [*CONTENT_PRESENTER_KINDS, "link.click"]
+
+
+def _forward_click(presenter, gen, rev, raw, pane):
+    presenter.send({"kind": "link.click", "gen": gen, "rev": rev, "link": {"raw": raw, "pane": pane, "mode": "overlay"}})
+
+
+@LIVE
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("live.present", "field:tree.session.remoteOverlays", streams=("live.present",))
+def test_a_presenters_forwarded_click_opens_its_page_there_or_is_refused(live, tmp_path):
+    """A path the presenter forwards with `link.click` opens for it as a clicked page with nothing shown here; a missing
+    file, a pane the session does not have and a file no page shows each answer one `link.refused` and reserve
+    nothing (#923)."""
+    _, _, readme, _ = _content_files(tmp_path)
+    binary = tmp_path / "notes" / "tool.bin"
+    binary.write_bytes(bytes(range(16)))
+    with _page_presenter(live, LINK_CLICK_PRESENTER_KINDS) as (sid, presenter, gen):
+        pane = _pane_id(live, sid)
+        refusals = [
+            (str(tmp_path / "notes" / "missing.md"), pane, "notFound"),
+            (str(readme), "00000000-0000-0000-0000-000000000000", "paneNotAttached"),
+            (str(binary), pane, "notAPage"),
+        ]
+        for rev, (raw, clicked, reason) in enumerate(refusals, start=2):
+            _forward_click(presenter, gen, rev, raw, clicked)
+            refused = wait_frame(presenter.read, "link.refused", presenter.send)
+            assert refused["link"] == {"reason": reason}, raw
+            assert "remoteOverlays" not in find_session(live.tree(), sid), raw
+        _forward_click(presenter, gen, len(refusals) + 2, str(readme), pane)
+        request = wait_frame(presenter.read, "page.request", presenter.send)["page"]
+        assert request["source"] == {"markdown": {"path": foundation_resolved(str(readme))}}
+        page_id = request["page"]
+        live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == [{"pageID": page_id}])
+        assert find_session(live.tree(), sid)["overlay"] is False, "nothing covers the session here"
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close", presenter.send)
+
+
 @LIVE
 @pytest.mark.since("0.41.0")
 @pytest.mark.covers("session.overlay.page.serve", streams=("session.overlay.page.serve",))

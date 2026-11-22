@@ -21,8 +21,8 @@ use super::frames::{
     PresentationSound, PresentationStatus,
 };
 use super::hub::{
-    AGENT_KIND, COMPANION_PAGE_KIND, NO_OVERLAYS_KIND, OPT_IN_KINDS, PAGE_CONTENT_KIND, PAGE_DETACHED_KIND,
-    PAGE_DOCUMENT_KIND, PAGE_KINDS, STATUS_CHECKMARK_KIND, SUPPORTED_KINDS,
+    AGENT_KIND, COMPANION_PAGE_KIND, LINK_CLICK_KIND, NO_OVERLAYS_KIND, OPT_IN_KINDS, PAGE_CONTENT_KIND,
+    PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, STATUS_CHECKMARK_KIND, SUPPORTED_KINDS,
 };
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
@@ -37,7 +37,7 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 /// page (`pages`: the web views are built in and can run), and with them the content and document pages
 /// ([`PAGE_CONTENT_KIND`], [`PAGE_DOCUMENT_KIND`]), the loopback forward ([`super::page_tunnel::TUNNEL_KIND`]), a
 /// headless origin's page companions ([`COMPANION_PAGE_KIND`]) and the page detach ([`PAGE_DETACHED_KIND`]), the last
-/// three extensions of this build. Upstream's hello lists them all; an origin a viewer
+/// three extensions of this build, and forwarded clicks ([`LINK_CLICK_KIND`]), whose pages come back as handed-over ones. Upstream's hello lists them all; an origin a viewer
 /// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
 /// once. `status.shapes` ([`super::hub::STATUS_SHAPES_KIND`]) is always listed: desktop and both mobile apps draw
 /// every shape it names. `status.checkmark` ([`STATUS_CHECKMARK_KIND`]) is listed too: a viewer that does not draw the
@@ -55,6 +55,7 @@ pub fn viewer_kinds(pages: bool) -> Vec<String> {
                         super::page_tunnel::TUNNEL_KIND,
                         COMPANION_PAGE_KIND,
                         PAGE_DETACHED_KIND,
+                        LINK_CLICK_KIND,
                     ]
                     .contains(kind))
         })
@@ -116,6 +117,8 @@ pub enum ClientEffect {
     PageCommand(PresentationPageCommand),
     /// Attaches a page companion the origin created under the session.
     CompanionPage(PresentationCompanion),
+    /// The origin refused a click this machine forwarded ([`super::link_click`]).
+    LinkRefused(super::link_click::RemoteLinkRefusal),
     /// The origin's respawn counts; `true` for a snapshot's, which a first attach takes as its baseline.
     Respawns(PresentationRespawns, bool),
     /// What one pane runs ([`AGENT_KIND`]), only for a client that asked for it
@@ -228,6 +231,13 @@ impl PresentationClient {
     #[must_use]
     pub fn origin_speaks(&self, kind: &str) -> bool {
         self.origin_kinds.iter().any(|listed| listed == kind)
+    }
+
+    /// [`Self::origin_speaks`] on a link that is up now (upstream's `originSupports`): a frame sent with none is
+    /// dropped.
+    #[must_use]
+    pub fn link_speaks(&self, kind: &str) -> bool {
+        self.link.is_some() && self.origin_speaks(kind)
     }
 
     /// The kinds the next hello lists.
@@ -407,9 +417,11 @@ impl PresentationClient {
             Body::PageCommand(command) => effects.push(ClientEffect::PageCommand(command)),
             Body::Respawn(respawns) => effects.push(ClientEffect::Respawns(respawns, false)),
             Body::CompanionPage(companion) => effects.push(ClientEffect::CompanionPage(companion)),
+            Body::LinkRefused(refusal) => effects.push(ClientEffect::LinkRefused(refusal.reason)),
             Body::Agent(agent) if self.opt_in.contains(&AGENT_KIND) => effects.push(ClientEffect::Agent(agent)),
             Body::Ack
             | Body::PresenterAcquire
+            | Body::LinkClick(_)
             | Body::AskResolve(_)
             | Body::AskRejected(_)
             | Body::OverlayRejected(_)
@@ -690,6 +702,38 @@ mod tests {
             }
             waited
         }
+    }
+
+    /// Upstream's `theOriginsAgreedKindsHoldOnlyForTheLinkTheyCameWith` and `anOriginsLinkRefusalReachesTheApp`: the origin's agreement on
+    /// `link.click` holds only on a link that is up after a hello listing it, its refusal reaches the effects, and only a
+    /// viewer showing pages lists the kind, as only pages answer a forwarded click.
+    #[test]
+    fn a_forwarded_click_needs_the_origins_kind_on_a_live_link() {
+        assert!(viewer_kinds(true).iter().any(|kind| kind == LINK_CLICK_KIND));
+        assert!(!viewer_kinds(false).iter().any(|kind| kind == LINK_CLICK_KIND));
+        let mut harness = Harness::started();
+        assert!(!harness.client.link_speaks(LINK_CLICK_KIND), "before the hello");
+        let hello = PresentationHello {
+            version: 1,
+            kinds: vec!["status".to_owned(), LINK_CLICK_KIND.to_owned()],
+            mode: PresentationMode::Presenter,
+        };
+        harness.deliver(&line(Body::Hello(hello), 7, 0));
+        assert!(harness.client.link_speaks(LINK_CLICK_KIND));
+        harness.deliver(&line(
+            Body::LinkRefused(super::super::frames::PresentationLinkRefusal {
+                reason: super::super::link_click::RemoteLinkRefusal::NotAPage,
+            }),
+            7,
+            1,
+        ));
+        assert!(harness.effects.iter().any(|effect| matches!(
+            effect,
+            ClientEffect::LinkRefused(super::super::link_click::RemoteLinkRefusal::NotAPage)
+        )));
+        harness.close("gone");
+        assert!(!harness.client.link_speaks(LINK_CLICK_KIND), "with no link");
+        assert!(harness.client.origin_speaks(LINK_CLICK_KIND));
     }
 
     #[test]

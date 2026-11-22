@@ -207,7 +207,8 @@ pub(crate) fn open_remote_page(
     let Some(found) = core.library().store(window).and_then(|store| store.session(session)) else {
         return RemotePageOpen::Local;
     };
-    if found.remote_overlays().slot(slot).is_some() || found.local_overlay_holds(slot) {
+    let replaces = opening.forwarded && holds_hidden_clicked_page(found, slot);
+    if (found.remote_overlays().slot(slot).is_some() && !replaces) || found.local_overlay_holds(slot) {
         return RemotePageOpen::SlotTaken;
     }
     let identity = match slot_identity(found, slot) {
@@ -217,17 +218,8 @@ pub(crate) fn open_remote_page(
     if !core.presents_remotely(found, identity) {
         return RemotePageOpen::Local;
     }
-    if !PAGE_KINDS
-        .iter()
-        .all(|kind| core.remote.hub.surface_supports(Surface::Pages, kind, session))
-    {
-        return RemotePageOpen::Unsupported;
-    }
-    if !presenter_builds(core, session, &source) {
-        return RemotePageOpen::Unsupported;
-    }
-    if unreachable_loopback(core, session, &overlay.source) {
-        return RemotePageOpen::Loopback;
+    if let Some(refusal) = presenter_refusal(core, session, &source, &overlay.source) {
+        return refusal;
     }
     let token = uuid_string(Uuid::new_v4());
     let size = page_size(opening);
@@ -250,6 +242,9 @@ pub(crate) fn open_remote_page(
     }
     let hud = found.overlay.hud_active();
     let owner = core.remote.hub.surface_generation(Surface::Pages, session);
+    if replaces {
+        close_replaced_page(core, window, session, slot);
+    }
     let Some(store) = core.library_mut().store_mut(window) else {
         return RemotePageOpen::Local;
     };
@@ -277,6 +272,45 @@ pub(crate) fn open_remote_page(
     core.remote.hub.send_to_surface(Surface::Pages, request, session);
     core.arm_page_claim_expiry(channel);
     RemotePageOpen::Opened
+}
+
+/// Why `session`'s presenter cannot be handed a page of `source`: it lacks the page kinds or the kind this page needs,
+/// or the page is a loopback URL it cannot reach.
+fn presenter_refusal(
+    core: &Core,
+    session: Uuid,
+    source: &PresentationPageSource,
+    page: &HtmlSource,
+) -> Option<RemotePageOpen> {
+    let pages = PAGE_KINDS
+        .iter()
+        .all(|kind| core.remote.hub.surface_supports(Surface::Pages, kind, session));
+    if !pages || !presenter_builds(core, session, source) {
+        return Some(RemotePageOpen::Unsupported);
+    }
+    unreachable_loopback(core, session, page).then_some(RemotePageOpen::Loopback)
+}
+
+/// Closes the hidden clicked page a forwarded click replaces, last of all, so a refused open never costs it; the
+/// presenter is told before the new page is asked for.
+fn close_replaced_page(core: &mut Core, window: Uuid, session: Uuid, slot: Option<OverlayPane>) {
+    if core
+        .library_mut()
+        .store_mut(window)
+        .is_some_and(|store| store.close_remote_overlay(session, slot))
+    {
+        core.settle_remote_overlays();
+    }
+}
+
+/// Whether `slot` holds a clicked page the presenting machine hides, the one occupant a forwarded click replaces
+/// (upstream's `holdsHiddenClickedRemotePage`).
+fn holds_hidden_clicked_page(session: &Session, slot: Option<OverlayPane>) -> bool {
+    session
+        .remote_overlays()
+        .slot(slot)
+        .and_then(|held| held.page.as_ref())
+        .is_some_and(|page| page.overlay.clicked && page.effective_hidden())
 }
 
 /// Whether the presenter fits a page of `source` in `slot` itself: a session-wide picture the caller gave no size.
@@ -705,6 +739,7 @@ impl Core {
             text_log: overlay.text_log,
             image_pixels: pixels,
             markdown_links: None,
+            forwarded: false,
         };
         let size = page_size(&opening);
         let sent = OverlaySize {

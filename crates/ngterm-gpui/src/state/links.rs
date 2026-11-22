@@ -45,12 +45,13 @@ impl AppState {
     /// A link clicked in a terminal with no directory of its own to resolve a relative link against (a HUD, a program
     /// overlay, the quick terminal): [`Self::follow_link_at`].
     pub fn follow_link(&mut self, raw: &str, origin: ClickOrigin, intent: ClickIntent) {
-        self.follow_link_at(raw, origin, None, intent);
+        self.follow_link_at(raw, origin, None, intent, None);
     }
 
     /// A link clicked in a session's pane or scratch terminal: a detected link (`LinkKind::Url`) resolves a relative
     /// path against the local pane's reported directory, or the scratch's start or reported directory.
-    /// An OSC 8 URI stays as written. A remote pane's paths name files on the origin.
+    /// An OSC 8 URI stays as written. A remote pane's paths name files on the origin, which opens them for this machine
+    /// ([`ngterm_core::remote::link_click`]).
     pub fn follow_pane_link(
         &mut self,
         raw: &str,
@@ -111,12 +112,20 @@ impl AppState {
                 }
             })
             .flatten();
-        self.follow_link_at(raw, origin, cwd.as_deref(), intent);
+        self.follow_link_at(raw, origin, cwd.as_deref(), intent, pane);
     }
 
     /// Carries out a clicked link (upstream's `LinkOpener.follow`): the route under the link-open setting, or under
     /// browser mode for the browser chord; the candidates [`link_policy::locations`] offers are stat'ed on a worker.
-    fn follow_link_at(&mut self, raw: &str, origin: ClickOrigin, cwd: Option<&str>, intent: ClickIntent) {
+    /// `pane` is the clicked pane's identity, which a remote pane's forwarded click names.
+    fn follow_link_at(
+        &mut self,
+        raw: &str,
+        origin: ClickOrigin,
+        cwd: Option<&str>,
+        intent: ClickIntent,
+        pane: Option<Uuid>,
+    ) {
         let mode = if intent == ClickIntent::Browser {
             LinkOpenMode::Browser
         } else {
@@ -125,7 +134,19 @@ impl AppState {
         let reveal = intent == ClickIntent::Reveal;
         let candidates = link_policy::locations(raw, origin, cwd);
         if candidates.is_empty() {
-            self.carry_out(raw, link_policy::route(raw, mode, origin), reveal);
+            let route = link_policy::route(raw, mode, origin);
+            if let Route::ForwardRemote { raw, session } = route {
+                let click = ngterm_core::remote::link_click::RemoteLinkClick {
+                    raw,
+                    session,
+                    pane,
+                    mode,
+                };
+                self.core.forward_remote_link_click(&click, reveal);
+                self.settle();
+                return;
+            }
+            self.carry_out(raw, route, reveal);
             return;
         }
         let poster = self.poster.clone();
@@ -191,7 +212,8 @@ impl AppState {
                 };
                 self.open_document_link(path, session, size_percent, document);
             }
-            Route::SelectSession(_) => {}
+            // a remote pane has no candidates to look up, so its click never waits for this
+            Route::SelectSession(_) | Route::ForwardRemote { .. } => {}
             Route::Browser(url) => self.frontend.open_urls.push(url),
             Route::Reveal(path) => self.frontend.reveals.push(path),
             Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),

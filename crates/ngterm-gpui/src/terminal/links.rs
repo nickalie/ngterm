@@ -382,7 +382,9 @@ pub fn follow_link(raw: &str, mode: LinkOpenMode, origin: ClickOrigin, cx: &App)
         | Route::Markdown { path, .. }
         | Route::Document { path, .. }
         | Route::Text { path, .. } => cx.reveal_path(&path),
-        Route::SelectSession(_) | Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),
+        Route::SelectSession(_) | Route::ForwardRemote { .. } | Route::Ignore => {
+            tracing::debug!(raw, "link click ignored by the link policy");
+        }
     }
 }
 

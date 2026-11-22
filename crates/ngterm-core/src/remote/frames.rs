@@ -14,12 +14,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+use super::link_click::RemoteLinkRefusal;
 use crate::html::HtmlLoadState;
 use crate::hud::{HudPosition, HudSpec, HudSpinner};
 use crate::model::{
     AgentStatus, AskAlignment, AskChoiceForm, AskForm, AskInputForm, AskInputMode, AskStyle, PendingAsk, StatusShape,
 };
 use crate::pane_env::uuid_string;
+use crate::persist::settings::LinkOpenMode;
 
 /// The presentation protocol version this build speaks.
 pub const VERSION: i64 = 1;
@@ -937,6 +939,88 @@ pub struct PresentationRespawns {
     pub generations: std::collections::BTreeMap<String, i64>,
 }
 
+/// A path clicked in a pane the presenter shows, for the origin to open (upstream's `PresentationLinkClick`). `pane` is
+/// the origin's identity of that pane. The mode decodes leniently, an unknown one as `overlay`, since a frame that
+/// fails to decode closes the whole stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresentationLinkClick {
+    pub raw: String,
+    pub pane: Uuid,
+    pub mode: LinkOpenMode,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LinkClickWire {
+    raw: String,
+    pane: String,
+    #[serde(default)]
+    mode: Option<Value>,
+}
+
+impl Serialize for PresentationLinkClick {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        LinkClickWire {
+            raw: self.raw.clone(),
+            pane: uuid_string(self.pane),
+            mode: Some(Value::String(self.mode.raw().to_owned())),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PresentationLinkClick {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = LinkClickWire::deserialize(deserializer)?;
+        let pane = Uuid::parse_str(&wire.pane).map_err(de::Error::custom)?;
+        let mode = wire
+            .mode
+            .as_ref()
+            .and_then(Value::as_str)
+            .and_then(LinkOpenMode::from_raw)
+            .unwrap_or(LinkOpenMode::Overlay);
+        Ok(Self {
+            raw: wire.raw,
+            pane,
+            mode,
+        })
+    }
+}
+
+/// The origin's answer to a forwarded click it did not open (upstream's `PresentationLinkRefusal`). An unknown reason
+/// decodes as [`RemoteLinkRefusal::NotOpened`], for the reason the click's mode decodes leniently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresentationLinkRefusal {
+    pub reason: RemoteLinkRefusal,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LinkRefusalWire {
+    #[serde(default)]
+    reason: Option<Value>,
+}
+
+impl Serialize for PresentationLinkRefusal {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        LinkRefusalWire {
+            reason: Some(Value::String(self.reason.raw().to_owned())),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PresentationLinkRefusal {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = LinkRefusalWire::deserialize(deserializer)?;
+        let reason = wire
+            .reason
+            .as_ref()
+            .and_then(Value::as_str)
+            .and_then(RemoteLinkRefusal::from_raw)
+            .unwrap_or(RemoteLinkRefusal::NotOpened);
+        Ok(Self { reason })
+    }
+}
+
 /// The origin's local info; viewers parse it but run no expiry timer (upstream `PresentationInfo`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1030,6 +1114,11 @@ pub enum Body {
     Respawn(PresentationRespawns),
     /// What one pane runs now; sent only to a viewer whose hello lists it.
     Agent(PresentationAgent),
+    /// The presenter forwards a path clicked in one of the session's panes for the origin to open
+    /// ([`super::hub::LINK_CLICK_KIND`]).
+    LinkClick(PresentationLinkClick),
+    /// The origin did not open a forwarded click.
+    LinkRefused(PresentationLinkRefusal),
     /// A kind this build does not speak, kept with its place in the order.
     Unknown(String),
 }
@@ -1073,6 +1162,8 @@ impl Body {
             Self::CompanionPage(_) => super::hub::COMPANION_PAGE_KIND,
             Self::Respawn(_) => "pane.respawn",
             Self::Agent(_) => super::hub::AGENT_KIND,
+            Self::LinkClick(_) => super::hub::LINK_CLICK_KIND,
+            Self::LinkRefused(_) => "link.refused",
             Self::Unknown(kind) => kind,
         }
     }
@@ -1109,6 +1200,8 @@ impl Body {
             Self::CompanionPage(companion) => entry("companion", serde_json::to_value(companion)),
             Self::Respawn(respawns) => entry("respawn", serde_json::to_value(respawns)),
             Self::Agent(agent) => entry("agent", serde_json::to_value(agent)),
+            Self::LinkClick(click) => entry("link", serde_json::to_value(click)),
+            Self::LinkRefused(refusal) => entry("link", serde_json::to_value(refusal)),
             Self::Status(None)
             | Self::Context(None)
             | Self::Info(None)
@@ -1264,6 +1357,8 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         super::hub::COMPANION_PAGE_KIND => Body::CompanionPage(required(object, "companion")?),
         "pane.respawn" => Body::Respawn(required(object, "respawn")?),
         "agent" => Body::Agent(required(object, "agent")?),
+        super::hub::LINK_CLICK_KIND => Body::LinkClick(required(object, "link")?),
+        "link.refused" => Body::LinkRefused(required(object, "link")?),
         other => Body::Unknown(other.to_owned()),
     })
 }
@@ -1490,8 +1585,22 @@ mod tests {
             Body::AskResolve(answer("a1", Some("y"), Some("é \"q\"\nb"), None)),
         ]
         .into_iter()
+        .chain(link_bodies())
         .chain(page_bodies())
         .collect()
+    }
+
+    fn link_bodies() -> [Body; 2] {
+        [
+            Body::LinkClick(PresentationLinkClick {
+                raw: "src/main.py:42".to_owned(),
+                pane: Uuid::nil(),
+                mode: LinkOpenMode::Overlay95,
+            }),
+            Body::LinkRefused(PresentationLinkRefusal {
+                reason: RemoteLinkRefusal::NotFound,
+            }),
+        ]
     }
 
     fn page_request(id: &str, source: PresentationPageSource, pane: Option<PresentationPane>) -> PresentationPage {
@@ -2228,6 +2337,54 @@ mod tests {
                 body: Body::Unknown("future.kind".to_owned())
             }
         );
+    }
+
+    /// Upstream's `aLinkClickWithAnUnknownModeDecodesAsOverlay` and
+    /// `aLinkRefusalWithAnUnknownReasonDecodesAsNotOpened`: an unknown or missing mode reads as `overlay` and an
+    /// unknown or missing reason as `notOpened`, so a newer peer's value never closes the stream; the pane travels in
+    /// upstream's spelling and reads in any case.
+    #[test]
+    fn a_link_click_and_its_refusal_decode_leniently() {
+        let pane = "0E2B7C1A-5D4F-4E3B-9A61-7C2D8F0B1A23";
+        for mode in [r#","mode":"someday""#, "", r#","mode":7"#] {
+            let line = format!(
+                r#"{{"kind":"link.click","gen":1,"rev":2,"link":{{"raw":"a.md","pane":"{}"{mode}}}}}"#,
+                pane.to_lowercase()
+            );
+            assert_eq!(
+                decode(line.as_bytes()).unwrap().body,
+                Body::LinkClick(PresentationLinkClick {
+                    raw: "a.md".to_owned(),
+                    pane: Uuid::parse_str(pane).unwrap(),
+                    mode: LinkOpenMode::Overlay,
+                }),
+                "{mode}"
+            );
+        }
+        for reason in [r#"{"reason":"someday"}"#, "{}"] {
+            let line = format!(r#"{{"kind":"link.refused","gen":1,"rev":2,"link":{reason}}}"#);
+            assert_eq!(
+                decode(line.as_bytes()).unwrap().body,
+                Body::LinkRefused(PresentationLinkRefusal {
+                    reason: RemoteLinkRefusal::NotOpened
+                }),
+                "{reason}"
+            );
+        }
+        let click = Body::LinkClick(PresentationLinkClick {
+            raw: "a.md".to_owned(),
+            pane: Uuid::parse_str(pane).unwrap(),
+            mode: LinkOpenMode::Browser,
+        });
+        let line = encode(&PresentationFrame {
+            generation: 1,
+            rev: 1,
+            body: click,
+        })
+        .unwrap();
+        let value: Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(value["link"], json!({"raw": "a.md", "pane": pane, "mode": "browser"}));
+        assert!(decode(br#"{"kind":"link.click","gen":1,"rev":2,"link":{"raw":"a.md","pane":"x"}}"#).is_err());
     }
 
     #[test]

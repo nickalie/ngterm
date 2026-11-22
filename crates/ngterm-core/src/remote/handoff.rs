@@ -234,6 +234,7 @@ impl Core {
                 self.receive_remote_page_frame(session, &body);
             }
             Body::PageDetached(change) => self.detach_remote_page(session, &change.page),
+            Body::LinkClick(click) => self.receive_forwarded_click(session, &click),
             _ => {}
         }
         self.sync_modals();

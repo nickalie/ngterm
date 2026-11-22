@@ -43,6 +43,7 @@ pub(crate) mod group_attach;
 mod handoff;
 pub mod hub;
 mod layout;
+pub mod link_click;
 pub mod not_live;
 pub mod origin;
 pub mod origin_replies;

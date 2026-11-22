@@ -152,6 +152,8 @@ pub(crate) struct ViewerRuntime {
     pub(super) queued_split_panes: HashMap<Uuid, Uuid>,
     /// Newly bound panes whose cached layouts must be reconsidered after realization (pane → session).
     pub(super) split_layouts: HashMap<Uuid, Uuid>,
+    /// The HUD slot generation of the refusal panel a forwarded click opened, by session ([`super::link_click`]).
+    pub(crate) link_refusal_huds: HashMap<Uuid, u64>,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.
     last_client: u64,
 }
@@ -524,9 +526,8 @@ impl Core {
             ClientEffect::PageCommand(command) => self.apply_replica_page_command(&command, session),
             ClientEffect::Respawns(respawns, seed) => self.apply_remote_respawns(&respawns, seed, session),
             ClientEffect::CompanionPage(companion) => self.attach_handed_companion(session, &companion),
-            ClientEffect::Warn(reason) => {
-                tracing::warn!(%session, %reason, "presentation stream");
-            }
+            ClientEffect::LinkRefused(reason) => self.refuse_remote_link_click(session, reason),
+            ClientEffect::Warn(reason) => tracing::warn!(%session, %reason, "presentation stream"),
             // desktop shows no agent chat, so its hello never lists the kind
             ClientEffect::Agent(_) => {}
         }
@@ -546,6 +547,15 @@ impl Core {
             .clients
             .get(&session)
             .is_some_and(|client| client.origin_speaks(kind))
+    }
+
+    /// Whether `session`'s origin speaks `kind` on a link that is up now; false with no stream client.
+    pub(crate) fn origin_link_speaks(&self, session: Uuid, kind: &str) -> bool {
+        self.remote
+            .viewer
+            .clients
+            .get(&session)
+            .is_some_and(|client| client.link_speaks(kind))
     }
 
     /// Moves the stream's state; leaving `connected` orphans the replica overlays: a held surface closes now, and a
@@ -628,7 +638,8 @@ impl Core {
             return;
         };
         let bridged = found.hud_bridged();
-        if !bridged && found.overlay.hud_active() {
+        // a refusal panel gives way, since nothing would show this HUD again once it hides
+        if !bridged && found.overlay.hud_active() && !self.shows_remote_link_refusal(session) {
             return;
         }
         let mut spec = hud.spec.clone();

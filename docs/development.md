@@ -366,6 +366,11 @@ and how this build does it where the OS matters:
   on|off|toggle`; per page, off at open and never saved, read back as tree `text.wrap`.
 - On a session presented on another machine (v0.41), image, Markdown and text pages open on the presenter, its
   viewer listing `page.content`; a log page stays a local one.
+- Forwarded clicks (v0.42): a Ctrl/Super-click on a bare, relative or `file://` path in a pane attached from another
+  machine goes to that machine as `link.click` while this one presents the session; the origin resolves it with the
+  pane's directory and opens only a page, here. A refusal (`link.refused`, or a reason found here) shows a HUD that
+  hides after 5 s, or plays the alert sound when a HUD, a cover, a zoomed terminal or this machine's own hidden page is
+  in the way. The reveal chord is refused. The Android and iOS apps show no pages, so they do not list the kind.
 - Status shapes (v0.41): triangle-down, play, seal, bolt and bell, drawn as outlines traced after SF Symbols on Linux,
   Windows and Android; a viewer that does not list `status.shapes` gets only the six shapes it decodes.
 - The checkmark status shape (v0.42): `session status --shape checkmark`, pick items and Settings; drawn as a heavy

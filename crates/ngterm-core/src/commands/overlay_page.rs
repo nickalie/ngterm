@@ -112,6 +112,9 @@ pub(crate) struct PageOpening {
     /// A clicked Markdown page's link grant, read with its file off the main thread; the control path computes its own
     /// once the file checks out, and the dispatcher never sets it (upstream's `markdownLinks` option).
     pub markdown_links: Option<MarkdownLinkGrant>,
+    /// A click on the presenting machine asked for the page ([`crate::remote::link_click`]): it opens there or not at
+    /// all, and replaces a clicked page that machine hides; the dispatcher never sets it (upstream's `forwarded`).
+    pub forwarded: bool,
 }
 
 impl PageOpening {
@@ -147,6 +150,7 @@ impl PageOpening {
             text_log,
             image_pixels: None,
             markdown_links: None,
+            forwarded: false,
         }
     }
 }
@@ -185,6 +189,7 @@ fn open_checked(
     let page = opened_page(&opening, Uuid::new_v4(), None);
     let page_id = page.id;
     let refusal = match crate::remote::open_remote_page(core, resolved.window, resolved.session, &page, &opening) {
+        RemotePageOpen::Local if opening.forwarded => Some(PRESENTER),
         RemotePageOpen::Local => None,
         RemotePageOpen::Opened => {
             return Ok(ControlResult {
@@ -268,6 +273,7 @@ fn clicked_opening(source: HtmlSource, size_percent: Option<i64>) -> PageOpening
         text_log: None,
         image_pixels: None,
         markdown_links: None,
+        forwarded: false,
     }
 }
 
@@ -979,6 +985,26 @@ impl Core {
         open_checked(self, Some(&uuid_string(session)), None, opening, image, true).is_ok()
     }
 
+    /// Opens the page a click on the presenting machine named for `session` there, or not at all (upstream's `open*Link`
+    /// helpers called with `forward:`): a HUD here still refuses it, this machine's zoom does not, as it is not what that
+    /// machine shows, and only the hand-over replaces a hidden clicked page. The file is read as the control path reads a
+    /// page it hands over.
+    pub(crate) fn open_forwarded_link(&mut self, source: HtmlSource, session: Uuid, size_percent: Option<i64>) -> bool {
+        let hud = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+            .is_none_or(|found| found.overlay.hud_active());
+        if hud {
+            return false;
+        }
+        let opening = PageOpening {
+            forwarded: true,
+            ..clicked_opening(source, size_percent)
+        };
+        open_checked(self, Some(&uuid_string(session)), None, opening, None, false).is_ok()
+    }
+
     /// Whether a click in `session` opens its log page here: the placement rule hands no session-wide page to a
     /// presenting machine, which gets the static text page instead (upstream's `pageBelongsRemote` check in
     /// `openTextLink`).
@@ -1048,6 +1074,7 @@ impl Core {
             text_log: None,
             image_pixels: None,
             markdown_links: None,
+            forwarded: false,
         };
         open(self, Some(&uuid_string(session)), None, opening).is_ok()
     }

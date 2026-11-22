@@ -22,6 +22,7 @@ mod dashboard;
 mod document_pages;
 mod events;
 mod font;
+mod forwarded_clicks;
 mod hooks;
 mod hud;
 mod keymap;

@@ -3222,3 +3222,29 @@ fn session_links_read_the_origin_peer_from_a_catalog_scratch() {
         Some(target)
     );
 }
+
+/// A path clicked in an attached pane goes to the core's forward (#923), never to this machine's file manager or
+/// browser: a row this machine does not present refuses it with the alert sound, the reveal chord too.
+#[test]
+fn a_path_clicked_in_an_attached_pane_is_forwarded_and_never_opened_here() {
+    let (mut state, window, _) = state_with_terminal();
+    let store = state.core.library_mut().store_mut(window).unwrap();
+    let row = remote_link_row(
+        store,
+        "remote",
+        Uuid::new_v4(),
+        ngterm_core::remote::peer::RemotePeer::Ngterm,
+    );
+    let _ = state.take_frontend_work();
+    for (raw, intent) in [
+        ("/repo/README.md", ClickIntent::Normal),
+        ("src/main.py:42", ClickIntent::Normal),
+        ("file:///repo/shot.png", ClickIntent::Reveal),
+    ] {
+        state.follow_pane_link(raw, row, "remote", intent, crate::terminal::LinkKind::Url);
+        state.join_link_work();
+        let work = state.take_frontend_work();
+        assert_eq!(work.sounds, ["default"], "{raw}");
+        assert!(work.reveals.is_empty() && work.open_urls.is_empty(), "{raw}");
+    }
+}

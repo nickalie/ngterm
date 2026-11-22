@@ -133,6 +133,12 @@ pub enum Route {
         size_percent: Option<i64>,
     },
     Reveal(PathBuf),
+    /// A path clicked in a pane attached from another machine, as typed, which that machine resolves and opens
+    /// ([`crate::remote::link_click`]); this machine never reads or reveals it.
+    ForwardRemote {
+        raw: String,
+        session: Uuid,
+    },
     Ignore,
 }
 
@@ -146,7 +152,11 @@ impl Route {
             | Self::Document { path, .. }
             | Self::Text { path, .. }
             | Self::Reveal(path) => Some(path),
-            Self::SelectSession(_) | Self::Browser(_) | Self::Overlay { .. } | Self::Ignore => None,
+            Self::SelectSession(_)
+            | Self::Browser(_)
+            | Self::Overlay { .. }
+            | Self::ForwardRemote { .. }
+            | Self::Ignore => None,
         }
     }
 
@@ -357,7 +367,8 @@ pub fn route(raw: &str, mode: LinkOpenMode, origin: ClickOrigin) -> Route {
     route_for_hosts(raw, mode, origin, local_host_names())
 }
 
-/// Session links select a row first. Other links use [`disposition_for_hosts`].
+/// Session links select a row first. A remote pane forwards a bare, relative or `file://` path to its machine
+/// ([`Route::ForwardRemote`]) and never routes a local file. Other links use [`disposition_for_hosts`].
 /// A web link from a pane or scratch uses the configured overlay mode.
 /// The caller checks if the overlay is free.
 #[must_use]
@@ -373,10 +384,50 @@ pub fn route_for_hosts<S: BuildHasher>(
             ClickOrigin::Hud | ClickOrigin::ProgramOverlay | ClickOrigin::Quick => Route::Ignore,
         };
     }
-    if matches!(origin, ClickOrigin::RemotePane(_)) && is_bare_path(raw) {
-        return Route::Ignore;
+    if let ClickOrigin::RemotePane(session) = origin
+        && forwards_remotely(raw)
+    {
+        return Route::ForwardRemote {
+            raw: raw.to_owned(),
+            session,
+        };
     }
     route_disposition(disposition_for_hosts(raw, local_hosts), mode, origin)
+}
+
+/// Whether a link clicked in a remote pane names a file on that pane's machine (upstream's `forwardsRemotely`): a bare
+/// or relative path, or any `file://` link, whose host only that machine can judge.
+fn forwards_remotely(raw: &str) -> bool {
+    if raw.chars().any(char::is_control) {
+        return false;
+    }
+    is_bare_path(raw)
+        || names_absolute_path_elsewhere(raw)
+        || locations::is_relative_spelling(raw)
+        || raw.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+}
+
+/// Whether `raw` is absolute on some machine, if not on this one: a POSIX path, or a Windows drive path.
+fn names_absolute_path_elsewhere(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    raw.starts_with('/')
+        || (bytes.len() > 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\'))
+}
+
+/// The route of the first of `candidates` that `exists` finds, or of `raw` as typed when none is (upstream's
+/// `resolvedRoute`). The caller keeps it off a thread that must not block, since `exists` touches the file system.
+#[must_use]
+pub fn resolved_route(
+    raw: &str,
+    candidates: &[LinkLocation],
+    mode: LinkOpenMode,
+    origin: ClickOrigin,
+    exists: impl Fn(&str) -> bool,
+) -> Route {
+    candidates.iter().find(|candidate| exists(&candidate.path)).map_or_else(
+        || route(raw, mode, origin),
+        |found| route_for_location(found, mode, origin),
+    )
 }
 
 /// A disposition's route by the origin rules [`route_for_hosts`] describes; a local document or text page shows over
@@ -390,6 +441,10 @@ fn route_disposition(disposition: LinkDisposition, mode: LinkOpenMode, origin: C
     };
     match disposition {
         LinkDisposition::Ignore => Route::Ignore,
+        // a remote pane's local-looking file names a file on another machine, never one here
+        _ if matches!(origin, ClickOrigin::RemotePane(_)) && !matches!(disposition, LinkDisposition::Open(_)) => {
+            Route::Ignore
+        }
         LinkDisposition::Reveal(path) => Route::Reveal(path),
         LinkDisposition::Image(path) => match origin {
             ClickOrigin::Pane(session) | ClickOrigin::Scratch(session) => Route::Image { path, session },
@@ -1087,11 +1142,14 @@ mod tests {
     fn file_links_reveal_and_other_schemes_stay_ignored_in_every_mode() {
         for mode in LinkOpenMode::ALL {
             for origin in origins(Uuid::new_v4()) {
+                assert_eq!(route_of("x-custom://run", *mode, origin), Route::Ignore);
+                if matches!(origin, ClickOrigin::RemotePane(_)) {
+                    continue;
+                }
                 assert_eq!(
                     route_of("file:///tmp/x.bin", *mode, origin),
                     Route::Reveal(PathBuf::from("/tmp/x.bin"))
                 );
-                assert_eq!(route_of("x-custom://run", *mode, origin), Route::Ignore);
                 assert_eq!(route_of("file://elsewhere/tmp/x.bin", *mode, origin), Route::Ignore);
             }
         }
@@ -1257,12 +1315,7 @@ mod tests {
                     }
                 );
             }
-            for origin in [
-                ClickOrigin::RemotePane(session),
-                ClickOrigin::Hud,
-                ClickOrigin::Quick,
-                ClickOrigin::ProgramOverlay,
-            ] {
+            for origin in [ClickOrigin::Hud, ClickOrigin::Quick, ClickOrigin::ProgramOverlay] {
                 assert_eq!(
                     route_of("file:///tmp/a.png", *mode, origin),
                     Route::Reveal(PathBuf::from("/tmp/a.png"))
@@ -1272,8 +1325,107 @@ mod tests {
                     Route::Reveal(PathBuf::from("/tmp/a.md"))
                 );
             }
-            assert_eq!(route_of(&image, *mode, ClickOrigin::RemotePane(session)), Route::Ignore);
+            for raw in [image.as_str(), "file:///tmp/a.png", "file:///tmp/a.md"] {
+                assert_eq!(
+                    route_of(raw, *mode, ClickOrigin::RemotePane(session)),
+                    forwarded(raw, session)
+                );
+            }
         }
+    }
+
+    fn forwarded(raw: &str, session: Uuid) -> Route {
+        Route::ForwardRemote {
+            raw: raw.to_owned(),
+            session,
+        }
+    }
+
+    /// Upstream's remote-pane rows of `LinkPolicyTests` (#923, `remotePaneKeepsWebLinksAndIgnoresTheRest`,
+    /// `aLocationFromARemotePaneIsIgnored`): a bare, `~/`, relative or `file://` path of any host
+    /// goes to the pane's machine as typed, a `.bin` too, which only that machine can judge; a web link keeps its web
+    /// route; a session link still selects; and nothing names a local file the reveal chord could pick.
+    #[test]
+    fn a_remote_pane_forwards_its_paths_as_typed() {
+        let session = Uuid::new_v4();
+        let bare = crate::html::os_path("/tmp/report.md");
+        for mode in LinkOpenMode::ALL {
+            for raw in [
+                bare.as_str(),
+                "/home/me/report.md",
+                "C:\\Users\\me\\report.md",
+                "D:/work/report.md",
+                "~/notes.md",
+                "./report.html",
+                "src/main.py:42",
+                "notes.txt",
+                "file:///tmp/a.md",
+                "file://localhost/tmp/a.png",
+                "FILE://origin-host.local/tmp/a.txt",
+                "file://this-host/tmp/a.bin",
+                "/tmp/tool.bin",
+            ] {
+                let route = route_for_hosts(raw, *mode, ClickOrigin::RemotePane(session), &hosts());
+                assert_eq!(route, forwarded(raw, session), "{raw} {mode:?}");
+                assert_eq!(route.local_file(), None);
+            }
+            assert!(matches!(
+                route_of("http://localhost:3000", *mode, ClickOrigin::RemotePane(session)),
+                Route::Browser(_) | Route::Overlay { .. }
+            ));
+            assert_eq!(
+                route_of("mailto:me@example.com", *mode, ClickOrigin::RemotePane(session)),
+                Route::Browser("mailto:me@example.com".to_owned())
+            );
+            assert_eq!(
+                route_of("/tmp/a\u{7}.md", *mode, ClickOrigin::RemotePane(session)),
+                Route::Ignore
+            );
+        }
+        let location = LinkLocation {
+            path: bare.clone(),
+            line: Some(3),
+        };
+        assert_eq!(
+            route_for_location(&location, LinkOpenMode::Browser, ClickOrigin::RemotePane(session)),
+            Route::Ignore
+        );
+    }
+
+    /// Upstream's `aResolvedRouteTakesTheFirstExistingCandidateElseTheTypedRoute`: the first candidate found wins, at its line; with none found the link routes
+    /// as typed, and a link with no candidates never probes.
+    #[test]
+    fn a_resolved_route_takes_the_first_candidate_found() {
+        let session = Uuid::new_v4();
+        let origin = ClickOrigin::Pane(session);
+        let mode = LinkOpenMode::Browser;
+        let cwd = crate::html::os_path("/work");
+        let main = crate::html::os_path("/work/src/main.py");
+        let candidates = locations("src/main.py:42", origin, Some(&cwd));
+        assert!(candidates.len() > 1);
+        assert_eq!(
+            resolved_route("src/main.py:42", &candidates, mode, origin, |path| path == main),
+            Route::Text {
+                path: PathBuf::from(&main),
+                line: Some(42),
+                session,
+                size_percent: Some(95)
+            }
+        );
+        assert_eq!(
+            resolved_route("src/main.py:42", &candidates, mode, origin, |_| false),
+            Route::Ignore
+        );
+        let probed = std::cell::Cell::new(false);
+        let file = crate::html::os_path("/tmp/a.md");
+        assert!(matches!(
+            resolved_route(&file, &[], mode, origin, |_| {
+                probed.set(true);
+                true
+            }),
+            Route::Markdown { .. }
+        ));
+        assert!(!probed.get());
     }
 
     /// Upstream's `localHtmlPathsOpenAsDocuments`: a bare, `~/` or `file://` path to an `.html` or `.htm` file, in any
@@ -1306,7 +1458,7 @@ mod tests {
 
     /// Upstream's `documentOpensOnTheOwningSessionAtItsModeSize`, `sessionlessOriginsRevealDocuments` and the remote
     /// pane's HTML rows: a pane or the scratch terminal shows the file over its session at the mode's size, 95 in
-    /// browser mode; every other origin reveals a `file://` link, and a remote pane ignores a bare path.
+    /// browser mode; every other origin reveals a `file://` link, and a remote pane forwards both to its machine.
     #[test]
     fn a_document_opens_on_the_owning_session_at_its_mode_size() {
         let session = Uuid::new_v4();
@@ -1332,19 +1484,19 @@ mod tests {
                     );
                 }
             }
-            for origin in [
-                ClickOrigin::Hud,
-                ClickOrigin::ProgramOverlay,
-                ClickOrigin::Quick,
-                ClickOrigin::RemotePane(session),
-            ] {
+            for origin in [ClickOrigin::Hud, ClickOrigin::ProgramOverlay, ClickOrigin::Quick] {
                 assert_eq!(
                     route_of(&file, *mode, origin),
                     Route::Reveal(path.clone()),
                     "{origin:?}"
                 );
             }
-            assert_eq!(route_of(&bare, *mode, ClickOrigin::RemotePane(session)), Route::Ignore);
+            for raw in [&bare, &file] {
+                assert_eq!(
+                    route_of(raw, *mode, ClickOrigin::RemotePane(session)),
+                    forwarded(raw, session)
+                );
+            }
         }
         let route = Route::Document {
             path: path.clone(),

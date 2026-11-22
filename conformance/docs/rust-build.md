@@ -373,6 +373,10 @@ above, for the Android chat view (`remote::agents`); and `overlay.none`, which n
 as they refuse every program overlay, and a presenter listing it keeps its asks and sounds while the origin hands
 program overlays to a viewer beside it that shows them (`PresentationHub::surface_holder`).
 
+Upstream's `link.click` (#923), a path clicked in an attached pane forwarded to the origin, is listed only by a viewer
+that shows handed-over pages (`viewer_kinds` in `remote/client.rs`), as only a page answers it. The Android and iOS
+apps show no pages, so they never list it and send no click; the origin then never receives one from them.
+
 ## Release behavior at v0.40.0
 
 The [parity notes](../../docs/development.md#parity) describe the user-facing additions. Their observable contracts are:
@@ -527,6 +531,7 @@ it no longer does:
 |---|---|
 | `--width/--height are not supported for an overlay this Mac shows for another Mac; resize it on that Mac` | the same refusal naming “this computer”, “another computer” and “that computer” on every ngterm platform |
 | `infocmp exited N: …` (`terminfo install`, the local dump failing) | `could not read <file>: <reason>`: the CLI decompiles the staged compiled entry itself on every OS (`ngterm-ctl`'s `terminfo/source.rs`, a port of ncurses' entry reader and `infocmp -x`'s layout), since Windows has no `infocmp` |
+| `the agterm on HOST is too old to open clicked files` (a forwarded click's `originTooOld` panel) | the same text naming `ngterm` (`ngterm-core`'s `remote/link_click.rs`) |
 | `catalog.subscribe is served only by agterm-server`, `catalog.op is served only by agterm-server`, `operation receipts are served only by agterm-server` | the same refusals naming `ngterm-headless`, this build's server (`ngterm-core`'s `commands/catalog.rs` and `dispatch.rs`) |
 
 Texts with no upstream counterpart, each the build's own: `live.reset is not supported on this platform` (above),

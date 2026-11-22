@@ -363,12 +363,7 @@ fn a_found_location_opens_as_text_at_its_line_from_a_pane_or_the_scratch() {
 #[test]
 fn a_text_file_from_another_origin_is_revealed() {
     let file = PathBuf::from("/x/a.go");
-    for origin in [
-        ClickOrigin::RemotePane(session()),
-        ClickOrigin::Hud,
-        ClickOrigin::ProgramOverlay,
-        ClickOrigin::Quick,
-    ] {
+    for origin in [ClickOrigin::Hud, ClickOrigin::ProgramOverlay, ClickOrigin::Quick] {
         assert_eq!(
             route_for_location(&loc("/x/a.go", Some(42)), LinkOpenMode::Overlay, origin),
             Route::Reveal(file.clone())
@@ -378,6 +373,11 @@ fn a_text_file_from_another_origin_is_revealed() {
             Route::Reveal(file.clone())
         );
     }
+    let remote = ClickOrigin::RemotePane(session());
+    assert_eq!(
+        route_for_location(&loc("/x/a.go", Some(42)), LinkOpenMode::Overlay, remote),
+        Route::Ignore
+    );
 }
 
 #[cfg(unix)]

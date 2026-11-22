@@ -144,11 +144,13 @@ fn separator(ch: char) -> bool {
 /// joined a detected relative path before (Ghostty's `resolvePathForOpening`), a colon in it still refusing it.
 fn relative_path(raw: &str, cwd: Option<&str>) -> Option<String> {
     let cwd = cwd.filter(|cwd| crate::html::is_absolute(cwd) && !cwd.chars().any(char::is_control))?;
+    is_relative_spelling(raw).then(|| std::path::Path::new(cwd).join(raw).to_string_lossy().into_owned())
+}
+
+/// Whether `raw` has the shape [`relative_path`] joins, judged on the text alone (upstream's `isRelativeSpelling`).
+pub(super) fn is_relative_spelling(raw: &str) -> bool {
     let first = raw.split(separator).next().unwrap_or(raw);
-    if first.is_empty() || first.contains(':') || first.starts_with('~') {
-        return None;
-    }
-    Some(std::path::Path::new(cwd).join(raw).to_string_lossy().into_owned())
+    !(first.is_empty() || first.contains(':') || first.starts_with('~'))
 }
 
 /// A trailing `:line` or `:line:column` split off `path`, `None` unless the line is 1 or more and an absolute name
