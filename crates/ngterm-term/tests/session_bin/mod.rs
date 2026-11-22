@@ -1,9 +1,12 @@
 //! The cargo-built `ngterm-session` of a test's profile (`target/<profile>/`, above the test binary's `deps/`), which
 //! the live tests attach to: `cargo test` builds it beside them with the workspace or with `-p ngterm-session`, and a
 //! test of this crate alone builds it on first use with `cargo build -p ngterm-session` (cargo lets go of its build
-//! lock before it runs the tests), in the same target directory and profile and under the same environment, so an
-//! instrumented run (scripts/unit-coverage.sh) gets an instrumented server.
+//! lock before it runs the tests), in the same target directory, target triple and profile and under the same
+//! environment, so an instrumented run (scripts/unit-coverage.sh) gets an instrumented server. An executable that is
+//! already there is used as is, even when it is older than the server's sources: after a change to `ngterm-session`,
+//! test with the workspace or with `-p ngterm-session`, which rebuild it.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -27,7 +30,8 @@ fn find_or_build() -> Result<PathBuf, String> {
     let mut build = Command::new(env!("CARGO"));
     build
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["build", "-p", "ngterm-session", "--bin", "ngterm-session"]);
+        .args(["build", "-p", "ngterm-session", "--bin", "ngterm-session"])
+        .args(target_args(profile));
     match profile.file_name().and_then(|name| name.to_str()) {
         Some("debug") => {}
         Some("release") => {
@@ -46,10 +50,31 @@ fn find_or_build() -> Result<PathBuf, String> {
     }
     if !executable.is_file() {
         return Err(format!(
-            "`cargo build -p ngterm-session` left no {} (a `--target` or `--target-dir` given to `cargo test` reaches \
-             no nested build: build it there with the same flags, or test with the workspace)",
+            "`cargo build -p ngterm-session` left no {} (build it there with the flags given to `cargo test`, or test \
+             with the workspace)",
             executable.display()
         ));
     }
     Ok(executable)
+}
+
+/// `--target-dir` (and `--target` under a triple) of the test binary, so the nested build writes beside it whatever
+/// directory or triple `cargo test` got on its command line; cargo keeps `.rustc_info.json` at a target directory's root.
+pub fn target_args(profile: &Path) -> Vec<OsString> {
+    let Some(root) = profile.parent() else {
+        return Vec::new();
+    };
+    let marker = ".rustc_info.json";
+    if !root.join(marker).is_file()
+        && let (Some(target_dir), Some(triple)) = (root.parent(), root.file_name())
+        && target_dir.join(marker).is_file()
+    {
+        return vec![
+            "--target-dir".into(),
+            target_dir.into(),
+            "--target".into(),
+            triple.into(),
+        ];
+    }
+    vec!["--target-dir".into(), root.into()]
 }
