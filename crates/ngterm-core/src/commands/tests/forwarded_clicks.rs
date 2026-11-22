@@ -566,11 +566,11 @@ fn an_origin_hud_leaves_a_local_hud_opened_after_the_refusal() {
     assert_eq!(hud_message(&mut viewer), Some("agent".to_owned()));
 }
 
-/// The cover half of upstream's `testARefusalBeepsUnderAZoomedTerminalOrACover`: a shown program overlay would sit
-/// over the page, so the origin's refusal plays the alert sound and opens no panel; a shown page the origin handed
-/// here would too, so a click under it sends nothing and plays the alert sound.
+/// The cover half of upstream's `testARefusalBeepsUnderAZoomedTerminalOrACover`: a program overlay, shown or hidden,
+/// and a shown page the origin handed here would each sit over the page, so a click under them sends nothing and
+/// plays the alert sound.
 #[test]
-fn a_refusal_under_a_shown_cover_plays_the_alert() {
+fn a_click_under_a_cover_plays_the_alert() {
     let mut viewer = presenting(&with_link_click());
     let session = viewer.session;
     let program = crate::model::OverlayProgram {
@@ -579,9 +579,20 @@ fn a_refusal_under_a_shown_cover_plays_the_alert() {
     };
     assert!(viewer.fixture.store_mut().unwrap().open_overlay(session, program));
     viewer.fixture.core.commit();
-    viewer.frame(json!({"kind": "link.refused", "link": {"reason": "notOpened"}}));
+    let (left, _) = local_panes(&viewer);
+    forward(&mut viewer, "/repo/README.md", Some(left), false);
+    assert!(viewer.sent("link.click").is_empty());
     assert_eq!(viewer.fixture.core.take_status_sounds(), ["default"]);
-    assert_eq!(hud_message(&mut viewer), None);
+    let store = viewer.fixture.store_mut().unwrap();
+    assert!(
+        store
+            .apply_overlay_visibility(session, None, crate::model::OverlayVisibilityMode::Hide)
+            .is_ok()
+    );
+    viewer.fixture.core.commit();
+    forward(&mut viewer, "/repo/README.md", Some(left), false);
+    assert!(viewer.sent("link.click").is_empty());
+    assert_eq!(viewer.fixture.core.take_status_sounds(), ["default"]);
 
     let mut viewer = presenting(&with_link_click());
     let session = viewer.session;
