@@ -149,6 +149,12 @@ class UpdateRig(
     val announced = CopyOnWriteArrayList<String>()
 
     @Volatile var cleared = 0
+
+    /** Whether the update notification is up: posted and not cleared since. */
+    @Volatile var up = false
+
+    /** Runs in each post, before the notification goes up. */
+    @Volatile var onAvailable: () -> Unit = {}
     val schedule = CopyOnWriteArrayList<Boolean>()
     val launched = CopyOnWriteArrayList<Intent>()
     var installFailure: Exception? = null
@@ -167,11 +173,14 @@ class UpdateRig(
             notices =
                 object : UpdateNotices {
                     override fun available(offer: UpdateOffer) {
+                        onAvailable()
                         announced += offer.version
+                        up = true
                     }
 
                     override fun clear() {
                         cleared++
+                        up = false
                     }
                 },
             schedule =

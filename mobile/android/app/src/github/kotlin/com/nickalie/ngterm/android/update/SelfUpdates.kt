@@ -95,7 +95,7 @@ class SelfUpdates(
     override fun setNotify(on: Boolean) {
         scope.launch {
             parts.prefs.setNotify(on)
-            // after the store: a check that read the old value may have posted meanwhile
+            // after the store: a check that posted before it is taken down here, one that posts after it sees it
             if (!on) parts.notices.clear()
         }
     }
@@ -234,6 +234,8 @@ class SelfUpdates(
         if (announce && announces(offer.version)) {
             parts.notices.available(offer)
             parts.prefs.announce(offer.version)
+            // the switch may have gone off, and cleared, between the read and the post
+            if (!parts.prefs.notify.first()) parts.notices.clear()
         }
         return true
     }

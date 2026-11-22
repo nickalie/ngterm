@@ -109,6 +109,20 @@ class SelfUpdatesTest {
     }
 
     @Test
+    fun theSwitchTurnedOffWhileABackgroundCheckPostsTakesTheNotificationDown() {
+        released("0.3.0")
+        val updates = rig.updates()
+        rig.onAvailable = {
+            rig.onAvailable = {}
+            updates.setNotify(false)
+            settle { rig.cleared == 1 }
+        }
+        assertTrue(runBlocking { updates.checkInBackground() })
+        assertEquals(listOf("0.3.0"), rig.announced)
+        assertFalse("the update notification is up with App updates off", rig.up)
+    }
+
+    @Test
     fun aManualCheckFindsTheNewestOrNothingWithoutAnnouncing() {
         released("0.2.3")
         val updates = rig.updates()
