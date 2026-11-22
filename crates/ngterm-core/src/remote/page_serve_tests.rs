@@ -339,13 +339,8 @@ fn a_link_page_serves_markdown_only_through_the_grant_and_everything_else_as_a_p
         served(&root.join("img").join("a.png")),
         Some(picture(root.join("img").join("a.png")))
     );
-    let mut refused = vec![
-        root.join("..").join("outside.md"),
-        root.join("..").join("secret.txt"),
-        root.clone(),
-    ];
     #[cfg(unix)]
-    {
+    let aliases = {
         use std::os::unix::fs::symlink;
         symlink(root.join("large.md"), root.join("picture.png")).unwrap();
         symlink(root.join("a.md"), root.join("alias.png")).unwrap();
@@ -354,9 +349,19 @@ fn a_link_page_serves_markdown_only_through_the_grant_and_everything_else_as_a_p
         // an alias is served under its target's path, and only as a picture: its bytes decide
         assert_eq!(served(&root.join("picture.png")), Some(picture(root.join("large.md"))));
         assert_eq!(served(&root.join("alias.png")), Some(picture(root.join("a.md"))));
-        refused.push(root.join("guide.md"));
-        refused.push(root.join("out.txt"));
-    }
+        vec![root.join("guide.md"), root.join("out.txt")]
+    };
+    #[cfg(not(unix))]
+    let aliases = Vec::new();
+    let refused = [
+        vec![
+            root.join("..").join("outside.md"),
+            root.join("..").join("secret.txt"),
+            root.clone(),
+        ],
+        aliases,
+    ]
+    .concat();
     for path in refused {
         assert_eq!(served(&path), None, "{path:?}");
     }

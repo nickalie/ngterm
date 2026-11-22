@@ -971,14 +971,16 @@ fn a_link_page_serves_linked_markdown_as_text_and_everything_else_only_as_a_pict
     }
     std::fs::write(docs.join("sub/plot.png"), PICTURE).unwrap();
     std::fs::write(docs.parent().unwrap().join("outside.md"), "# outside\n").unwrap();
-    let mut refused = vec!["../outside.md", "large.txt"];
     #[cfg(unix)]
-    {
+    let aliases = {
         std::os::unix::fs::symlink(docs.join("large.md"), docs.join("picture.png")).unwrap();
         std::os::unix::fs::symlink(docs.join("a.md"), docs.join("alias.png")).unwrap();
         std::os::unix::fs::symlink(docs.join(".env"), docs.join("guide.md")).unwrap();
-        refused.extend(["picture.png", "alias.png", "guide.md"]);
-    }
+        vec!["picture.png", "alias.png", "guide.md"]
+    };
+    #[cfg(not(unix))]
+    let aliases = Vec::new();
+    let refused = [vec!["../outside.md", "large.txt"], aliases].concat();
     let (page, grant) = served.open_linked("a.md");
     let frozen = crate::html::markdown_page::link_grant(&served.path("a.md"), "/home/u").unwrap();
     assert_eq!(grant, Some(json!({"path": frozen.path, "root": frozen.root})));
