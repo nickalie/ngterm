@@ -510,7 +510,8 @@ impl Core {
             persistent: request.persistent,
             browse: request.browse,
         };
-        let mut overlay = HtmlOverlay::new(source, flags);
+        // the origin's grant keeps a Markdown page's navigation; without one it has none
+        let mut overlay = HtmlOverlay::linked(source, flags, request.markdown_links.clone());
         overlay.replica_of = Some(origin);
         let local = overlay.id;
         store

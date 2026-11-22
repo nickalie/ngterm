@@ -833,12 +833,15 @@ fn a_taken_slot_refuses_the_page() {
 }
 
 /// A viewer without web views refuses every page (upstream's default `pageRequest` effect), and lists no page kind;
-/// one that can show them lists them all.
+/// one that can show them lists them all but a Markdown page's links.
 #[test]
 fn a_viewer_without_web_views_refuses_pages_and_lists_no_page_kind() {
     let mut replica = Replica::new();
     let hello = replica.viewer.sent("hello");
-    assert_eq!(hello[0]["hello"]["kinds"], json!(SUPPORTED_KINDS));
+    assert_eq!(
+        hello[0]["hello"]["kinds"],
+        json!(crate::remote::client::viewer_kinds(true))
+    );
 
     replica.host.0.borrow_mut().unavailable = Some("no GPU".to_owned());
     replica.request(Replica::page(Replica::url("https://example.com/")));

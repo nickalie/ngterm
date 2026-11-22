@@ -185,12 +185,15 @@ fn open_checked(
     } else {
         PANE_ALREADY_OPEN
     };
+    let mut links = None;
     if core.page_belongs_remote(resolved.session, opening.pane) {
         image = read_for_hand_over(core, &mut opening, image, checked)?;
+        links = markdown_links(core, &mut opening, checked);
+        // a page kept here after all takes the same grant, as a checked click's
+        opening.markdown_links.clone_from(&links);
         checked = true;
     }
-    // the presenting machine is handed a Markdown page without its links, so without navigation
-    let page = opened_page(&opening, Uuid::new_v4(), None);
+    let page = opened_page(&opening, Uuid::new_v4(), links);
     let page_id = page.id;
     let refusal = match crate::remote::open_remote_page(core, resolved.window, resolved.session, &page, &opening) {
         RemotePageOpen::Local if opening.forwarded => Some(PRESENTER),

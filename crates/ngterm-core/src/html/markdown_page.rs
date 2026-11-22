@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use pulldown_cmark::{Event, Options, Parser, Tag};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const MAX_BYTES: usize = 4 << 20;
 pub const MAX_IMAGE_BYTES: usize = 32 << 20;
@@ -26,8 +26,9 @@ pub struct MarkdownDocument {
 }
 
 /// What a Markdown page may follow links within (upstream's `MarkdownLinkGrant`): its file and that file's folder, both
-/// with symlinks resolved when the page opens and fixed for its life.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// with symlinks resolved when the page opens and fixed for its life. A `page.request` carries it as upstream's
+/// `markdownLinks` object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownLinkGrant {
     pub path: String,
     pub root: String,

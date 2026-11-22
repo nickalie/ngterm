@@ -696,6 +696,10 @@ pub struct PresentationPage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
     pub follow: bool,
+    /// The link grant the origin froze at open (upstream's `markdownLinks`), sent only to a presenter listing
+    /// [`super::hub::PAGE_LINKS_KIND`]; `None`, and left out of the frame, for any other page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markdown_links: Option<crate::html::markdown_page::MarkdownLinkGrant>,
 }
 
 impl PresentationPage {
@@ -1620,6 +1624,7 @@ mod tests {
             pane,
             size_percent: pane.is_none().then_some(80),
             follow: pane.is_none(),
+            markdown_links: None,
         }
     }
 
@@ -1723,6 +1728,19 @@ mod tests {
             )),
             Body::PageRequest(page_request("p7", text_source(Some(42)), None)),
             Body::PageRequest(page_request("p8", text_source(None), None)),
+            Body::PageRequest(PresentationPage {
+                markdown_links: Some(crate::html::markdown_page::MarkdownLinkGrant {
+                    path: "/tmp/notes/README.md".to_owned(),
+                    root: "/tmp/notes".to_owned(),
+                }),
+                ..page_request(
+                    "p10",
+                    PresentationPageSource::Markdown {
+                        path: "/tmp/notes/README.md".to_owned(),
+                    },
+                    None,
+                )
+            }),
             Body::PageRequest(page_request(
                 "p9",
                 PresentationPageSource::Document {
@@ -1894,6 +1912,36 @@ mod tests {
                 assert_eq!(decode(&bytes[..bytes.len() - 1]).unwrap(), frame, "{kind}");
             }
         }
+    }
+
+    /// Upstream's `aMarkdownPageFromAnOriginWithoutLinkGrantsDecodesWithNone` and `aPageWithoutALinkGrantSendsNoGrantKey`:
+    /// the grant is an optional `markdownLinks` object of its path and root.
+    #[test]
+    fn a_link_grant_travels_as_an_optional_object() {
+        let older = br#"{"kind":"page.request","gen":1,"rev":1,"page":{"page":"p1","token":"t1","source":{"markdown":{"path":"/tmp/a.md"}},"identity":"a.md","chromeless":false,"javascript":false,"navigation":true,"browse":false,"persistent":false,"follow":false}}"#;
+        let Body::PageRequest(page) = decode(older).unwrap().body else {
+            panic!("a page request");
+        };
+        assert_eq!(page.markdown_links, None);
+        let linked = PresentationPage {
+            markdown_links: Some(crate::html::markdown_page::MarkdownLinkGrant {
+                path: "/tmp/a.md".to_owned(),
+                root: "/tmp".to_owned(),
+            }),
+            ..page
+        };
+        let line = encode(&PresentationFrame {
+            generation: 1,
+            rev: 1,
+            body: Body::PageRequest(linked.clone()),
+        })
+        .unwrap();
+        let sent: serde_json::Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(
+            sent["page"]["markdownLinks"],
+            json!({"path": "/tmp/a.md", "root": "/tmp"})
+        );
+        assert_eq!(decode(&line[..line.len() - 1]).unwrap().body, Body::PageRequest(linked));
     }
 
     #[test]

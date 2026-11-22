@@ -1651,6 +1651,63 @@ def test_page_serve_serves_a_content_pages_files_under_its_rules(live, tmp_path)
             _until_closed(helper)
 
 
+# A presenter that follows a Markdown page's links under the grant its request carries lists `page.links` (#931).
+LINKS_PRESENTER_KINDS = [*CONTENT_PRESENTER_KINDS, "page.links"]
+
+
+@LIVE
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.overlay.open", "session.overlay.page.serve", streams=("session.overlay.page.serve",))
+def test_a_link_grant_goes_only_to_a_presenter_listing_page_links_and_its_channel_serves_under_it(live, tmp_path):
+    """`--markdown FILE --navigation` hands a presenter listing `page.links` the grant the origin froze, and the page's
+    channel serves Markdown inside the grant as text and anything else only as a picture; any other presenter gets the
+    page without links or navigation, served as before links (#931)."""
+    folder, _, readme, _ = _content_files(tmp_path)
+    (folder / "sub").mkdir()
+    guide = folder / "sub" / "guide.md"
+    guide.write_text("# guide\n")
+    (folder / "sub" / "plot.png").write_bytes(PNG)
+    (folder / ".env").write_text("SECRET=1\n")
+    (tmp_path / "outside.md").write_text("# outside\n")
+    os.symlink(folder / ".env", folder / "secret.md")
+    real = os.path.realpath(folder)
+    with _page_presenter(live, CONTENT_PRESENTER_KINDS) as (sid, presenter, _):
+        _, request = _handed_over(live, sid, presenter, markdownFile=str(readme), navigation=True)
+        assert_absent(request, "markdownLinks")
+        assert request["navigation"] is False
+        with live.stream("session.overlay.page.serve", request["token"]) as helper:
+            assert helper.reply.ok, helper.reply.raw
+            # a Markdown file below the page's folder is no picture, so it does not cross
+            helper.send({"kind": "resource", "id": 1, "path": str(guide)})
+            assert _transfer(helper, 1) == (None, b"", NOT_A_PICTURE)
+            assert_ok(live.request("session.overlay.close", sid))
+            wait_frame(presenter.read, "page.close", presenter.send)
+            _until_closed(helper)
+    with _page_presenter(live, LINKS_PRESENTER_KINDS) as (sid, presenter, _):
+        page_id, request = _handed_over(live, sid, presenter, markdownFile=str(readme), navigation=True)
+        assert request["navigation"] is True
+        grant = request["markdownLinks"]
+        assert grant["root"] in {real, foundation_resolved(real)}, grant
+        assert grant == {"path": f"{grant['root']}/README.md", "root": grant["root"]}
+        root = grant["root"]
+        with live.stream("session.overlay.page.serve", request["token"]) as helper:
+            assert helper.reply.ok, helper.reply.raw
+            assert helper.reply.result == {"id": page_id}
+            for request_id, (path, expected) in enumerate([
+                (grant["path"], (TEXT_MIME, readme.read_bytes(), None)),
+                (f"{root}/sub/guide.md", (TEXT_MIME, b"# guide\n", None)),
+                (f"{root}/sub/plot.png", ("image/png", PNG, None)),
+                (f"{root}/.env", (None, b"", NOT_A_PICTURE)),
+                (f"{root}/secret.md", (None, b"", "file is outside the page's folder")),
+                (f"{root}/../outside.md", (None, b"", "file is outside the page's folder")),
+            ], start=1):
+                helper.send({"kind": "resource", "id": request_id, "path": path})
+                assert _transfer(helper, request_id) == expected, path
+            assert_ok(live.request("session.overlay.close", sid))
+            wait_frame(presenter.read, "page.close", presenter.send)
+            _until_closed(helper)
+
+
 @LIVE
 @pytest.mark.since("0.41.0")
 @pytest.mark.covers("live.present", "session.overlay.open", "session.overlay.resize", streams=("live.present",))

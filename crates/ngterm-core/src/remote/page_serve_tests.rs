@@ -243,25 +243,25 @@ fn an_image_text_or_document_page_serves_only_its_own_file() {
     };
     let image = HtmlSource::Image { path: text(&picture) };
     assert_eq!(
-        content(&text(&picture), &image),
+        content(&text(&picture), &image, None),
         own(&picture, html::image_page::MAX_BYTES, true)
     );
-    assert_eq!(content(&text(&index), &image), None);
+    assert_eq!(content(&text(&index), &image, None), None);
     let page = HtmlSource::Text {
         path: text(&index),
         line: Some(4),
     };
     assert_eq!(
-        content(&text(&index), &page),
+        content(&text(&index), &page, None),
         own(&index, html::text_page::MAX_BYTES, false)
     );
-    assert_eq!(content(&text(&picture), &page), None);
+    assert_eq!(content(&text(&picture), &page, None), None);
     let document = HtmlSource::Document { path: text(&index) };
     assert_eq!(
-        content(&text(&index), &document),
+        content(&text(&index), &document, None),
         own(&index, html::document_page::MAX_BYTES, false)
     );
-    assert_eq!(content(&text(&picture), &document), None);
+    assert_eq!(content(&text(&picture), &document, None), None);
 }
 
 /// Upstream's `aMarkdownPageServesItsOwnFileAndPicturesInItsFolder` and `aMarkdownPageRefusesEscapes`.
@@ -271,7 +271,7 @@ fn a_markdown_page_serves_its_own_file_and_pictures_in_its_folder_only() {
     let (index, picture) = (docs.docs(&["index.html"]), docs.docs(&["img", "a.png"]));
     let markdown = HtmlSource::Markdown { path: text(&index) };
     assert_eq!(
-        content(&text(&index), &markdown),
+        content(&text(&index), &markdown, None),
         Some(ContentResource {
             path: canonical(&index),
             max_bytes: html::markdown_page::MAX_BYTES,
@@ -279,7 +279,7 @@ fn a_markdown_page_serves_its_own_file_and_pictures_in_its_folder_only() {
         })
     );
     assert_eq!(
-        content(&text(&picture), &markdown),
+        content(&text(&picture), &markdown, None),
         Some(ContentResource {
             path: canonical(&picture),
             max_bytes: html::markdown_page::MAX_IMAGE_BYTES,
@@ -296,9 +296,86 @@ fn a_markdown_page_serves_its_own_file_and_pictures_in_its_folder_only() {
         escapes.push(docs.docs(&["out.txt"]));
     }
     for escape in escapes {
-        assert_eq!(content(&text(&escape), &markdown), None, "{escape:?}");
+        assert_eq!(content(&text(&escape), &markdown, None), None, "{escape:?}");
     }
-    assert_eq!(content("docs/index.html", &markdown), None, "a relative path");
+    assert_eq!(content("docs/index.html", &markdown, None), None, "a relative path");
+}
+
+/// Upstream's `aLinkPageServesMarkdownOnlyThroughTheGrantAndEverythingElseAsAPicture`: Markdown names go through the
+/// grant as text, their own file included; anything else is a picture candidate anywhere in the root, resolved.
+#[test]
+fn a_link_page_serves_markdown_only_through_the_grant_and_everything_else_as_a_picture() {
+    let docs = Docs::new();
+    std::fs::create_dir_all(docs.docs(&["sub"])).unwrap();
+    for name in [["a.md"], ["large.md"], [".env"]] {
+        std::fs::write(docs.docs(&name), "x").unwrap();
+    }
+    std::fs::write(docs.docs(&["sub", "b.md"]), "x").unwrap();
+    let source = HtmlSource::Markdown {
+        path: text(&docs.docs(&["a.md"])),
+    };
+    let grant = html::markdown_page::link_grant(&text(&docs.docs(&["a.md"])), "/home/u").unwrap();
+    let root = PathBuf::from(&grant.root);
+    let served = |path: &Path| content(&text(path), &source, Some(&grant));
+    let markdown = |path: PathBuf| ContentResource {
+        path,
+        max_bytes: html::markdown_page::MAX_BYTES,
+        picture: false,
+    };
+    let picture = |path: PathBuf| ContentResource {
+        path,
+        max_bytes: html::markdown_page::MAX_IMAGE_BYTES,
+        picture: true,
+    };
+    assert_eq!(
+        served(Path::new(&grant.path)),
+        Some(markdown(PathBuf::from(&grant.path)))
+    );
+    assert_eq!(
+        served(&root.join("sub").join("b.md")),
+        Some(markdown(root.join("sub").join("b.md")))
+    );
+    assert_eq!(
+        served(&root.join("img").join("a.png")),
+        Some(picture(root.join("img").join("a.png")))
+    );
+    let mut refused = vec![
+        root.join("..").join("outside.md"),
+        root.join("..").join("secret.txt"),
+        root.clone(),
+    ];
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        symlink(root.join("large.md"), root.join("picture.png")).unwrap();
+        symlink(root.join("a.md"), root.join("alias.png")).unwrap();
+        symlink(root.join(".env"), root.join("guide.md")).unwrap();
+        symlink(root.join("a.md"), docs.root().join("outside.md")).unwrap();
+        // an alias is served under its target's path, and only as a picture: its bytes decide
+        assert_eq!(served(&root.join("picture.png")), Some(picture(root.join("large.md"))));
+        assert_eq!(served(&root.join("alias.png")), Some(picture(root.join("a.md"))));
+        refused.push(root.join("guide.md"));
+        refused.push(root.join("out.txt"));
+    }
+    for path in refused {
+        assert_eq!(served(&path), None, "{path:?}");
+    }
+    assert_eq!(content("docs/a.md", &source, Some(&grant)), None, "a relative path");
+}
+
+/// Upstream's `aLinkPageRetargetedAfterItsGrantIsJudgedAgain`: a page file turned into a link out of the folder after
+/// its grant is not served.
+#[cfg(unix)]
+#[test]
+fn a_link_page_retargeted_after_its_grant_is_judged_again() {
+    let docs = Docs::new();
+    let file = docs.docs(&["a.md"]);
+    std::fs::write(&file, "x").unwrap();
+    let grant = html::markdown_page::link_grant(&text(&file), "/home/u").unwrap();
+    std::fs::remove_file(&file).unwrap();
+    std::os::unix::fs::symlink(docs.root().join("secret.txt"), &file).unwrap();
+    let source = HtmlSource::Markdown { path: text(&file) };
+    assert_eq!(content(&grant.path, &source, Some(&grant)), None);
 }
 
 /// Upstream's `aFilePageIsNeverServedAsContentNorAContentPageAsAFile`.
@@ -306,7 +383,7 @@ fn a_markdown_page_serves_its_own_file_and_pictures_in_its_folder_only() {
 fn a_file_page_is_never_served_as_content_nor_a_content_page_as_a_file() {
     let docs = Docs::new();
     let index = text(&docs.docs(&["index.html"]));
-    assert_eq!(content(&index, &docs.file(true)), None);
+    assert_eq!(content(&index, &docs.file(true), None), None);
     let markdown = HtmlSource::Markdown { path: index.clone() };
     assert_eq!(resolve(&index, &markdown), None);
 }

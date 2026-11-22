@@ -597,6 +597,14 @@ impl AppStore {
         Some(handed)
     }
 
+    /// Drops the link grant of the page under `job`, as a holder that cannot follow links is handed it, so its channel
+    /// serves it without links.
+    pub(crate) fn unlink_remote_page(&mut self, session: Uuid, job: &str) {
+        let unlink = |page: &mut RemotePage| page.overlay = page.overlay.without_links();
+        self.session_mut(session)
+            .and_then(|found| found.remote_overlays.update_page(job, unlink));
+    }
+
     /// Records `hidden` on the parked page in `pane`'s slot, delivered when it is handed on; whether one is parked
     /// there.
     fn set_parked_page_hidden(&mut self, session: Uuid, pane: Option<OverlayPane>, hidden: bool) -> bool {

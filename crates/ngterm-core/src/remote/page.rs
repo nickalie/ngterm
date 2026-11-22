@@ -10,7 +10,9 @@
 //!
 //! An image, Markdown, text or clicked HTML page (#891, #917) goes only to a presenter whose hello lists the kind
 //! ([`super::hub::PAGE_CONTENT_KIND`], [`super::hub::PAGE_DOCUMENT_KIND`]), read here first as an open reads it, a
-//! picture with its probed pixels, which that presenter fits to its own screen (`presenter_sized`).
+//! picture with its probed pixels, which that presenter fits to its own screen (`presenter_sized`). A Markdown page's
+//! link grant (#931) goes only to a presenter listing [`super::hub::PAGE_LINKS_KIND`]; any other is handed the page,
+//! and its channel serves it, without links or navigation.
 //!
 //! "The presenter" here is the viewer showing the session's pages ([`super::hub::Surface::Pages`]): the presenter, or
 //! when it shows no pages (a phone), a viewer beside it that does (this build's extension).
@@ -24,6 +26,7 @@
 //! page belongs to the session's viewer. A parked page closes here like any page, telling no presenter; its visibility and size are
 //! recorded for the hand-on, and what needs a page shown is refused.
 
+use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
@@ -32,7 +35,8 @@ use super::frames::{
     self, Body, PresentationFrame, PresentationPage, PresentationPageAction, PresentationPageChange,
     PresentationPageCommand, PresentationPageSource, PresentationPane,
 };
-use super::hub::{PAGE_CONTENT_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, SubscriberId, Surface};
+use super::hub::{PAGE_CONTENT_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, SubscriberId, Surface};
+use super::page_serve::ServedPage;
 use crate::Core;
 use crate::commands::overlay_page::PageOpening;
 use crate::html::image_page::{BASE_PERCENT, ImagePixels};
@@ -169,6 +173,23 @@ fn page_request(
         pane: identity.map(PresentationPane::Identity),
         size_percent: size.percent,
         follow: opening.follow,
+        markdown_links: overlay.markdown_links.clone(),
+    }
+}
+
+/// `overlay` as `session`'s presenter is handed it (upstream's guard in `openRemotePage`): a link grant only to one
+/// listing [`PAGE_LINKS_KIND`], any other gets the page without links or navigation, so it keeps the rules it knows.
+/// The record the claim serves from is this same page, so the request and the serving agree.
+fn as_presented<'a>(core: &Core, session: Uuid, overlay: &'a HtmlOverlay) -> Cow<'a, HtmlOverlay> {
+    if overlay.markdown_links.is_none()
+        || core
+            .remote
+            .hub
+            .surface_supports(Surface::Pages, PAGE_LINKS_KIND, session)
+    {
+        Cow::Borrowed(overlay)
+    } else {
+        Cow::Owned(overlay.without_links())
     }
 }
 
@@ -221,6 +242,7 @@ pub(crate) fn open_remote_page(
     if let Some(refusal) = presenter_refusal(core, session, &source, &overlay.source) {
         return refusal;
     }
+    let overlay = as_presented(core, session, overlay);
     let token = uuid_string(Uuid::new_v4());
     let size = page_size(opening);
     // the presenter sizes an unsized picture itself, as a floating panel at the base percent, so the slot records that
@@ -236,7 +258,7 @@ pub(crate) fn open_remote_page(
         points: core.presentable_points(Surface::Pages, session, size.points),
         ..size
     };
-    let request = Body::PageRequest(page_request(overlay, opening, source, identity, token.clone(), sent));
+    let request = Body::PageRequest(page_request(&overlay, opening, source, identity, token.clone(), sent));
     if !fits_one_frame(&request) {
         return RemotePageOpen::TooLarge;
     }
@@ -251,14 +273,15 @@ pub(crate) fn open_remote_page(
     if slot.is_none() && hud {
         store.close_hud(session);
     }
-    let mut reserved = RemotePage::new(overlay.clone(), token, Instant::now() + PAGE_CLAIM_WINDOW);
+    let page = overlay.id;
+    let mut reserved = RemotePage::new(overlay.into_owned(), token, Instant::now() + PAGE_CLAIM_WINDOW);
     reserved.background_color.clone_from(&opening.background_color);
     reserved.image_pixels = opening.image_pixels;
     store.reserve_remote_overlay(
         session,
         RemoteOverlaySlot {
             points: size.points,
-            job: uuid_string(overlay.id),
+            job: uuid_string(page),
             pane: slot,
             owner,
             size_percent: reserved_percent,
@@ -268,7 +291,7 @@ pub(crate) fn open_remote_page(
             presenter_sized,
         },
     );
-    core.register_viewer_page_outcome(overlay.id);
+    core.register_viewer_page_outcome(page);
     core.remote.hub.send_to_surface(Surface::Pages, request, session);
     core.arm_page_claim_expiry(channel);
     RemotePageOpen::Opened
@@ -725,6 +748,8 @@ impl Core {
         if unreachable_loopback(self, session, &overlay.source) {
             return;
         }
+        let overlay = as_presented(self, session, overlay);
+        let unlinked = matches!(overlay, Cow::Owned(_));
         // a picture the last presenter fitted itself is fitted again by the next one
         let fitted = slot.presenter_sized;
         let opening = PageOpening {
@@ -748,17 +773,18 @@ impl Core {
         };
         let token = uuid_string(Uuid::new_v4());
         let channel = source.uses_channel();
-        let request = Body::PageRequest(page_request(overlay, &opening, source, identity, token.clone(), sent));
+        let request = Body::PageRequest(page_request(&overlay, &opening, source, identity, token.clone(), sent));
         if !fits_one_frame(&request) {
             return;
         }
         let owner = self.remote.hub.surface_generation(Surface::Pages, session);
         let deadline = Instant::now() + PAGE_CLAIM_WINDOW;
-        let Some(handed) = self
-            .library_mut()
-            .store_for_session_mut(session)
-            .and_then(|store| store.hand_on_remote_page(session, &slot.job, owner, token, deadline))
-        else {
+        let Some(handed) = self.library_mut().store_for_session_mut(session).and_then(|store| {
+            if unlinked {
+                store.unlink_remote_page(session, &slot.job);
+            }
+            store.hand_on_remote_page(session, &slot.job, owner, token, deadline)
+        }) else {
             return;
         };
         self.remote.hub.send_to_surface(Surface::Pages, request, session);
@@ -780,9 +806,9 @@ impl Core {
     }
 
     /// Admits the page channel `token` names (upstream's `claimRemotePage`): unclaimed, inside its deadline at `now`,
-    /// and still shown by the presenter it was handed to. A token claims once. The page's id and the source its
-    /// channel serves.
-    pub(crate) fn claim_remote_page(&mut self, token: &str, now: Instant) -> Option<(Uuid, HtmlSource)> {
+    /// and still shown by the presenter it was handed to. A token claims once. The page's id and what its channel
+    /// serves.
+    pub(crate) fn claim_remote_page(&mut self, token: &str, now: Instant) -> Option<(Uuid, ServedPage)> {
         let library = self.library();
         let found = library.open_ids().into_iter().find_map(|window| {
             library.store(window)?.sessions().find_map(|session| {
@@ -800,14 +826,17 @@ impl Core {
                         id,
                         slot.job.clone(),
                         page.overlay.id,
-                        page.overlay.source.clone(),
+                        ServedPage {
+                            source: page.overlay.source.clone(),
+                            links: page.overlay.markdown_links.clone(),
+                        },
                     )
                 })
             })
         });
-        let (window, session, job, page, source) = found?;
+        let (window, session, job, page, served) = found?;
         self.library_mut().store_mut(window)?.claim_remote_page(session, &job);
-        Some((page, source))
+        Some((page, served))
     }
 
     /// Parks every channel page shown on a presenter whose channel was not claimed by `now` (upstream's

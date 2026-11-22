@@ -952,10 +952,10 @@ fn claim_page_serve(core: &mut Core, target: Option<&str>) -> Outcome {
         let claim = claimed.map_err(|()| ControlError::rejected(PAGE_NOT_CLAIMABLE))?;
         return Ok(ControlResult::id(crate::pane_env::uuid_string(claim)));
     }
-    let (page, source) = core
+    let (page, served) = core
         .claim_remote_page(token, std::time::Instant::now())
         .ok_or_else(|| ControlError::rejected(PAGE_NOT_CLAIMABLE))?;
-    core.remote.page_serve.claimed(page, source);
+    core.remote.page_serve.claimed(page, served);
     Ok(ControlResult::id(crate::pane_env::uuid_string(page)))
 }
 

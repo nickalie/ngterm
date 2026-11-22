@@ -19,7 +19,7 @@ use crate::html::HtmlSource;
 use crate::remote::PAGE_CLAIM_WINDOW;
 use crate::remote::page_serve::{
     BUSY, CANCELLED, CONTROL_UNAVAILABLE, MAX_PENDING_LINES, PageChannel, PageServeFrame, PageServeStream,
-    RESOURCE_LIMIT, decode, encode,
+    RESOURCE_LIMIT, ServedPage, decode, encode,
 };
 
 /// How long a test waits for the file or reply thread before it fails.
@@ -307,10 +307,11 @@ fn a_token_claims_once_within_its_deadline() {
     let core = &mut served.origin.fixture().core;
     let soon = Instant::now() + Duration::from_secs(5);
     assert_eq!(core.claim_remote_page(&wire(Uuid::new_v4()), soon), None);
-    let (claimed, source) = core.claim_remote_page(&token, soon).unwrap();
+    let (claimed, served_page) = core.claim_remote_page(&token, soon).unwrap();
     assert_eq!(claimed, page_id(&page));
+    assert_eq!(served_page.links, None);
     assert!(matches!(
-        source,
+        served_page.source,
         HtmlSource::File {
             grant_root: Some(_),
             ..
@@ -653,7 +654,7 @@ fn a_bridge_request_for_a_page_that_ended_is_refused() {
         path: served.path("index.html"),
         grant_root: Some(text(&served.docs)),
     };
-    let stream = PageServeStream::start(Uuid::new_v4(), source, fake.clone(), None).unwrap();
+    let stream = PageServeStream::start(Uuid::new_v4(), ServedPage::unlinked(source), fake.clone(), None).unwrap();
     let work = stream.take(br#"{"id":3,"kind":"bridge","request":"{\"cmd\":\"tree\"}"}"#);
     assert!(served.origin.fixture().core.page_serve_work(work.unwrap()).is_none());
     assert_eq!(
@@ -927,5 +928,96 @@ fn a_content_page_has_no_bridge() {
             id: 4,
             error: "this page has no bridge".to_owned()
         })
+    );
+}
+
+// MARK: - link pages (#931)
+
+impl Served {
+    /// A presented session whose presenter lists `kinds`, its origin reading content files.
+    fn content_listing(kinds: &[&str]) -> Self {
+        let mut served = Self::new();
+        served.origin = super::content_pages::content_origin(kinds);
+        served
+    }
+
+    /// Opens `--markdown name --navigation` of the folder; its page id and the request's grant.
+    fn open_linked(&mut self, name: &str) -> (String, Option<serde_json::Value>) {
+        let path = self.path(name);
+        let response =
+            super::content_pages::open_content(&mut self.origin, "markdown", &path, |a| a.navigation = Some(true));
+        assert!(response.ok, "{response:?}");
+        let request = self.origin.presenter.last("page.request").unwrap();
+        let page = response.result.unwrap()["pageID"].as_str().unwrap().to_owned();
+        (page, request["page"].get("markdownLinks").cloned())
+    }
+}
+
+/// Upstream's `testALinkPageServesLinkedMarkdownAsTextAndEverythingElseOnlyAsAPicture`: Markdown inside the grant goes
+/// as text, a picture anywhere in its root by its signature, and nothing else: no alias of another file, no Markdown
+/// name of a secret, nothing outside the root.
+#[test]
+fn a_link_page_serves_linked_markdown_as_text_and_everything_else_only_as_a_picture() {
+    let mut served = Served::content();
+    let docs = served.docs.clone();
+    std::fs::create_dir_all(docs.join("sub")).unwrap();
+    for (name, body) in [
+        ("a.md", "# a\n"),
+        ("sub/b.md", "# b\n"),
+        ("large.md", "# large\n"),
+        (".env", "SECRET=1\n"),
+    ] {
+        std::fs::write(docs.join(name), body).unwrap();
+    }
+    std::fs::write(docs.join("sub/plot.png"), PICTURE).unwrap();
+    std::fs::write(docs.parent().unwrap().join("outside.md"), "# outside\n").unwrap();
+    let mut refused = vec!["../outside.md", "large.txt"];
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(docs.join("large.md"), docs.join("picture.png")).unwrap();
+        std::os::unix::fs::symlink(docs.join("a.md"), docs.join("alias.png")).unwrap();
+        std::os::unix::fs::symlink(docs.join(".env"), docs.join("guide.md")).unwrap();
+        refused.extend(["picture.png", "alias.png", "guide.md"]);
+    }
+    let (page, grant) = served.open_linked("a.md");
+    let frozen = crate::html::markdown_page::link_grant(&served.path("a.md"), "/home/u").unwrap();
+    assert_eq!(grant, Some(json!({"path": frozen.path, "root": frozen.root})));
+    let channel = served.channel(&page);
+    let markdown = Some("text/plain; charset=utf-8".to_owned());
+    assert_eq!(
+        served.serve(&channel, &["a.md", "sub/b.md", "sub/plot.png"]),
+        [
+            (markdown.clone(), b"# a\n".to_vec(), None),
+            (markdown, b"# b\n".to_vec(), None),
+            (Some("image/png".to_owned()), PICTURE.to_vec(), None),
+        ]
+    );
+    for (name, (mime, body, failure)) in refused.iter().zip(served.serve(&channel, &refused)) {
+        assert!(mime.is_none() && body.is_empty() && failure.is_some(), "{name}");
+    }
+}
+
+/// Upstream's `testAPresenterThatCannotFollowLinksIsServedThePageAsBeforeLinks`: no grant in the request, and the
+/// channel serves the page's own file and only pictures beside it, so a Markdown file in a folder below is no text.
+#[test]
+fn a_presenter_that_cannot_follow_links_is_served_the_page_as_before_links() {
+    let kinds: Vec<&str> = crate::remote::hub::SUPPORTED_KINDS
+        .into_iter()
+        .filter(|kind| *kind != crate::remote::hub::PAGE_LINKS_KIND)
+        .collect();
+    let mut served = Served::content_listing(&kinds);
+    std::fs::create_dir_all(served.docs.join("sub")).unwrap();
+    std::fs::write(served.docs.join("README.md"), "# real\n").unwrap();
+    std::fs::write(served.docs.join("sub/pic.md"), "# picture text\n").unwrap();
+    let (page, grant) = served.open_linked("README.md");
+    assert_eq!(grant, None);
+    let request = served.origin.presenter.last("page.request").unwrap();
+    assert_eq!(request["page"]["navigation"], json!(false));
+    let channel = served.channel(&page);
+    let answers = served.serve(&channel, &["README.md", "sub/pic.md"]);
+    assert_eq!(answers[0].1, b"# real\n".to_vec());
+    assert_eq!(
+        answers[1],
+        (None, Vec::new(), Some("not a png, jpg, gif or webp image".to_owned()))
     );
 }

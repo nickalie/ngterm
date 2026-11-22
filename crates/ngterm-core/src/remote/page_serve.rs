@@ -4,7 +4,8 @@
 //! After `session.overlay.page.serve` admits the helper's claim, its connection carries newline-delimited JSON frames
 //! that multiplex the page's resource transfers and its bridge calls by request id. A resource is read here off the
 //! main loop, from a file page's own file or from inside its grant, or for an image, Markdown, text or document page
-//! the files its kind may read under its kind's cap ([`content`]), in chunks of at most [`MAX_CHUNK_BYTES`]; a file
+//! the files its kind may read under its kind's cap ([`content`]; a Markdown page under the link grant it was handed
+//! with), in chunks of at most [`MAX_CHUNK_BYTES`]; a file
 //! page's bridge request runs here against the page's place at that moment, as a local page's request would, and a
 //! content page has no bridge. The helper's
 //! connection closing parks the page for the next presenter (an extension beyond upstream, which ends it), and sending
@@ -35,6 +36,7 @@ use super::companion_page::{CompanionPageRuntime, CompanionPageServing};
 use super::frames::{self, FrameError};
 use crate::Core;
 use crate::html::bridge::{self, HtmlBridgePage};
+use crate::html::markdown_page::MarkdownLinkGrant;
 use crate::html::{self, HtmlSource};
 use crate::pane_env::uuid_string;
 
@@ -291,10 +293,15 @@ pub struct ContentResource {
 /// The file a content page's channel may serve for `requested`, `None` when it may not (upstream's
 /// `RemotePageResources.content`): an image, text or document page reads only its own file; a Markdown page its own file
 /// and the pictures inside its folder, symlinks resolved on this machine, served only as pictures whatever their names.
-/// A file or URL page is never served through here ([`resolve`] serves a file page), and a request on another volume is
-/// refused before the file system is asked, as there.
+/// With `links`, a Markdown page's Markdown-spelled request is served only through
+/// [`html::markdown_page::linked_document`], its own file included, and its pictures come from anywhere in the grant's
+/// root. A file or URL page is never served through here ([`resolve`] serves a file page), and a request on another
+/// volume is refused before the file system is asked, as there.
 #[must_use]
-pub fn content(requested: &str, source: &HtmlSource) -> Option<ContentResource> {
+pub fn content(requested: &str, source: &HtmlSource, links: Option<&MarkdownLinkGrant>) -> Option<ContentResource> {
+    if let (HtmlSource::Markdown { .. }, Some(grant)) = (source, links) {
+        return linked_content(requested, grant);
+    }
     let requested = Path::new(requested);
     let (own, max_bytes, picture) = match source {
         HtmlSource::Image { path } => (path, html::image_page::MAX_BYTES, true),
@@ -322,6 +329,28 @@ pub fn content(requested: &str, source: &HtmlSource) -> Option<ContentResource> 
     };
     let folder = own.parent()?;
     html::markdown_page::local_path(&requested.to_string_lossy(), folder).map(|path| ContentResource {
+        path,
+        max_bytes: html::markdown_page::MAX_IMAGE_BYTES,
+        picture: true,
+    })
+}
+
+/// What a link page's channel serves for `requested` (upstream's `linkContent`): a Markdown-spelled request as text only
+/// when the grant admits it, anything else only as a picture inside the grant's root.
+fn linked_content(requested: &str, grant: &MarkdownLinkGrant) -> Option<ContentResource> {
+    let path = Path::new(requested);
+    let root = Path::new(&grant.root);
+    if !path.is_absolute() || !same_volume(path, root) {
+        return None;
+    }
+    if html::markdown_page::is_markdown(path) {
+        return html::markdown_page::linked_document(requested, grant).map(|file| ContentResource {
+            path: PathBuf::from(file),
+            max_bytes: html::markdown_page::MAX_BYTES,
+            picture: false,
+        });
+    }
+    html::markdown_page::local_path(requested, root).map(|path| ContentResource {
         path,
         max_bytes: html::markdown_page::MAX_IMAGE_BYTES,
         picture: true,
@@ -415,6 +444,8 @@ pub struct PageServeStream {
     /// Set for one attachment of a page companion, whose channel ends nothing but itself.
     companion: Option<CompanionPageServing>,
     source: HtmlSource,
+    /// The link grant the page was handed with; `None` for any other page, a page companion's included.
+    links: Option<MarkdownLinkGrant>,
     channel: Arc<dyn PageChannel>,
     resources: Admission,
     bridges: Admission,
@@ -491,22 +522,23 @@ fn failure(id: i64, error: &str) -> PageServeFrame {
 }
 
 impl PageServeStream {
-    /// A stream for `page`, whose source decides what it serves, over `channel`, with its worker threads started;
-    /// `companion` for one attachment of a page companion.
+    /// A stream for `page`, whose source and link grant decide what it serves, over `channel`, with its worker threads
+    /// started; `companion` for one attachment of a page companion.
     ///
     /// # Errors
     ///
     /// A worker thread could not be started; the channel is shut then.
     pub(crate) fn start(
         page: Uuid,
-        source: HtmlSource,
+        served: ServedPage,
         channel: Arc<dyn PageChannel>,
         companion: Option<CompanionPageServing>,
     ) -> std::io::Result<Arc<Self>> {
         let stream = Arc::new(Self {
             page,
             companion,
-            source,
+            source: served.source,
+            links: served.links,
             channel,
             resources: Admission::new(RESOURCE_LIMIT),
             bridges: Admission::new(BRIDGE_LIMIT),
@@ -671,7 +703,7 @@ impl PageServeStream {
             self.send_waiting(&failure(id, CANCELLED));
             return;
         }
-        if let Some(resource) = content(path, &self.source) {
+        if let Some(resource) = content(path, &self.source, self.links.as_ref()) {
             self.transfer_content(id, &resource);
             return;
         }
@@ -713,8 +745,8 @@ impl PageServeStream {
     }
 
     /// Serves a content page's file (upstream's `contentBody`): read whole under its kind's cap through one checked
-    /// descriptor, and a picture sent only when its bytes carry a picture signature, so no other file in a Markdown
-    /// page's folder crosses.
+    /// descriptor, and a picture sent only when its bytes carry a picture signature, so a Markdown page sends text only
+    /// for its own file or the documents its link grant admits.
     fn transfer_content(&self, id: i64, resource: &ContentResource) {
         let body = match crate::bounded_file::read(&resource.path, resource.max_bytes) {
             Ok(body) => body,
@@ -777,8 +809,9 @@ fn without_newline(mut line: Vec<u8>) -> Vec<u8> {
 /// `pageServeStreams`), and the claim expiries the frontend owes.
 #[derive(Debug, Default)]
 pub(crate) struct PageServeRuntime {
-    /// Pages whose claim was answered `ok` and whose connection is not adopted yet, with the source it serves.
-    pending_claims: HashMap<Uuid, HtmlSource>,
+    /// Pages whose claim was answered `ok` and whose connection is not adopted yet, with what each serves as it was
+    /// handed over.
+    pending_claims: HashMap<Uuid, ServedPage>,
     streams: HashMap<Uuid, Arc<PageServeStream>>,
     /// Claim expiry runs the frontend owes, each after its delay.
     pub(super) expiries: Vec<Duration>,
@@ -788,8 +821,24 @@ pub(crate) struct PageServeRuntime {
 
 impl PageServeRuntime {
     /// Records the claim of `page` answered `ok`.
-    pub(crate) fn claimed(&mut self, page: Uuid, source: HtmlSource) {
-        self.pending_claims.insert(page, source);
+    pub(crate) fn claimed(&mut self, page: Uuid, served: ServedPage) {
+        self.pending_claims.insert(page, served);
+    }
+}
+
+/// What a handed-over page's channel serves, as the page was handed over (upstream's claimed `HtmlOverlay`): its source
+/// and its link grant, which a presenter that cannot follow links was handed none of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedPage {
+    pub source: HtmlSource,
+    pub links: Option<MarkdownLinkGrant>,
+}
+
+impl ServedPage {
+    /// A page served with no link grant.
+    #[must_use]
+    pub fn unlinked(source: HtmlSource) -> Self {
+        Self { source, links: None }
     }
 }
 
@@ -806,8 +855,8 @@ impl Core {
         if let Some(serving) = page.and_then(|claim| self.remote.page_serve.companions.take_claim(claim)) {
             return self.adopt_companion_page_stream(serving, channel);
         }
-        let source = page.and_then(|page| self.remote.page_serve.pending_claims.remove(&page));
-        let (Some(page), Some(source)) = (page, source) else {
+        let served = page.and_then(|page| self.remote.page_serve.pending_claims.remove(&page));
+        let (Some(page), Some(served)) = (page, served) else {
             channel.shutdown();
             return None;
         };
@@ -815,7 +864,7 @@ impl Core {
             channel.shutdown();
             return None;
         }
-        match PageServeStream::start(page, source, channel, None) {
+        match PageServeStream::start(page, served, channel, None) {
             Ok(stream) => {
                 self.remote.page_serve.streams.insert(page, Arc::clone(&stream));
                 Some(stream)
@@ -842,7 +891,7 @@ impl Core {
             channel.shutdown();
             return None;
         };
-        match PageServeStream::start(serving.page, source, channel, Some(serving)) {
+        match PageServeStream::start(serving.page, ServedPage::unlinked(source), channel, Some(serving)) {
             Ok(stream) => {
                 let streams = &mut self.remote.page_serve.companions.streams;
                 streams.insert(serving.claim, Arc::clone(&stream));

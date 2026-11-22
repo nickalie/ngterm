@@ -646,6 +646,16 @@ impl HtmlOverlay {
         self
     }
 
+    /// This page with no link grant (upstream's `withoutLinks`), as a presenter that cannot follow links is handed it: a
+    /// Markdown page loses its Back and Forward with the grant.
+    #[must_use]
+    pub fn without_links(&self) -> Self {
+        let mut page = self.clone();
+        page.markdown_links = None;
+        page.flags.navigation &= self.source.kind() != HtmlPageKind::Markdown;
+        page
+    }
+
     /// Whether the session's snapshot writes the page as an overlay-slot page: one this machine opened in an overlay
     /// slot. A replica belongs to the machine that opened it, and a row page is not one: a page session writes its own
     /// row page as its session-wide entry ([`HtmlOverlay::saved_as_row`]).
@@ -730,8 +740,12 @@ impl HtmlOverlay {
                 last_path_component(path)
             }
             HtmlSource::Unreadable { .. } => "unreadable page".to_owned(),
-            // a replica the app builds sits at about:blank: its file is what it shows
-            HtmlSource::Replica { path, content } if *content != ReplicaContent::Html => last_path_component(path),
+            // a replica the app builds sits at about:blank: its file is what it shows, unless it follows links
+            HtmlSource::Replica { path, content }
+                if *content != ReplicaContent::Html && self.markdown_links.is_none() =>
+            {
+                last_path_component(path)
+            }
             // a Markdown page names the file it shows, a linked one once it committed
             HtmlSource::File { path, .. } | HtmlSource::Replica { path, .. } | HtmlSource::Markdown { path } => {
                 let shown = self

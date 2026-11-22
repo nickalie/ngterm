@@ -469,10 +469,15 @@ fn a_document_page_over_a_following_pane_meets_the_presenter_refusal() {
     assert!(origin.node().get("htmlOverlays").is_none());
 }
 
-/// A presenter is handed a Markdown page without its links, so without navigation: nothing serves them there.
+/// A presenter that does not list `page.links` is handed a Markdown page without its links, so without navigation:
+/// nothing serves them there.
 #[test]
-fn a_markdown_page_with_navigation_goes_to_the_presenter_without_it() {
-    let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
+fn a_markdown_page_with_navigation_goes_to_an_older_presenter_without_it() {
+    let older: Vec<&str> = SUPPORTED_KINDS
+        .into_iter()
+        .filter(|kind| *kind != crate::remote::hub::PAGE_LINKS_KIND)
+        .collect();
+    let mut origin = Origin::build(false, &older, false);
     origin.fixture().core.set_html_host(Box::new(MarkdownHost));
     let dir = tempfile::tempdir().unwrap();
     let readme = dir.path().join("README.md").to_string_lossy().into_owned();
@@ -483,6 +488,7 @@ fn a_markdown_page_with_navigation_goes_to_the_presenter_without_it() {
     assert!(opened.ok, "{opened:?}");
     let request = origin.presenter.last("page.request").unwrap()["page"].clone();
     assert_eq!(request["navigation"], json!(false), "{request}");
+    assert!(request.get("markdownLinks").is_none(), "{request}");
 }
 
 /// Upstream's `testARemoteOpenSkipsTheLocalPageFollowAndStore`: no web view, saved store or selection is this

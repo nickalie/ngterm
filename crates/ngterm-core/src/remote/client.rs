@@ -22,7 +22,7 @@ use super::frames::{
 };
 use super::hub::{
     AGENT_KIND, COMPANION_PAGE_KIND, LINK_CLICK_KIND, NO_OVERLAYS_KIND, OPT_IN_KINDS, PAGE_CONTENT_KIND,
-    PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, STATUS_CHECKMARK_KIND, SUPPORTED_KINDS,
+    PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, STATUS_CHECKMARK_KIND, SUPPORTED_KINDS,
 };
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
@@ -41,11 +41,14 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 /// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
 /// once. `status.shapes` ([`super::hub::STATUS_SHAPES_KIND`]) is always listed: desktop and both mobile apps draw
 /// every shape it names. `status.checkmark` ([`STATUS_CHECKMARK_KIND`]) is listed too: a viewer that does not draw the
-/// checkmark leaves it out of its hello ([`PresentationClient::set_draws_checkmark`]).
+/// checkmark leaves it out of its hello ([`PresentationClient::set_draws_checkmark`]). A Markdown page's links
+/// ([`PAGE_LINKS_KIND`]) are not listed yet: an origin hands this build's presenter a Markdown page without them.
 #[must_use]
 pub fn viewer_kinds(pages: bool) -> Vec<String> {
     SUPPORTED_KINDS
         .iter()
+        // listed once this build's presenter loads a link page from the machine that opened it
+        .filter(|kind| **kind != PAGE_LINKS_KIND)
         .filter(|kind| {
             pages
                 || !(PAGE_KINDS.contains(kind)
@@ -760,6 +763,12 @@ mod tests {
                 .all(|kind| showing.iter().any(|listed| listed == kind)),
             "a viewer that shows pages builds content and document pages"
         );
+        assert!(
+            [true, false]
+                .iter()
+                .all(|pages| !viewer_kinds(*pages).iter().any(|kind| kind == PAGE_LINKS_KIND)),
+            "this build's presenter loads no link page from its origin yet"
+        );
         // desktop Attach Remote shows no agent chat, so it never asks for the agent kind; every viewer (desktop, both
         // mobile apps) draws the eleven status shapes `status.shapes` names, so each lists it
         for pages in [false, true] {
@@ -876,7 +885,12 @@ mod tests {
         let Body::Hello(hello) = hello else {
             panic!("{hello:?}");
         };
-        assert_eq!(hello.kinds, SUPPORTED_KINDS.map(str::to_owned));
+        assert_eq!(hello.kinds, viewer_kinds(true));
+        assert_eq!(
+            hello.kinds.len(),
+            SUPPORTED_KINDS.len() - 1,
+            "every kind but a Markdown page's links"
+        );
         harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Presenter);
         let request = PresentationPage {
             width: None,
@@ -896,6 +910,7 @@ mod tests {
             pane: None,
             size_percent: None,
             follow: false,
+            markdown_links: None,
         };
         let command = PresentationPageCommand {
             width: None,

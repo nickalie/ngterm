@@ -243,6 +243,11 @@ pub const PAGE_CONTENT_KIND: &str = "page.content";
 /// [`PAGE_CONTENT_KIND`]. It names no frame body.
 pub const PAGE_DOCUMENT_KIND: &str = "page.document";
 
+/// A presenter follows a Markdown page's links under the grant its `page.request` carries (upstream's `pageLinksKind`,
+/// [`super::frames::PresentationPage::markdown_links`]). An older presenter would fetch the original spelling and
+/// `.md` pictures, so it is handed the page without links or navigation. It names no frame body.
+pub const PAGE_LINKS_KIND: &str = "page.links";
+
 /// A viewer draws the [`EXPANDED`](crate::model::StatusShape::EXPANDED) shapes (upstream's `statusShapesKind`).
 /// Without this kind, the hub clears shapes outside [`ORIGINAL`](crate::model::StatusShape::ORIGINAL), except the
 /// checkmark if the viewer lists [`STATUS_CHECKMARK_KIND`]. The viewer draws its own settings shape instead.
@@ -273,7 +278,7 @@ pub const PAGE_DETACHED_KIND: &str = "page.detached";
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
-pub const SUPPORTED_KINDS: [&str; 24] = [
+pub const SUPPORTED_KINDS: [&str; 25] = [
     "status",
     "hud",
     "notify",
@@ -286,6 +291,7 @@ pub const SUPPORTED_KINDS: [&str; 24] = [
     OVERLAY_POINTS_KIND,
     PAGE_CONTENT_KIND,
     PAGE_DOCUMENT_KIND,
+    PAGE_LINKS_KIND,
     STATUS_SHAPES_KIND,
     STATUS_CHECKMARK_KIND,
     LINK_CLICK_KIND,
@@ -1350,6 +1356,7 @@ mod tests {
                 "overlay.points",
                 "page.content",
                 "page.document",
+                "page.links",
                 "status.shapes",
                 "status.checkmark",
                 "link.click",

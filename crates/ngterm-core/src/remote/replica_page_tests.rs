@@ -264,3 +264,44 @@ fn requests_after_helper_exit_fail_once_before_the_page_sweep() {
     assert_eq!(origin.heard("page.closed"), [json!({"page": request.page})]);
     assert!(origin.heard("page.detached").is_empty());
 }
+
+/// Upstream's `aMarkdownReplicaKeepsTheOriginsLinkGrantAndNavigationOnlyWithIt`.
+#[test]
+fn a_markdown_replica_keeps_the_origins_link_grant_and_navigation_only_with_it() {
+    let (mut core, row, _launcher) = core();
+    let _origin = Origin::listening(&mut core, row);
+    let grant = crate::html::markdown_page::MarkdownLinkGrant {
+        path: "/docs/README.md".to_owned(),
+        root: "/docs".to_owned(),
+    };
+    let markdown = json!({"markdown": {"path": "/docs/README.md"}});
+    let mut linked = page(&markdown);
+    linked.navigation = true;
+    linked.markdown_links = Some(grant.clone());
+    core.show_replica_page(&linked, row).unwrap();
+    let shown = core
+        .library()
+        .held_session(row)
+        .unwrap()
+        .overlay
+        .page()
+        .cloned()
+        .unwrap();
+    assert_eq!(shown.markdown_links, Some(grant));
+    assert!(shown.flags.navigation);
+
+    core.close_replica_page(&linked.page, row);
+    let mut plain = page(&markdown);
+    plain.navigation = true;
+    core.show_replica_page(&plain, row).unwrap();
+    let shown = core
+        .library()
+        .held_session(row)
+        .unwrap()
+        .overlay
+        .page()
+        .cloned()
+        .unwrap();
+    assert_eq!(shown.markdown_links, None);
+    assert!(!shown.flags.navigation);
+}

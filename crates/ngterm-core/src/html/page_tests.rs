@@ -244,6 +244,28 @@ fn link_page(source: HtmlSource) -> HtmlOverlay {
     )
 }
 
+/// Upstream's `aLinkPageIsNamedByTheFileItShows` for a Markdown page shown for another machine.
+#[test]
+fn a_replica_link_page_is_named_by_the_file_it_shows() {
+    let path = "/tmp/notes/readme.md".to_owned();
+    let mut page = link_page(HtmlSource::Replica {
+        path: path.clone(),
+        content: ReplicaContent::Markdown,
+    });
+    assert_eq!(page.identity(), "readme.md");
+    page.current = Some(shown("/tmp/notes/sub/guide.md", Some("enter your password"), true));
+    assert_eq!(page.identity(), "guide.md");
+    let mut plain = HtmlOverlay::new(
+        HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Markdown,
+        },
+        HtmlPageFlags::default(),
+    );
+    plain.current = Some(shown("about:blank", None, false));
+    assert_eq!(plain.identity(), "readme.md");
+}
+
 /// Upstream's `aLinkPageIsNamedByTheFileItShows` and `aLinkPageKeepsItsOriginalForReadBack`.
 #[test]
 fn a_link_page_is_named_by_the_file_it_shows_and_keeps_its_original() {
@@ -313,4 +335,33 @@ fn a_link_pages_address_keeps_a_shares_server() {
         markdown_link_path(&linked).as_deref(),
         Some(r"\\server\share\docs\sub\b.md")
     );
+}
+
+/// Upstream's `withoutLinks`: a Markdown page loses its grant and its navigation with it; a page of another kind keeps
+/// its navigation.
+#[test]
+fn a_page_without_links_drops_the_grant_and_a_markdown_pages_navigation() {
+    let grant = markdown_page::MarkdownLinkGrant {
+        path: "/tmp/notes/readme.md".to_owned(),
+        root: "/tmp/notes".to_owned(),
+    };
+    let navigation = HtmlPageFlags {
+        navigation: true,
+        ..HtmlPageFlags::default()
+    };
+    let linked = HtmlOverlay::linked(
+        HtmlSource::Markdown {
+            path: grant.path.clone(),
+        },
+        navigation,
+        Some(grant),
+    );
+    let plain = linked.without_links();
+    assert_eq!(plain.id, linked.id);
+    assert!(plain.markdown_links.is_none() && !plain.flags.navigation);
+    let url = HtmlOverlay::new(
+        HtmlSource::Url(url::Url::parse("https://example.com/").unwrap()),
+        navigation,
+    );
+    assert!(url.without_links().flags.navigation);
 }
