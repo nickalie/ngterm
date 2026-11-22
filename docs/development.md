@@ -70,6 +70,7 @@ Linux build unless it names another OS.
 - Another extension beyond upstream, in an order that is the user's choice (2026-11-19): Attach Remote's picker
   starts with Attach All, then New Session, then the sessions, so Enter on an untouched picker attaches all. Attach All
   shows whenever the machine lists a session; with all of them attached here it attaches nothing and shows no error.
+  Attach All attaches terminal sessions only: pick a top-level page session to attach it with its group (#930).
   A typed session name still selects that session (`session_items` in `crates/ngterm-core/src/remote/attach.rs`).
 - Another extension beyond upstream, which has no sidebar search: a search field over the sidebar, in the title bar
   (atop the sidebar's column while the toolbar is hidden), keeps the sessions whose shown name holds its text,
