@@ -66,3 +66,25 @@ fn the_nested_build_keeps_the_target_triple_of_the_test() -> Result<(), Box<dyn 
     );
     Ok(())
 }
+
+#[test]
+fn the_nested_build_writes_to_a_target_directory_inside_another() -> Result<(), Box<dyn std::error::Error>> {
+    let outer = tempfile::tempdir()?;
+    let target = outer.path().join("llvm-cov-target");
+    std::fs::create_dir(&target)?;
+    std::fs::write(outer.path().join(".rustc_info.json"), "{}")?;
+    std::fs::write(target.join(".rustc_info.json"), "{}")?;
+    assert_eq!(
+        target_args(&target.join("debug")),
+        ["--target-dir".into(), target.into_os_string()]
+    );
+    Ok(())
+}
+
+#[test]
+fn the_nested_build_follows_the_environment_without_the_rustc_info_cache() -> Result<(), Box<dyn std::error::Error>> {
+    let target = tempfile::tempdir()?;
+    assert!(target_args(&target.path().join("debug")).is_empty());
+    assert!(target_args(&target.path().join("x86_64-unknown-linux-gnu").join("release")).is_empty());
+    Ok(())
+}

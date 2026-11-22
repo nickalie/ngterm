@@ -60,21 +60,22 @@ fn find_or_build() -> Result<PathBuf, String> {
 
 /// `--target-dir` (and `--target` under a triple) of the test binary, so the nested build writes beside it whatever
 /// directory or triple `cargo test` got on its command line; cargo keeps `.rustc_info.json` at a target directory's root.
+/// Without that file (`CARGO_CACHE_RUSTC_INFO=0`) there are none, and the build follows the environment.
 pub fn target_args(profile: &Path) -> Vec<OsString> {
+    let marker = ".rustc_info.json";
     let Some(root) = profile.parent() else {
         return Vec::new();
     };
-    let marker = ".rustc_info.json";
-    if !root.join(marker).is_file()
-        && let (Some(target_dir), Some(triple)) = (root.parent(), root.file_name())
-        && target_dir.join(marker).is_file()
-    {
-        return vec![
+    if root.join(marker).is_file() {
+        return vec!["--target-dir".into(), root.into()];
+    }
+    match (root.parent(), root.file_name()) {
+        (Some(target_dir), Some(triple)) if target_dir.join(marker).is_file() => vec![
             "--target-dir".into(),
             target_dir.into(),
             "--target".into(),
             triple.into(),
-        ];
+        ],
+        _ => Vec::new(),
     }
-    vec!["--target-dir".into(), root.into()]
 }
