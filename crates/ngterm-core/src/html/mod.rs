@@ -647,6 +647,13 @@ impl HtmlOverlay {
         self.replica_of.is_none() && !self.row && !matches!(self.source, HtmlSource::Replica { .. })
     }
 
+    /// Whether a page session's snapshot writes this page as its own: a page this machine opened from a file or a web
+    /// address (upstream's `PageSnapshot(overlay:)`), never one another machine serves.
+    #[must_use]
+    pub fn saved_as_row(&self) -> bool {
+        self.replica_of.is_none() && matches!(self.source, HtmlSource::File { .. } | HtmlSource::Url(_))
+    }
+
     /// Whether ngterm themes the page: a file page, replica, Markdown, text or clicked HTML document (upstream's
     /// `themed`); a clicked HTML file takes a file page's theme, so it looks the same clicked or opened with `--html`.
     #[must_use]

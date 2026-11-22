@@ -1010,22 +1010,25 @@ impl AppStore {
     /// soft close parked can no longer be undone, having no parent to come back under.
     pub fn close_session(&mut self, id: Uuid) -> Option<Session> {
         let companions: Vec<Uuid> = self.companions(id).into_iter().map(Session::id).collect();
-        let mut closed: Vec<Session> = companions
-            .iter()
-            .rev()
-            .filter_map(|companion| self.close_one_session(*companion, None))
-            .collect();
-        closed.reverse();
-        let removed = self.close_one_session(id, Some(&closed));
+        // written before they close, since closing a page companion drops its page
+        let recorded = super::recent_closed::recorded_companions(&self.companions(id));
+        for companion in companions.iter().rev() {
+            self.close_one_session(*companion, None);
+        }
+        let removed = self.close_one_session(id, Some(recorded));
         // a converted companion can still own a companion parked under it before the conversion
         let parents: Vec<Uuid> = std::iter::once(id).chain(companions).collect();
         self.finalize_parked_companions(&parents);
         removed
     }
 
-    /// One session's hard close: with `recorded`, its Open Recent entry holding those companions; `None` records
+    /// One session's hard close: with `recorded`, its Open Recent entry holding those written companions; `None` records
     /// nothing (a companion riding its parent's entry).
-    fn close_one_session(&mut self, id: Uuid, recorded: Option<&[Session]>) -> Option<Session> {
+    fn close_one_session(
+        &mut self,
+        id: Uuid,
+        recorded: Option<Vec<crate::persist::SessionSnapshot>>,
+    ) -> Option<Session> {
         let at = self.location(id)?;
         self.release_leaving_session(id);
         let was_active = self.selected_session_id == Some(id);
@@ -1040,8 +1043,7 @@ impl AppStore {
             session_index: at.session,
         };
         if let Some(companions) = recorded {
-            let companions: Vec<&Session> = companions.iter().collect();
-            self.record_recent_closed_session(&removed, &companions, &place, Uuid::new_v4());
+            self.record_recent_closed_group(&removed, companions, &place, Uuid::new_v4());
         }
         removed.teardown_surfaces();
         // the session is gone, and its rendered text and live-session daemons with it

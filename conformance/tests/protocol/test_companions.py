@@ -358,7 +358,7 @@ def test_a_page_companion_refuses_terminal_commands(ctl):
         ("session.overlay.open", {"command": "top"}),
         ("session.overlay.resize", {"sizePercent": 50}),
     ):
-        assert_error(ctl.request(cmd, page, **args), f"{cmd}: not available on a page companion")
+        assert_error(ctl.request(cmd, page, **args), f"{cmd}: not available on a page session")
     # the parent takes them as before, and the page row is renamed like any row
     assert_ok(ctl.request("session.type", parent, text="true\n"))
     assert_ok(ctl.request("session.rename", page, name="notes"))
@@ -378,11 +378,11 @@ def test_closing_the_page_closes_its_row(ctl):
     assert session_ids(ctl.tree(), wid) == [parent]
     outcome = assert_ok(ctl.request("session.overlay.result", page=page_id))["pageOutcome"]
     assert outcome == {"pageID": page_id, "outcome": "dismissed"}
-    # closing the parent takes a page companion along, and Open Recent keeps no page
+    # closing the parent takes a page companion along, and Open Recent keeps the group whole (#930)
     page, _, _ = _page_companion(ctl, parent)
     assert assert_ok(ctl.request("session.close", parent))["closed"] == [parent, page]
     entry = assert_ok(ctl.request("recent.list"))["recent"][0]
-    assert entry["sessionIDs"] == [parent]
+    assert entry["sessionIDs"] == [parent, page]
     assert_ok(ctl.request("workspace.delete", wid))
 
 
@@ -394,7 +394,7 @@ def test_closing_the_page_closes_its_row(ctl):
 )
 def test_page_attach_hands_out_a_claim_only_for_a_page_companion(ctl):
     wid, (parent,) = _workspace(ctl)
-    assert_error(ctl.request("session.companion.page.attach", parent), "not a page companion")
+    assert_error(ctl.request("session.companion.page.attach", parent), "not a page session")
     page, page_id, path = _page_companion(ctl, parent)
     attached = assert_ok(ctl.request("session.companion.page.attach", page))
     assert (attached["id"], attached["parent"]) == (page, parent)
@@ -600,7 +600,7 @@ def test_duplicate_as_companion_refusals(ctl, adapter):
     before = session_ids(ctl.tree(), wid)
 
     for target, error in (
-        (page, "a page companion has no terminal to duplicate"),
+        (page, "a page session has no terminal to duplicate"),
         (covered, "a program overlay covers the session; nothing was created"),
         (pane_covered, "left pane is covered by a program overlay; nothing was created"),
         (UNKNOWN, f"no such session: {UNKNOWN}"),

@@ -43,7 +43,7 @@ use ngterm_host::{ProcessTable, Surface};
 use crate::command_restore::{
     PaneForeground, ProcessGroupMember, group_descent_candidates, is_command_wrapper, pane_foreground,
 };
-use crate::model::Session;
+use crate::model::{Session, SessionContent};
 
 /// A live pane's foreground group by its pane token.
 pub type LiveGroup<'a> = &'a dyn Fn(&str) -> Option<i32>;
@@ -199,7 +199,8 @@ pub fn capture_foreground_commands<'s>(
     time_remaining: &dyn Fn() -> bool,
 ) -> usize {
     let mut captured = 0;
-    for session in sessions.into_iter().filter(|session| session.is_persistable()) {
+    let terminal = |session: &&mut Session| session.is_persistable() && session.content() == SessionContent::Terminal;
+    for session in sessions.into_iter().filter(terminal) {
         let (pending, pending_split) = match kind {
             CaptureKind::Exit => (
                 session.restore.pending_foreground.clone(),

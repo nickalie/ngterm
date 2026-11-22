@@ -316,6 +316,19 @@ pub struct SessionSnapshot {
     /// session-wide first, then left and right; absent while none is. An entry that does not decode drops alone.
     #[serde(default, deserialize_with = "lossy_entries", skip_serializing_if = "Option::is_none")]
     pub pages: Option<Vec<PageSnapshot>>,
+    /// What the session shows; absent for a terminal, so a snapshot written before page sessions restores unchanged.
+    /// A page session writes its page as its session-wide entry of [`Self::pages`] and no pane identity, since it owns
+    /// no pane; an unknown value reads as a terminal.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub content: Option<SessionContentSnapshot>,
+}
+
+/// A persisted session's content beside a terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionContentSnapshot {
+    /// A page session: an HTML page with no shell under it.
+    Page,
 }
 
 /// The overlay slot a persisted page held.

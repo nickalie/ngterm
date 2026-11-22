@@ -1830,7 +1830,7 @@ def test_page_attach_hands_out_one_attachment_of_a_page_companion(cli, ctl):
     handed = attached["companionPage"]
     assert_subset(handed, {"identity": page_file.name, "source": {"file": {"path": str(page_file)}}})
     assert handed["token"]
-    _refused(cli("session", "overlay", "page-attach", "--target", parent), "not a page companion")
+    _refused(cli("session", "overlay", "page-attach", "--target", parent), "not a page session")
     assert_ok(ctl.request("session.close", parent))
 
 

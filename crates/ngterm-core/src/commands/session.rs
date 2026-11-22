@@ -75,6 +75,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::Restore => super::restore::dispatch(core, request),
         SessionCmd::CompanionNew
         | SessionCmd::CompanionPage
+        | SessionCmd::Page
         | SessionCmd::CompanionDuplicate
         | SessionCmd::CompanionConvert
         | SessionCmd::CompanionPageAttach

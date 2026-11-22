@@ -28,7 +28,7 @@ use super::store::{AppStore, NewSession};
 use super::tint::SidebarTint;
 use crate::html::HtmlOverlay;
 
-/// What a session shows: a terminal, or an HTML page with no shell under it (a page companion).
+/// What a session shows: a terminal, or an HTML page with no shell under it (a page session, top-level or a companion).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum SessionContent {
     #[default]
@@ -155,6 +155,14 @@ pub(super) struct CompanionSlot {
     pub(super) index: usize,
     pub(super) parent: Uuid,
     pub(super) cwd: String,
+}
+
+/// Where a page session goes: its workspace and index, its parent for a page companion, and its cwd.
+struct RowSlot {
+    workspace: Uuid,
+    index: usize,
+    parent: Option<Uuid>,
+    cwd: String,
 }
 
 impl AppStore {
@@ -300,22 +308,69 @@ impl AppStore {
         home: &str,
     ) -> Result<Uuid, CompanionRefusal> {
         let slot = self.companion_slot(target, None, home)?;
+        let row = RowSlot {
+            workspace: slot.workspace,
+            index: slot.index,
+            parent: Some(slot.parent),
+            cwd: slot.cwd,
+        };
+        self.add_page(row, overlay, page)
+    }
+
+    /// Creates a top-level page session showing `overlay`, right after the whole group of `anchor` in its workspace,
+    /// in the anchor's local focused cwd (upstream's `addPageSession`). A remote anchor only places it: the page is
+    /// always this machine's own. A page the slot refuses leaves no row behind. The caller registers the page's
+    /// outcome.
+    ///
+    /// # Errors
+    ///
+    /// [`CompanionRefusal::NoSuchSession`] for an unknown anchor, [`CompanionRefusal::PageNotOpened`] when the page
+    /// could not open.
+    pub fn add_page_session(
+        &mut self,
+        anchor: Uuid,
+        overlay: HtmlOverlay,
+        page: PageCompanionOptions,
+        home: &str,
+    ) -> Result<Uuid, CompanionRefusal> {
+        let anchor = self.session(anchor).ok_or(CompanionRefusal::NoSuchSession)?;
+        let root = self.parent_of(anchor).unwrap_or(anchor);
+        let at = self.location(root.id()).ok_or(CompanionRefusal::NoSuchSession)?;
+        let cwd = anchor.local_working_directory(anchor.focused_cwd(), home);
+        let workspace = &self.workspaces[at.workspace];
+        let row = RowSlot {
+            workspace: workspace.id(),
+            index: group_end(at.session, &workspace.sessions),
+            parent: None,
+            cwd,
+        };
+        self.add_page(row, overlay, page)
+    }
+
+    fn add_page(
+        &mut self,
+        row: RowSlot,
+        overlay: HtmlOverlay,
+        page: PageCompanionOptions,
+    ) -> Result<Uuid, CompanionRefusal> {
         let spec = NewSession {
             name: page.name,
-            at: Some(slot.index),
+            at: Some(row.index),
             select: page.select,
-            parent: Some(slot.parent),
+            parent: row.parent,
             content: SessionContent::Page,
-            ..NewSession::at_cwd(slot.cwd)
+            ..NewSession::at_cwd(row.cwd)
         };
         let id = self
-            .add_session(slot.workspace, spec)
+            .add_session(row.workspace, spec)
             .ok_or(CompanionRefusal::NoSuchSession)?;
         let overlay = HtmlOverlay { row: true, ..overlay };
         if let Err(failure) = self.open_html_overlay(id, None, overlay, None, page.background_color) {
             self.close_session(id);
             return Err(CompanionRefusal::PageNotOpened(failure));
         }
+        // the row was saved before its page opened, when it had nothing to write
+        self.save();
         Ok(id)
     }
 

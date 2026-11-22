@@ -72,7 +72,7 @@ impl Core {
             return Err("companions of a remote session are not supported yet".to_owned());
         }
         if session.content() == SessionContent::Page {
-            return Err("a page companion has no terminal to duplicate".to_owned());
+            return Err("a page session has no terminal to duplicate".to_owned());
         }
         // a visible program over the panes is what the user sees running; copying the covered shell instead is wrong
         if session.program_overlay_visible() {

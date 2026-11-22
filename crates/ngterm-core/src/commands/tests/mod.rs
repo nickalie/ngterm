@@ -39,6 +39,7 @@ mod overlay_points;
 mod overlay_visibility;
 mod page_restore;
 mod page_serve;
+mod page_sessions;
 mod palette;
 mod palette_editors;
 mod pane_focus;

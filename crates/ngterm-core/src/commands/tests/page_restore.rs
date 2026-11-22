@@ -29,7 +29,7 @@ impl HtmlHost for Host {
 }
 
 /// A launch over the state in `dir`, with web views; its first open window and that window's first session.
-fn launch(dir: &Path) -> (Core, Uuid, Uuid) {
+pub(super) fn launch(dir: &Path) -> (Core, Uuid, Uuid) {
     let mut persistence = LibraryPersistence::new(dir);
     let library = persistence.bootstrap("/home/u");
     let mut core = Core::new(
@@ -69,7 +69,7 @@ fn open_file_page(core: &mut Core, session: Uuid, file: &Path) -> Uuid {
     Uuid::parse_str(&id).expect("a page id")
 }
 
-fn outcome(core: &mut Core, page: Uuid) -> Response {
+pub(super) fn outcome(core: &mut Core, page: Uuid) -> Response {
     send(
         core,
         Command::Session(SessionCmd::OverlayResult),
@@ -79,7 +79,7 @@ fn outcome(core: &mut Core, page: Uuid) -> Response {
 }
 
 /// The `htmlOverlays` the tree reads back for `session`.
-fn html_overlays(core: &mut Core, session: Uuid) -> Value {
+pub(super) fn html_overlays(core: &mut Core, session: Uuid) -> Value {
     let tree = send(core, Command::Tree, None, Args::default()).result.expect("a tree")["tree"].clone();
     tree["workspaces"]
         .as_array()

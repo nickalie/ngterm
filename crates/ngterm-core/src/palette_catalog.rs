@@ -934,6 +934,10 @@ mod tests {
         }
         assert!(PaletteCommand::RenameSession.is_enabled(&page));
         assert!(PaletteCommand::CloseSession.is_enabled(&page));
+        // a top-level page session converts as the sidebar offers it, and has no terminal to duplicate (#930)
+        assert!(PaletteCommand::ConvertCompanion.is_enabled(&page));
+        assert!(PaletteCommand::NewCompanion.is_enabled(&page));
+        assert!(!PaletteCommand::DuplicateCompanion.is_enabled(&page));
         let terminal = ctx(F::ACTIVE_SESSION_HAS_SPLIT | F::HAS_ACTIVE_SESSION);
         assert!(PaletteCommand::ToggleSplit.is_enabled(&terminal));
     }

@@ -26,7 +26,7 @@ use crate::model::SessionContent;
 use crate::pane_env::uuid_string;
 
 /// Upstream's refusal of an attach of anything but a page companion.
-const NOT_A_PAGE_COMPANION: &str = "not a page companion";
+const NOT_A_PAGE_SESSION: &str = "not a page session";
 /// Upstream's refusal of a page on this machine's loopback, which the other machine would never reach.
 const LOOPBACK_PAGE: &str = "a page on this Mac's loopback cannot be shown on another Mac";
 /// Upstream's refusal of a page companion the other machine would build from fetched bytes.
@@ -84,9 +84,9 @@ impl Core {
             .filter(|row| row.content() == SessionContent::Page);
         let (overlay, background) = found
             .and_then(|row| Some((row.overlay.page()?.clone(), row.overlay.background_color.clone())))
-            .ok_or(NOT_A_PAGE_COMPANION)?;
+            .ok_or(NOT_A_PAGE_SESSION)?;
         // an image travels only with its probed size, which a page companion never has
-        let source = presentation_source(&overlay.source, None).ok_or(NOT_A_PAGE_COMPANION)?;
+        let source = presentation_source(&overlay.source, None).ok_or(NOT_A_PAGE_SESSION)?;
         if source.is_content() {
             return Err(CONTENT_PAGE);
         }

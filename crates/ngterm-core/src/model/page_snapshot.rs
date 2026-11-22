@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
+use super::companions::SessionContent;
 use super::overlay::OverlayPane;
 use super::overlay_points::{OverlayPointSize, OverlaySize};
 use super::remote_overlay::{RemoteOverlaySlot, RemotePage};
@@ -43,13 +44,19 @@ pub(super) fn persisted_pages(session: &Session) -> Vec<(Uuid, PageSnapshot)> {
     let local = session
         .html_overlays()
         .into_iter()
-        .filter(|(_, page)| page.persisted())
+        .filter(|(pane, page)| page.persisted() || row_page(session, *pane, page))
         .filter_map(|(pane, page)| Some((page.id, page_snapshot(session, pane, page)?)));
     let viewer = session.remote_overlays.slots().iter().filter_map(|slot| {
         let page = slot.page.as_ref()?;
         Some((page.overlay.id, viewer_page_snapshot(slot, page)?))
     });
     local.chain(viewer).collect()
+}
+
+/// Whether `page` in slot `pane` is a local page session's own page, which its snapshot writes as its session-wide
+/// entry.
+fn row_page(session: &Session, pane: Option<OverlayPane>, shown: &HtmlOverlay) -> bool {
+    pane.is_none() && shown.row && session.content() == SessionContent::Page && session.is_persistable()
 }
 
 /// What a page's source is written as, a log page's request with it; a replica is never written.
@@ -370,18 +377,10 @@ fn restored_page(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str) 
 fn restored_source(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str) -> Option<HtmlSource> {
     let document = flags == HtmlPageFlags::default();
     match source {
-        PageSourceSnapshot::File { path, grant_root } => {
-            let fits = !flags.persistent && !flags.browse && (!flags.chromeless || !flags.navigation);
-            let granted = html::grant_error(path, grant_root.as_deref(), home).is_none();
-            (fits && granted && Path::new(path).is_file()).then(|| HtmlSource::File {
-                path: path.clone(),
-                grant_root: grant_root.clone(),
-            })
+        PageSourceSnapshot::File { path, .. } => {
+            web_page_source(source, flags, home).filter(|_| Path::new(path).is_file())
         }
-        PageSourceSnapshot::Url { url } => {
-            let fits = !flags.chromeless || (html::is_loopback(url) && !flags.navigation && !flags.browse);
-            html::web_url(url).filter(|_| fits).map(HtmlSource::Url)
-        }
+        PageSourceSnapshot::Url { .. } => web_page_source(source, flags, home),
         PageSourceSnapshot::Image { path } => {
             (document && shown_document(path, &IMAGE_EXTENSIONS)).then(|| HtmlSource::Image { path: path.clone() })
         }
@@ -406,6 +405,57 @@ fn restored_source(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str
         PageSourceSnapshot::Document { path } => (document && shown_document(path, &html::document_page::EXTENSIONS))
             .then(|| HtmlSource::Document { path: path.clone() }),
     }
+}
+
+/// The file or web page a persisted entry names, when it checks out with `flags` as `session.overlay.open` would check
+/// it now (its file need not exist); `None` for any other source.
+fn web_page_source(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str) -> Option<HtmlSource> {
+    match source {
+        PageSourceSnapshot::File { path, grant_root } => {
+            let fits = !flags.persistent && !flags.browse && (!flags.chromeless || !flags.navigation);
+            let granted = html::grant_error(path, grant_root.as_deref(), home).is_none();
+            (fits && granted).then(|| HtmlSource::File {
+                path: path.clone(),
+                grant_root: grant_root.clone(),
+            })
+        }
+        PageSourceSnapshot::Url { url } => {
+            let fits = !flags.chromeless || (html::is_loopback(url) && !flags.navigation && !flags.browse);
+            html::web_url(url).filter(|_| fits).map(HtmlSource::Url)
+        }
+        _ => None,
+    }
+}
+
+/// What a page session shows when its saved page names no file or web page this build can open (upstream's
+/// `PageSnapshot.unreadableReason`).
+pub const UNREADABLE_PAGE: &str = "the saved page names no file or http(s) URL this version can open";
+
+/// Opens a restored page session's own page, its session-wide entry of `pages`, as its row page under a fresh id (upstream's
+/// `openRestoredPages`). Nothing checks that its file is there: a missing file or a failed load leaves the page failed,
+/// with its reload. An entry that is absent, names another kind of page or no longer checks out leaves the session
+/// [`Session::unreadable_page`], never a terminal. `home` is what a file page's grant is checked against.
+pub(super) fn restore_row_page(session: &mut Session, pages: &[PageSnapshot], home: &str) {
+    let entry = pages
+        .iter()
+        .find(|page| page.slot == PageSlotSnapshot::Session && !page.viewer);
+    let restored = entry.and_then(|entry| {
+        let flags = HtmlPageFlags {
+            navigation: entry.navigation,
+            javascript: entry.javascript,
+            chromeless: entry.chromeless,
+            persistent: entry.persistent,
+            browse: entry.browse,
+        };
+        web_page_source(&entry.source, flags, home).map(|source| (entry, HtmlOverlay::new(source, flags)))
+    });
+    let Some((entry, overlay)) = restored else {
+        session.unreadable_page = Some(UNREADABLE_PAGE.to_owned());
+        return;
+    };
+    let background_color = entry.background_color.clone().filter(|color| is_valid_color_hex(color));
+    let overlay = HtmlOverlay { row: true, ..overlay };
+    session.install_html_overlay(None, overlay, OverlaySize::default(), background_color);
 }
 
 /// Whether `path` is an absolute, existing file of a kind in `extensions`, as the image and Markdown pages show.

@@ -11,14 +11,15 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use super::background::PaneBackgrounds;
+use super::companions::SessionContent;
 use super::companions::regrouped_companions;
-use super::page_snapshot::{restore_pages, session_pages};
+use super::page_snapshot::{restore_pages, restore_row_page, session_pages};
 use super::pane::{SplitAxis, clamp_split_ratio};
 use super::recency::{RECENCY_LIMIT, RecencyStack};
 use super::session::{Session, SessionSeed};
 use super::store::{AppStore, SIDEBAR_WIDTH_DEFAULT, clamp_sidebar_width};
 use super::workspace::{SidebarMode, Workspace};
-use crate::persist::{SessionSnapshot, Snapshot, WorkspaceSnapshot};
+use crate::persist::{SessionContentSnapshot, SessionSnapshot, Snapshot, WorkspaceSnapshot};
 
 impl AppStore {
     /// The window's tree as persisted: remote sessions are left out of the tree and listed apart for the next launch
@@ -203,6 +204,9 @@ pub fn workspace_snapshot(workspace: &Workspace) -> WorkspaceSnapshot {
 /// split fields only while a split exists, the hold flags only when set.
 #[must_use]
 pub fn session_snapshot(session: &Session) -> SessionSnapshot {
+    if session.content() == SessionContent::Page {
+        return page_session_snapshot(session);
+    }
     let exists = session.split.exists;
     SessionSnapshot {
         id: session.id(),
@@ -237,7 +241,46 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         parent_id: session.parent_id(),
         collapsed: (!session.companion.expanded).then_some(true),
         pages: session_pages(session),
+        content: None,
     }
+}
+
+/// A page session as persisted (upstream's page branch of `sessionSnapshot`): its row fields and its page, and no pane
+/// identity a daemon claim could read, as a page owns no pane.
+fn page_session_snapshot(session: &Session) -> SessionSnapshot {
+    SessionSnapshot {
+        custom_name: session.custom_name.clone(),
+        flagged: Some(session.flagged),
+        context: session.context.clone(),
+        last_selected_at: session.last_selected_at.map(crate::projection::epoch_seconds),
+        tint: session.tint,
+        parent_id: session.parent_id(),
+        collapsed: (!session.companion.expanded).then_some(true),
+        pages: session_pages(session),
+        content: Some(SessionContentSnapshot::Page),
+        ..SessionSnapshot::new(session.id(), session.effective_cwd())
+    }
+}
+
+/// Rebuilds a page session in any restore mode (upstream's `pageSession(from:)`): its row fields, then its page
+/// ([`restore_row_page`]).
+fn page_session_from_snapshot(snapshot: &SessionSnapshot, home: &str) -> Session {
+    let mut session = Session::new(SessionSeed {
+        id: Some(snapshot.id),
+        initial_cwd: snapshot.cwd.clone(),
+        custom_name: snapshot.custom_name.clone(),
+        parent_id: snapshot.parent_id,
+        content: SessionContent::Page,
+        ..SessionSeed::default()
+    });
+    session.companion.expanded = !snapshot.collapsed.unwrap_or(false);
+    session.flagged = snapshot.flagged.unwrap_or(false);
+    session.context.clone_from(&snapshot.context);
+    session.tint = snapshot.tint;
+    session.last_selected_at = snapshot.last_selected_at.and_then(crate::projection::system_time);
+    session.was_restored = true;
+    restore_row_page(&mut session, snapshot.pages.as_deref().unwrap_or_default(), home);
+    session
 }
 
 /// A pane's persisted copied argv, kept only beside the creation command it stands for and never empty: a stray or
@@ -250,9 +293,12 @@ fn copied_argv(command: Option<&String>, argv: Option<&Vec<String>>) -> Option<V
 /// session. A hidden split keeps its identity and restore state, so showing it reattaches the surviving
 /// daemon; focus is not persisted and returns to the primary pane. Missing pane identities (a legacy snapshot) are
 /// minted. Its pages open again in their slots under fresh ids, the entries that no longer check out dropped (a file
-/// page's grant checked against `home`).
+/// page's grant checked against `home`). A page session comes back as one in every restore mode.
 #[must_use]
 pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool, home: &str) -> Session {
+    if snapshot.content == Some(SessionContentSnapshot::Page) {
+        return page_session_from_snapshot(snapshot, home);
+    }
     let has_split = snapshot.has_any_split();
     let mut session = Session::new(SessionSeed {
         id: Some(snapshot.id),

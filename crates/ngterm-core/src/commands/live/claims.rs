@@ -154,7 +154,8 @@ fn claim_live(site: &Site<'_>, session: &Session, walk: &mut ClaimWalk) {
 /// primary identity can still own a good split.
 fn claim_snapshot(origin: &Origin, snapshot: &Snapshot, walk: &mut ClaimWalk) {
     for workspace in &snapshot.workspaces {
-        for session in &workspace.sessions {
+        // a page session owns no pane, so it claims no daemon
+        for session in workspace.sessions.iter().filter(|session| session.content.is_none()) {
             let site = Site {
                 origin,
                 workspace_id: workspace.id,
@@ -307,6 +308,32 @@ mod tests {
         assert_eq!(
             walk.claims.iter().map(|claim| claim.pane_identity).collect::<Vec<_>>(),
             [primary, split]
+        );
+    }
+
+    /// Upstream's `persistedClaims` skipping a page row: a page owns no daemon, so its missing identity leaves the
+    /// walk complete and claims nothing.
+    #[test]
+    fn a_closed_windows_page_session_claims_nothing_and_keeps_the_walk_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut core = core(dir.path());
+        let id = core.library_mut().new_window(Some("closed"));
+        core.library_mut().close_window(id);
+        let persistence = core.persistence.as_ref().unwrap();
+        std::fs::create_dir_all(persistence.directory().join("windows")).unwrap();
+        let primary = uuid::Uuid::new_v4();
+        let mut saved = snapshot(Some(primary), None, false);
+        saved.workspaces[0].sessions[0].has_split = None;
+        saved.workspaces[0].sessions.push(crate::persist::SessionSnapshot {
+            content: Some(crate::persist::SessionContentSnapshot::Page),
+            ..crate::persist::SessionSnapshot::new(uuid::Uuid::new_v4(), "/srv")
+        });
+        std::fs::write(persistence.window_path(id), serde_json::to_vec(&saved).unwrap()).unwrap();
+        let walk = core.pane_claims();
+        assert!(walk.complete);
+        assert_eq!(
+            walk.claims.iter().map(|claim| claim.pane_identity).collect::<Vec<_>>(),
+            [primary]
         );
     }
 

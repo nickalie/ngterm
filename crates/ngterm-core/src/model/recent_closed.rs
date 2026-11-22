@@ -138,14 +138,21 @@ impl AppStore {
         place: &ClosedSessionPlace<'_>,
         id: Uuid,
     ) {
+        self.record_recent_closed_group(session, recorded_companions(companions), place, id);
+    }
+
+    /// [`AppStore::record_recent_closed_session`] with its companions already written, as a hard close writes them
+    /// before closing them (closing a page companion drops its page).
+    pub(crate) fn record_recent_closed_group(
+        &mut self,
+        session: &Session,
+        companions: Vec<SessionSnapshot>,
+        place: &ClosedSessionPlace<'_>,
+        id: Uuid,
+    ) {
         if !session.is_persistable() {
             return;
         }
-        let companions: Vec<SessionSnapshot> = companions
-            .iter()
-            .filter(|companion| companion.is_persistable())
-            .map(|companion| session_snapshot(companion))
-            .collect();
         self.record_recent_closed(RecentClosedItem {
             id,
             kind: RecentClosedKind::Session,
@@ -437,4 +444,13 @@ impl AppStore {
         taken.extend(occupied_elsewhere.iter().copied());
         taken
     }
+}
+
+/// What an Open Recent entry writes for the `companions` closing with their parent: the persistable ones.
+pub(crate) fn recorded_companions(companions: &[&Session]) -> Vec<SessionSnapshot> {
+    companions
+        .iter()
+        .filter(|companion| companion.is_persistable())
+        .map(|companion| session_snapshot(companion))
+        .collect()
 }

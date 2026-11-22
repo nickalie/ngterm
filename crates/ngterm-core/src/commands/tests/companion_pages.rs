@@ -493,10 +493,7 @@ fn a_page_companion_refuses_terminal_commands_and_keeps_ordinary_ones() {
         request(Command::Agent(AgentCmd::Get), Some(&id), |_| {}),
     ] {
         let error = refusal(&fixture.core, &refused).map(|error| Response::from(error).error.unwrap_or_default());
-        assert_eq!(
-            error,
-            Some(format!("{}: not available on a page companion", refused.cmd))
-        );
+        assert_eq!(error, Some(format!("{}: not available on a page session", refused.cmd)));
         // the socket meets the same refusal before the command runs
         assert_eq!(fixture.core.dispatch(&refused).error, error);
     }
@@ -583,7 +580,7 @@ fn only_a_page_companion_is_handed_out_and_a_loopback_page_is_not() {
     let docs = Docs::new();
     let (mut fixture, parent, page) = served(&docs);
     let response = fixture.session(SessionCmd::CompanionPageAttach, Some(&wire(parent)), Args::default());
-    assert_eq!(response, failure("not a page companion"));
+    assert_eq!(response, failure("not a page session"));
 
     let reply = fixture.session(SessionCmd::CompanionPageAttach, Some(&wire(page)), Args::default());
     assert_eq!(result_field(&reply, "id"), json!(wire(page)));
@@ -630,7 +627,7 @@ fn a_content_page_companion_is_not_handed_out() {
             HtmlSource::Document { path: path.clone() },
             "a markdown, text or document page companion cannot be shown on another Mac",
         ),
-        (HtmlSource::Image { path: path.clone() }, "not a page companion"),
+        (HtmlSource::Image { path: path.clone() }, "not a page session"),
     ] {
         let row = fixture.store_mut().unwrap().session_mut(page).unwrap();
         row.overlay.html.as_mut().unwrap().source = source;

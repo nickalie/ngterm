@@ -35,6 +35,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::Collapse => set_expanded(core, target, args, false),
         SessionCmd::Expand => set_expanded(core, target, args, true),
         SessionCmd::CompanionPage => super::companion_page::page(core, target, args),
+        SessionCmd::Page => super::companion_page::page_session(core, target, args),
         SessionCmd::CompanionPageAttach => super::companion_page::attach(core, target, args.window.as_deref()),
         SessionCmd::CompanionDuplicate => super::companion_duplicate::duplicate(core, request),
         SessionCmd::CompanionConvert => convert(core, target, args),

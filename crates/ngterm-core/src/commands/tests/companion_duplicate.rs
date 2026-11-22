@@ -152,7 +152,7 @@ fn a_page_or_unrealized_source_is_refused_and_nothing_is_created() {
         .unwrap();
     let before = ids(&fixture);
     for (id, error) in [
-        (page, "a page companion has no terminal to duplicate"),
+        (page, "a page session has no terminal to duplicate"),
         (parent, "left pane is not realized; nothing was created"),
     ] {
         assert_eq!(duplicate(&mut fixture, id, Args::default()), failure(error));

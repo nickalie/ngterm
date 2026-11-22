@@ -982,7 +982,6 @@ mod tests {
     #[test]
     fn registered_v042_commands_refuse_until_their_feature_handlers_land() {
         for name in [
-            "session.page",
             "window.remote.open",
             "window.remote.dismiss",
             "session.detach",
