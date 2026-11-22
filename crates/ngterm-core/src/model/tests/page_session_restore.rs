@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use super::overlay_visibility::page;
 use super::support::{add, ids};
-use crate::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
+use crate::html::{HtmlOverlay, HtmlPageFlags, HtmlSource, os_path};
 use crate::model::page_snapshot::UNREADABLE_PAGE;
 use crate::model::snapshot::session_from_snapshot;
 use crate::model::{AppStore, CompanionOptions, PageCompanionOptions, SessionContent};
@@ -89,7 +89,7 @@ fn a_page_group_comes_back_whole_in_every_restore_mode() {
     let mut store = AppStore::new();
     let work = store.add_workspace("work");
     let anchor = add(&mut store, work, "/anchor");
-    let root = page_session(&mut store, anchor, page("/tmp/root.html"));
+    let root = page_session(&mut store, anchor, page(&os_path("/tmp/root.html")));
     let terminal = store
         .add_companion(
             root,
@@ -101,7 +101,12 @@ fn a_page_group_comes_back_whole_in_every_restore_mode() {
         )
         .unwrap();
     let nested = store
-        .add_page_companion(root, page("/tmp/n.html"), PageCompanionOptions::default(), HOME)
+        .add_page_companion(
+            root,
+            page(&os_path("/tmp/n.html")),
+            PageCompanionOptions::default(),
+            HOME,
+        )
         .unwrap();
     store.set_session_expanded(root, false);
     store.session_mut(root).unwrap().flagged = true;
@@ -132,7 +137,7 @@ fn assert_restored_root(back: &AppStore, root: Uuid, before: Uuid) {
     let shown = row.overlay.page().expect("its page opens again");
     assert!(shown.row, "the page is its row again");
     assert_ne!(shown.id, before, "under a fresh id");
-    assert!(matches!(&shown.source, HtmlSource::File { path, .. } if path == "/tmp/root.html"));
+    assert!(matches!(&shown.source, HtmlSource::File { path, .. } if *path == os_path("/tmp/root.html")));
     assert_eq!(row.overlay.background_color.as_deref(), Some("#112233"));
     assert_eq!(row.unreadable_page, None);
 }

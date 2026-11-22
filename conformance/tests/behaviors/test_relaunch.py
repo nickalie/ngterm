@@ -193,7 +193,9 @@ def test_flagged_order_survives_relaunch(launch):
 
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("behavior:restore.relaunch-keeps-layout", "session.companion.page")
-def test_a_page_companion_is_not_restored_after_relaunch(launch):
+def test_a_page_group_comes_back_after_relaunch(launch):
+    """A page session and its companions are saved like any session (#930): the page row comes back as a page, its
+    page open again, and its companions stay under it."""
     ctl = launch()
     parent = _new(ctl)
     page_file = ctl.instance.root / "companion.html"
@@ -206,8 +208,10 @@ def test_a_page_companion_is_not_restored_after_relaunch(launch):
 
     ctl = launch.relaunch(ctl)
     tree = ctl.wait_tree(lambda tree: find_session(tree, parent)["realized"] is True)
-    ids = [session["id"] for workspace in workspaces(tree) for session in workspace["sessions"]]
-    assert page not in ids
+    restored = find_session(tree, page)
+    assert restored["content"] == "page" and restored["parent"] == parent
+    (shown,) = restored["htmlOverlays"]
+    assert shown["file"] == str(page_file)
     assert find_session(tree, terminal)["parent"] == parent
 
 

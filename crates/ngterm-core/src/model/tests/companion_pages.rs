@@ -6,7 +6,7 @@ use uuid::Uuid;
 use super::overlay_visibility::{page, program};
 use super::support::{add, ids};
 use crate::dashboard::ResolvedDashboardTarget;
-use crate::html::{HtmlOverlay, HtmlSource};
+use crate::html::{HtmlOverlay, HtmlSource, os_path};
 use crate::model::{
     AppStore, AskAlignment, AskStyle, CompanionOptions, CompanionRefusal, ConvertRefusal, NewSession, OverlayPane,
     OverlayVisibilityMode, PageCompanionOptions, PendingAsk, Session, SessionContent,
@@ -262,7 +262,7 @@ fn top_level_page(store: &mut AppStore, work: Uuid) -> Uuid {
     let id = store.add_session(work, spec).unwrap();
     let overlay = HtmlOverlay {
         row: true,
-        ..page("/tmp/root.html")
+        ..page(&os_path("/tmp/root.html"))
     };
     assert!(store.open_html_overlay(id, None, overlay, None, None).is_ok());
     id
@@ -277,7 +277,12 @@ fn a_top_level_page_groups_terminal_and_page_companions() {
 
     let terminal = store.add_companion(root, CompanionOptions::default(), HOME).unwrap();
     let nested = store
-        .add_page_companion(root, page("/tmp/n.html"), PageCompanionOptions::default(), HOME)
+        .add_page_companion(
+            root,
+            page(&os_path("/tmp/n.html")),
+            PageCompanionOptions::default(),
+            HOME,
+        )
         .unwrap();
 
     assert_eq!(ids(&store, work), [root, terminal, nested, after]);
@@ -449,7 +454,12 @@ fn closing_a_page_root_closes_its_companions_into_one_recent_entry() {
     let after = add(&mut store, work, "/after");
     let terminal = store.add_companion(root, CompanionOptions::default(), HOME).unwrap();
     let nested = store
-        .add_page_companion(root, page("/tmp/n.html"), PageCompanionOptions::default(), HOME)
+        .add_page_companion(
+            root,
+            page(&os_path("/tmp/n.html")),
+            PageCompanionOptions::default(),
+            HOME,
+        )
         .unwrap();
 
     store.close_session(root);
@@ -458,7 +468,7 @@ fn closing_a_page_root_closes_its_companions_into_one_recent_entry() {
     assert!([root, terminal, nested].iter().all(|id| store.session(*id).is_none()));
     let item = store.recent_closed_items()[0].clone();
     let recent = item.session.as_ref().unwrap();
-    assert_eq!(saved_page(&recent.snapshot), file_entry("/tmp/root.html"));
+    assert_eq!(saved_page(&recent.snapshot), file_entry(&os_path("/tmp/root.html")));
     let companions: Vec<Uuid> = recent
         .companions
         .iter()
@@ -469,12 +479,12 @@ fn closing_a_page_root_closes_its_companions_into_one_recent_entry() {
 
     assert!(store.restore_recent_closed(&item));
     assert_eq!(ids(&store, work), [root, terminal, nested, after]);
-    for (id, path) in [(root, "/tmp/root.html"), (nested, "/tmp/n.html")] {
+    for (id, path) in [(root, os_path("/tmp/root.html")), (nested, os_path("/tmp/n.html"))] {
         let row = store.session(id).unwrap();
         assert_eq!(row.content(), SessionContent::Page);
         let shown = row.overlay.page().expect("its page opens again");
         assert!(shown.row);
-        assert!(matches!(&shown.source, HtmlSource::File { path: shown, .. } if shown == path));
+        assert!(matches!(&shown.source, HtmlSource::File { path: shown, .. } if *shown == path));
     }
     assert_eq!(store.session(nested).unwrap().parent_id(), Some(root));
     assert_eq!(store.session(terminal).unwrap().parent_id(), Some(root));
@@ -489,7 +499,12 @@ fn soft_closing_a_page_root_is_one_undo_for_the_whole_group() {
     let after = add(&mut store, work, "/after");
     let terminal = store.add_companion(root, CompanionOptions::default(), HOME).unwrap();
     let nested = store
-        .add_page_companion(root, page("/tmp/n.html"), PageCompanionOptions::default(), HOME)
+        .add_page_companion(
+            root,
+            page(&os_path("/tmp/n.html")),
+            PageCompanionOptions::default(),
+            HOME,
+        )
         .unwrap();
     let shown = store.session(root).unwrap().overlay.page().unwrap().id;
 
