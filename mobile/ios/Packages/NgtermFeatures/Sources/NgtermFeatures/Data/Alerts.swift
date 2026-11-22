@@ -40,7 +40,7 @@ public final class Alerts {
     // the kinds on as last seen
     private var kindsOn: Set<NoticeKind> = []
 
-    // what may be posted: nothing while the choices are only the defaults
+    // what may be posted: nothing while the stored choices can't be read yet
     private var enabled: Set<NoticeKind> {
         prefs.readIfUnread()
         return prefs.isRead ? prefs.prefs.enabled : []

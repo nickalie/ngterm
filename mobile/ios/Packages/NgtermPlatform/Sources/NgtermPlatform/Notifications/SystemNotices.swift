@@ -148,10 +148,11 @@ public final class SystemNotices: NoticeCenter {
         guard !kinds.isEmpty else {
             return
         }
-        // the step holds the notices only until it has run
+        // a notice posted again after this call keeps its new category
+        let known = categories
         enqueue { center in
             let ids = Self.ids(of: await center.deliveredNotifications().map(\.request), ofKinds: kinds)
-            self.forget(ids)
+            self.forget(ids, unlessChangedSince: known)
             Self.remove(ids, from: center, keeping: Set(self.categories.values))
         }
     }
@@ -184,6 +185,16 @@ public final class SystemNotices: NoticeCenter {
     private func forget(_ ids: [String]) {
         for id in ids {
             categories[Self.category(of: id)] = nil
+        }
+    }
+
+    // drops the categories of the notices `ids` that are still the ones in `known`
+    private func forget(_ ids: [String], unlessChangedSince known: [String: UNNotificationCategory]) {
+        for id in ids {
+            let key = Self.category(of: id)
+            if let current = categories[key], current === known[key] {
+                categories[key] = nil
+            }
         }
     }
 
