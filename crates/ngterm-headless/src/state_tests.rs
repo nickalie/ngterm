@@ -948,3 +948,25 @@ fn a_debounced_font_change_also_saves_the_latest_terminal_directory() {
     state.save_on_quit();
     main_loop.drain(&mut state);
 }
+
+/// An ask opened with `--timeout` ends cancelled once the loop runs its expiry past the deadline.
+#[test]
+fn a_timed_ask_is_cancelled_by_its_expiry_on_the_loop() {
+    use ngterm_proto::command::AskCmd;
+    let (mut state, main_loop, session) = fixture();
+    let opened = state.handle_request(&request(
+        Command::Ask(AskCmd::Open),
+        Some(session),
+        json!({"title": "t", "buttons": [{"id": "ok", "label": "OK"}], "timeout": 0.01}),
+    ));
+    assert!(opened.response.ok, "{opened:?}");
+    let id = opened.response.result.unwrap()["id"].as_str().unwrap().to_owned();
+    std::thread::sleep(Duration::from_millis(20));
+    main_loop.drain(&mut state);
+    let read = state.handle_request(&Request {
+        cmd: Command::Ask(AskCmd::Result),
+        target: Some(id),
+        args: None,
+    });
+    assert_eq!(read.response.result.unwrap()["ask"], json!({"result": "cancelled"}));
+}
