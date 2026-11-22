@@ -444,7 +444,7 @@ fn each_source_gets_the_web_view_its_page_needs(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_saved_page_loads_before_its_profile_is_kept_and_a_closed_one_keeps_nothing(cx: &mut TestAppContext) {
+fn a_saved_page_loads_before_its_profile_is_kept_and_a_closed_one_still_keeps_it(cx: &mut TestAppContext) {
     let engine = pumped(cx);
     let directory = TempDir::new().unwrap();
     state_dir_at(directory.path());
@@ -466,7 +466,11 @@ fn a_saved_page_loads_before_its_profile_is_kept_and_a_closed_one_keeps_nothing(
     cx.update(|cx| closed.close(cx));
     build(closed.id());
     assert_eq!(engine.made(), 2);
-    assert!(engine.probe(1).take().is_empty(), "a closed page's web view is buried");
+    assert_eq!(
+        engine.probe(1).take(),
+        [Call::KeepProfile],
+        "a page closed while its web view was made loads nothing but still keeps the profile"
+    );
 }
 
 #[gpui_kit::test]

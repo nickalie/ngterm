@@ -118,7 +118,7 @@ fn last_page_child() {
     let parent = host_window().unwrap();
     let reports = Rc::new(RefCell::new(Vec::new()));
     let first = spec(parent, dir.path(), &reports);
-    // The first private page makes the hidden anchor, which must leave keyboard focus with the parent.
+    // Keeping the first private page's profile makes the hidden anchor, which must leave keyboard focus with the parent.
     let focused = std::ptr::with_exposed_provenance_mut(parent.cast_unsigned());
     // SAFETY: this test's live parent window belongs to the current thread.
     unsafe { SetFocus(focused) };
@@ -126,6 +126,7 @@ fn last_page_child() {
     let before = unsafe { GetFocus() };
     assert_eq!(before, focused);
     let native = Native::create(&first).unwrap();
+    native.keep_profile();
     // SAFETY: reads only this thread's focus window after the hidden anchor is made.
     let after = unsafe { GetFocus() };
     assert_eq!(after, focused, "the hidden anchor took keyboard focus");
@@ -266,6 +267,7 @@ fn browser_child() {
     let reports = Rc::new(RefCell::new(Vec::new()));
     let spec = spec(parent, dir.path(), &reports);
     let native = Native::create(&spec).unwrap();
+    native.keep_profile();
     assert_eq!(
         renderer_answer(&native, "1"),
         Err("the renderer has not reported".into())
@@ -810,6 +812,7 @@ fn saved_profile_clear(parent: isize, environment: &ICoreWebView2Environment, di
     saved.scripts.clear();
     saved.block_network = false;
     let (native, made_environment) = super::super::native_view::create(&saved).unwrap();
+    native.keep_profile();
     assert_eq!(made_environment.as_ref(), Some(environment));
     saved
         .text
