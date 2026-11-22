@@ -233,9 +233,8 @@ class SelfUpdates(
         current.value = UpdateState.Available(offer, offer.version == skipped)
         if (announce && announces(offer.version)) {
             parts.notices.available(offer)
-            parts.prefs.announce(offer.version)
             // the switch may have gone off, and cleared, between the read and the post
-            if (!parts.prefs.notify.first()) parts.notices.clear()
+            if (parts.prefs.notify.first()) parts.prefs.announce(offer.version) else parts.notices.clear()
         }
         return true
     }

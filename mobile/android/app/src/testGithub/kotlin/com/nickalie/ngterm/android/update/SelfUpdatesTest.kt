@@ -120,6 +120,13 @@ class SelfUpdatesTest {
         assertTrue(runBlocking { updates.checkInBackground() })
         assertEquals(listOf("0.3.0"), rig.announced)
         assertFalse("the update notification is up with App updates off", rig.up)
+
+        // turned on again, the next automatic check posts the version that went down
+        updates.setNotify(true)
+        settle { runBlocking { updates.notify.first() } }
+        assertTrue(runBlocking { updates.checkInBackground() })
+        assertEquals(listOf("0.3.0", "0.3.0"), rig.announced)
+        assertTrue(rig.up)
     }
 
     @Test
