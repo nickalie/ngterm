@@ -5,7 +5,7 @@
 //! pane is told (also when another client takes the lead), the session's end and an attach that cannot start ending
 //! the pane, and, as reply owner, the server answering the program with the pane's theme, a clipboard read and a Kitty
 //! query answered through the pane. Each test runs under its own state directory, so its own namespace and server,
-//! reaped through that server alone.
+//! reaped through that server alone. A test of this crate alone builds the server first (`session_bin`).
 //!
 //! The session's shell is the OS's live shell with a stand-in integration that sets the prompt `live-ready$ `: bash
 //! on Linux; zsh on macOS, whose bash (3.2) never reads its integration and whose `/etc/profile` sets a prompt of its
@@ -15,11 +15,12 @@
 //! `NGTERM_TEST_LIVE_LAUNCHES` sets how many fresh live launches must all paint their prompt (default 50, 10 on
 //! Windows, whose PowerShell takes a second to start, then as many again in parallel).
 
+mod session_bin;
 #[expect(dead_code, reason = "the file helpers serve the other test files")]
 mod support;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,6 +33,7 @@ use ngterm_core::restore::spawn_plan::LaunchSeed;
 use ngterm_host::{KillOutcome, SessionHost};
 use ngterm_session::host::ServerHost;
 use ngterm_term::{ExitStatus, Frame, GridSize, Host, Launch, Pane, PaneConfig, PaneEvent, TextRegion};
+use session_bin::session_executable;
 use support::{SIZE, TestResult};
 use uuid::Uuid;
 
@@ -47,25 +49,6 @@ fn isolation() -> Vec<String> {
             name.starts_with("NGTERM_") || name.starts_with("AGTERM_")
         })
         .collect()
-}
-
-/// The cargo-built `ngterm-session` of this test's profile (`target/<profile>/`, above the test binary's `deps/`),
-/// which `cargo test` builds beside this one with the workspace, or with `-p ngterm-session`.
-fn session_executable() -> TestResult<PathBuf> {
-    let test = std::env::current_exe()?;
-    let executable = test
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("no target profile directory above the test binary")?
-        .join(ngterm_session::launch::EXECUTABLE_FILE);
-    if !executable.is_file() {
-        return Err(format!(
-            "no cargo-built {} (build it with `cargo build -p ngterm-session`, or test with the workspace)",
-            executable.display()
-        )
-        .into());
-    }
-    Ok(executable)
 }
 
 /// The OS's live shell, and its stand-in integration's file and contents under the resources directory.
