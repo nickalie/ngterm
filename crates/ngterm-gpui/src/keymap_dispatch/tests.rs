@@ -55,7 +55,8 @@ fn names(router: &Router) -> Vec<String> {
 }
 
 /// Shift+Cmd+= on a US layout spells `cmd+shift+=`, and fires the macOS `cmd++` default as `AppKit`'s key equivalent
-/// does; a chord bound as typed still wins, and a letter never falls back to its unshifted chord.
+/// does, also with the Command layer set as macOS sets it; a chord bound as typed still wins, and a digit, an Option
+/// chord or a key whose Command layer differs from its plain layer never falls back.
 #[test]
 fn a_shifted_symbol_press_fires_the_menu_chord_of_the_symbol() {
     use ngterm_core::keymap::{BuiltinAction, KeymapOs, ShippedDefaults};
@@ -84,6 +85,14 @@ fn a_shifted_symbol_press_fires_the_menu_chord_of_the_symbol() {
     assert_eq!(
         router.menu_entry(&plus, &input::chord(&plus).unwrap()),
         Some(BuiltinAction::IncreaseFontSize)
+    );
+    let mut native_plus = shifted("cmd-shift-=", "+");
+    native_plus.unshifted = Some('=');
+    native_plus.command = Some('=');
+    let mut router = load("");
+    assert_eq!(
+        router.press(&native_plus, now, false),
+        Press::Fired(Fired::Builtin(BuiltinAction::IncreaseFontSize))
     );
 
     let mut router = load("map cmd+shift+= toggle_sidebar\n");
