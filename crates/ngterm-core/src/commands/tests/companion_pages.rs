@@ -388,7 +388,14 @@ fn closing_the_page_closes_its_row_and_dismisses_the_page() {
 fn assert_soft_closed(fixture: &Fixture, id: Uuid, page: Uuid) {
     assert!(fixture.store().session(id).is_none());
     assert!(fixture.store().pending_close_session(id).is_some());
-    assert!(fixture.core.library().live_html_overlays().contains(&page));
+    assert!(
+        fixture
+            .core
+            .library()
+            .live_html_pages()
+            .iter()
+            .any(|(_, live)| live.id == page)
+    );
 }
 
 /// A page companion of the first session: its row id and page id.
@@ -615,18 +622,18 @@ fn a_content_page_companion_is_not_handed_out() {
     for (source, error) in [
         (
             HtmlSource::Markdown { path: path.clone() },
-            "a markdown, text or document page companion cannot be shown on another Mac",
+            "a markdown, text or document page cannot be shown on another Mac",
         ),
         (
             HtmlSource::Text {
                 path: path.clone(),
                 line: None,
             },
-            "a markdown, text or document page companion cannot be shown on another Mac",
+            "a markdown, text or document page cannot be shown on another Mac",
         ),
         (
             HtmlSource::Document { path: path.clone() },
-            "a markdown, text or document page companion cannot be shown on another Mac",
+            "a markdown, text or document page cannot be shown on another Mac",
         ),
         (HtmlSource::Image { path: path.clone() }, "not a page session"),
         (

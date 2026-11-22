@@ -555,6 +555,17 @@ fn an_unreadable_page_fails_with_its_reason_and_never_waits_for_the_engine(cx: &
         "no engine starts for it"
     );
     assert!(!page.waits_for_engine());
+    realize_waiting();
+    realize_waiting();
+    assert_eq!(model.pending(), 0, "each prepaint does not post the failure again");
+    assert_eq!(
+        navigate(page.id(), HtmlNavigation::Browser),
+        Err(errors::UNREADABLE_PAGE.to_owned())
+    );
+    assert_eq!(
+        navigate(page.id(), HtmlNavigation::Back),
+        Err(errors::no_history(HtmlNavigation::Back))
+    );
 
     with(|registry| registry.engine = EngineState::Unavailable(Unavailable::not_installed(None)));
     realize_waiting();
@@ -573,6 +584,17 @@ fn an_unreadable_page_fails_with_its_reason_and_never_waits_for_the_engine(cx: &
     assert!(
         state_is(|state| matches!(state, EngineState::Unavailable(_))),
         "a reload is no retry of the engine"
+    );
+
+    use_web(Rc::new(Recorded::default()));
+    engine_ended();
+    cx.update(|cx| page.apply(&reloaded, true, cx));
+    model.drain();
+    failed(&model);
+    assert_eq!(
+        page.failure().as_deref(),
+        Some(reason),
+        "the engine's end keeps the page's reason"
     );
 }
 

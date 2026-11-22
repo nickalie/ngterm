@@ -846,7 +846,8 @@ pub fn refresh_themes(colors: &TerminalColors, cx: &mut App) {
 /// A history step or hand-off on page `id` (upstream's `navigate`), shared by the strip and the control API.
 pub(super) fn navigate(id: Uuid, navigation: HtmlNavigation) -> Result<(), String> {
     let page = page(id).ok_or_else(|| errors::NOT_REALIZED.to_owned())?;
-    if page.web().is_none() {
+    // a page without its store never gets an engine page, yet it answers as upstream's page does
+    if page.web().is_none() && !matches!(page.storage(), Storage::Unavailable(_)) {
         return Err(errors::NOT_REALIZED.to_owned());
     }
     page.navigate(navigation)
@@ -942,8 +943,8 @@ fn clear_saved_store() -> Result<StoreClear, String> {
 }
 
 /// The store page `overlay` is built on (upstream's `storage(for:)`): a persistent URL page the saved one, or none
-/// when it cannot be used, since an in-memory one would hold a login the user asked to keep; every other page an
-/// in-memory one of its own.
+/// when it cannot be used, since an in-memory one would hold a login the user asked to keep; an unreadable saved page
+/// none, failing with its own reason; every other page an in-memory one of its own.
 fn storage(overlay: &HtmlOverlay) -> Storage {
     // an unreadable saved page loads nothing, so it fails with its own reason and never waits for a web view
     if let HtmlSource::Unreadable { reason } = &overlay.source {

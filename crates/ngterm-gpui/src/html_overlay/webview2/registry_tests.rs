@@ -198,8 +198,8 @@ fn the_saved_store_is_never_replaced_by_a_temporary_one() {
 }
 
 /// An unreadable saved page has no store, so it fails with its own reason and never asks for a web view.
-#[test]
-fn an_unreadable_page_fails_with_its_reason_and_gets_no_web_view() {
+#[gpui_kit::test]
+fn an_unreadable_page_fails_with_its_reason_and_gets_no_web_view(cx: &mut TestAppContext) {
     fake_native::install();
     let reason = "the saved page names nothing";
     let source = HtmlOverlay::new(
@@ -209,9 +209,36 @@ fn an_unreadable_page_fails_with_its_reason_and_gets_no_web_view() {
         ngterm_core::html::HtmlPageFlags::default(),
     );
     assert_eq!(storage(&source), Storage::Unavailable(reason.to_owned()));
-    let model = Model::new(&source);
+    let mut model = Model::new(&source);
     let page = page_of(&source, storage(&source), &model);
     assert!(!page.wants_native());
+    assert_eq!(
+        navigate(page.id(), HtmlNavigation::Browser),
+        Err(errors::UNREADABLE_PAGE.to_owned())
+    );
+    assert_eq!(
+        navigate(page.id(), HtmlNavigation::Back),
+        Err(errors::no_history(HtmlNavigation::Back))
+    );
+
+    with(|registry| registry.failure = Some("the WebView2 runtime is missing".to_owned()));
+    request_build(&page);
+    with(|registry| registry.failure = None);
+    engine_ended();
+    assert!(
+        model
+            .state
+            .core
+            .reload_html_overlay(page.id(), ngterm_core::html::HtmlReloadTarget::Original)
+    );
+    let reloaded = model.overlay().clone();
+    cx.update(|cx| page.apply(&reloaded, true, cx));
+    model.drain();
+    assert_eq!(
+        model.overlay().load_error.as_deref(),
+        Some(reason),
+        "a missing runtime or an ended engine keeps the page's reason"
+    );
 }
 
 #[test]

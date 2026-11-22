@@ -477,13 +477,8 @@ impl WindowLibrary {
         })
     }
 
-    /// The ids of every page an open window holds, in its sessions and in its undoable closes, whose web views go on.
-    #[must_use]
-    pub fn live_html_overlays(&self) -> Vec<Uuid> {
-        self.live_html_pages().into_iter().map(|(_, page)| page.id).collect()
-    }
-
-    /// [`WindowLibrary::live_html_overlays`]' pages themselves, each beside the window holding it.
+    /// Every page an open window holds, in its sessions and in its undoable closes, whose web views go on, each beside
+    /// the window holding it.
     #[must_use]
     pub fn live_html_pages(&self) -> Vec<(Uuid, &HtmlOverlay)> {
         let mut pages = Vec::new();

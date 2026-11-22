@@ -451,17 +451,17 @@ impl Page {
 
     // MARK: - the web view
 
-    /// The page could not get a web view, or the engine ended: the page fails with the reason, for good.
+    /// The page could not get a web view, or the engine ended: the page fails with the reason, for good; a page that
+    /// already failed keeps its own reason.
     pub fn engine_failed(&self, failure: &str) {
-        let first = {
+        {
             let mut state = self.state.borrow_mut();
-            let first = state.storage_failure.is_none();
+            if state.storage_failure.is_some() {
+                return;
+            }
             state.storage_failure = Some(failure.to_owned());
-            first
-        };
-        if first {
-            self.fail(failure.to_owned());
         }
+        self.fail(failure.to_owned());
     }
 
     /// The pump made the web view: it takes its place and loads the source.

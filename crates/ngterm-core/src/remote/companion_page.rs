@@ -29,9 +29,10 @@ use crate::pane_env::uuid_string;
 const NOT_A_PAGE_SESSION: &str = "not a page session";
 /// Upstream's refusal of a page on this machine's loopback, which the other machine would never reach.
 const LOOPBACK_PAGE: &str = "a page on this Mac's loopback cannot be shown on another Mac";
-/// Upstream's refusal of a page companion the other machine would build from fetched bytes.
+/// Upstream's refusal of a saved page this build could not read (`PageAttachmentBook.offer`).
 const UNREADABLE_PAGE: &str = "an unreadable saved page cannot be shown on another Mac";
-const CONTENT_PAGE: &str = "a markdown, text or document page companion cannot be shown on another Mac";
+/// Upstream's refusal of a page companion the other machine would build from fetched bytes.
+const CONTENT_PAGE: &str = "a markdown, text or document page cannot be shown on another Mac";
 
 /// One attachment of a page companion handed out and not claimed yet (upstream's `CompanionPageToken`).
 #[derive(Debug, Clone, Copy)]
@@ -71,8 +72,8 @@ impl Core {
     ///
     /// # Errors
     ///
-    /// The refusal: `session` is not a page companion, its saved page could not be read, its page is one the other machine would build (Markdown, text or
-    /// a clicked document), or its page is on this machine's loopback.
+    /// The refusal: `session` is not a page companion, its saved page could not be read, its page is one the other
+    /// machine would build (Markdown, text or a clicked document), or its page is on this machine's loopback.
     pub(crate) fn attach_companion_page(
         &mut self,
         session: Uuid,

@@ -69,6 +69,8 @@ struct PageState {
     /// A granted page's grant as a real path, which the scheme's reads are served from.
     grant_root: Option<policy::GrantRoot>,
     storage_failure: Option<String>,
+    /// Whether the model was told of `storage_failure`, so a prepaint does not post it again.
+    failure_reported: bool,
     prompt: Option<Entity<Alert>>,
     /// Counts the prompts the page opened, so an answer reaches only the prompt it belongs to: a withdrawal answers
     /// its prompt late, after another may have taken its place.
@@ -163,6 +165,7 @@ impl Page {
                 shown_url: None,
                 grant_root: None,
                 storage_failure,
+                failure_reported: false,
                 prompt: None,
                 prompt_serial: 0,
                 prompts_silenced: false,
@@ -310,17 +313,17 @@ impl Page {
 
     // MARK: - the engine's page
 
-    /// The engine could not start: the page fails with the reason, and is not realized later.
+    /// The engine could not start: the page fails with the reason, and is not realized later; a page that
+    /// already failed keeps its own reason.
     pub(super) fn engine_failed(&self, failure: &str) {
-        let first = {
+        {
             let mut state = self.state.borrow_mut();
-            let first = state.storage_failure.is_none();
+            if state.storage_failure.is_some() {
+                return;
+            }
             state.storage_failure = Some(failure.to_owned());
-            first
-        };
-        if first {
-            self.fail(failure.to_owned());
         }
+        self.fail_for_good(failure.to_owned());
     }
 
     /// There is no engine for now, and `reason` says why: the model's load fails with it, and a retry takes it back.
@@ -333,14 +336,22 @@ impl Page {
         self.report_load(HtmlLoadState::Loading, None);
     }
 
-    /// Reports a page's own store failure even before an engine is available.
+    /// Reports a page's own store failure even before an engine is available, once; true while the page has one.
     pub(super) fn fail_storage(&self) -> bool {
-        let failure = self.state.borrow().storage_failure.clone();
-        if let Some(failure) = failure {
-            self.fail(failure);
-            return true;
+        let (failure, reported) = {
+            let state = self.state.borrow();
+            (state.storage_failure.clone(), state.failure_reported)
+        };
+        let Some(failure) = failure else { return false };
+        if !reported {
+            self.fail_for_good(failure);
         }
-        false
+        true
+    }
+
+    fn fail_for_good(&self, failure: String) {
+        self.state.borrow_mut().failure_reported = true;
+        self.fail(failure);
     }
 
     /// Back to a page no engine has made (the element's tests).
@@ -757,7 +768,7 @@ impl Page {
             let mut state = self.state.borrow_mut();
             if let Some(failure) = state.storage_failure.clone() {
                 drop(state);
-                self.fail(failure);
+                self.fail_for_good(failure);
                 return;
             }
             state.load.begin();
