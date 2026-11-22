@@ -205,7 +205,8 @@ class Alerts(
     private val statuses = HashMap<SessionKey, Alert.Status>()
     private val lostAlerts = HashMap<String, Alert.Lost>()
 
-    // counts the lost alerts recorded, so a machine detached before its alert was recorded still has it dropped
+    // counts the lost alerts recorded, so one recorded and then detached before the conflated attached flow is seen
+    // is still dropped
     private val lostRecorded = MutableStateFlow(0L)
 
     init {
