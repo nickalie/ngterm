@@ -6,6 +6,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Base64
 import android.util.Log
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasText
@@ -21,6 +22,7 @@ import com.nickalie.ngterm.android.MainActivity
 import com.nickalie.ngterm.android.NgtermApplication
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.update.AppUpdates
+import com.nickalie.ngterm.android.update.SelfUpdates
 import com.nickalie.ngterm.android.update.UpdateState
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -103,8 +105,8 @@ class UpdateNotificationSwitchE2eTest {
         signIn()
         val found = awaitCheck(updates)
         assumeTrue("GitHub offers no newer release ($found)", found is UpdateState.Available)
-        // a post that the switch let through would land a moment after the check
-        Thread.sleep(SETTLE_MS)
+        // the start's check may still be announcing; this one returns only after its own announce step
+        runBlocking { (updates as SelfUpdates).checkInBackground() }
         assertFalse("the update notice is up with App updates off", noticeUp())
         screenshot("off-no-notice")
 
@@ -129,9 +131,22 @@ class UpdateNotificationSwitchE2eTest {
 
     private fun setAppUpdates(state: ToggleableState) {
         val row = hasText(text(R.string.settings_alert_updates)) and SemanticsMatcher.keyIsDefined(TOGGLE)
-        compose.onNode(row).performScrollTo().performClick()
-        compose.waitUntil(WAIT_MS) { compose.onNode(row).fetchSemanticsNode().config[TOGGLE] == state }
+        val before = if (state == ToggleableState.On) ToggleableState.Off else ToggleableState.On
+        compose.onNode(row).performScrollTo()
+        // the row shows On until the stored value loads
+        compose.waitUntil(WAIT_MS) { toggle(row) == before }
+        compose.onNode(row).performClick()
+        compose.waitUntil(WAIT_MS) { toggle(row) == state }
+        val stored = state == ToggleableState.On
+        runBlocking { withTimeout(WAIT_MS) { checkNotNull(updates()).notify.first { it == stored } } }
     }
+
+    private fun toggle(row: SemanticsMatcher): ToggleableState? =
+        compose
+            .onNode(row)
+            .fetchSemanticsNode()
+            .config
+            .getOrNull(TOGGLE)
 
     private fun signIn() {
         val key = String(Base64.decode(arguments.getString(KEY), Base64.DEFAULT))
@@ -178,6 +193,5 @@ class UpdateNotificationSwitchE2eTest {
 
         const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
         const val WAIT_MS = 60_000L
-        const val SETTLE_MS = 2_000L
     }
 }
