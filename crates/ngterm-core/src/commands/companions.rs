@@ -1,6 +1,7 @@
 //! `session.companion.new`, `session.companion.convert`, `session.collapse` and `session.expand`: a companion session
-//! under a parent, a running session nested under a fresh one, and folding a parent's companions. Validation and its messages follow upstream's `ControlDispatcher+Companions.swift`; the
-//! effects follow `createCompanion`, `createLocalCompanion` and `setSessionExpansion` in
+//! under a parent, a running session nested under a fresh one, and folding a parent's companions. Validation and its
+//! messages follow upstream's `ControlDispatcher+Companions.swift`; the effects follow `createCompanion`,
+//! `createLocalCompanion`, `setSessionExpansion` and `convertToCompanion` in
 //! `agterm/Control/ControlServer+Companions.swift`.
 //!
 //! Upstream's `ControlActions` default that refuses companions on an older host has no target here: one dispatcher

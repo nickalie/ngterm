@@ -1,6 +1,7 @@
 //! Convert to Companion, ported from upstream's `AppStoreCompanionsTests` (the convert cases) and
-//! `WindowLibraryRecentClosedTests` (`ConvertedAfterClose`): a running top-level session and its companions nest under a
-//! fresh session in its slot, keep their objects and state, and close, undo and reopen as the fresh parent's group.
+//! `WindowLibraryRecentClosedTests` (`ConvertedAfterClose`): a running top-level session and its companions nest
+//! under a fresh session in its slot, keep their objects and state, and close, undo and reopen as the fresh parent's
+//! group.
 
 use ngterm_host::fakes::FakeSurface;
 use ngterm_proto::events::EventKind;
