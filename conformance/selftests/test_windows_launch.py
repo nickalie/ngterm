@@ -1,6 +1,7 @@
-"""The Rust adapter's Windows launch and stop, on a Windows host (the `windows` CI job runs these): the instance's
-environment and named pipe, the quit asked of its window, the kill and report of an app that does not quit, and the
-process tree reaped by pid. The fake app (fake_app.py) stands in for the Rust build, run by this Python."""
+"""The Rust adapter's Windows launch and stop, on a Windows host (the `windows-build` CI job, release, runs these):
+the instance's environment and named pipe, the quit asked of its window, the kill and report of an app that does
+not quit, and the process tree reaped by pid. The fake app (fake_app.py) stands in for the Rust build, run by this
+Python."""
 
 import json
 import os

@@ -1,5 +1,5 @@
 """`read_written`: the text of a file a command line wrote and renamed into place, read in the moment the rename's own
-handle still holds it (the `windows` CI job runs the Windows cases)."""
+handle still holds it (the `windows-build` CI job, release, runs the Windows cases)."""
 
 import os
 import subprocess
@@ -47,7 +47,7 @@ def test_it_reads_a_file_a_handle_with_delete_access_holds(tmp_path):
         kernel32.CloseHandle(handle)
 
 
-def _renames(tmp_path, read):
+def _renames(tmp_path):
     """Runs the `cmd` line `write` makes `RENAMES` times and reads each file as soon as it exists; the errors seen."""
     lines = CommandLines(cmd=True)
     errors = []
@@ -59,7 +59,7 @@ def _renames(tmp_path, read):
             while True:
                 if path.exists():
                     try:
-                        assert read(path) == f"id|left|{index}"
+                        assert read_written(path) == f"id|left|{index}"
                         break
                     except PermissionError as error:
                         errors.append(error)
@@ -72,5 +72,5 @@ def _renames(tmp_path, read):
 
 @windows
 def test_a_file_cmd_move_renames_into_place_reads_as_soon_as_it_exists(tmp_path):
-    assert _renames(tmp_path, read_written) == []
+    assert _renames(tmp_path) == []
 
