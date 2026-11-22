@@ -1173,18 +1173,14 @@ fn the_v042_leaves_reach_the_app_and_print_its_refusal() -> TestResult {
             "{argv:?}"
         );
     }
-    // `session.page` has its handler: a core without web views refuses the page
+    // `session.page` has its handler, which resolves the session before it checks for web views: this core has none
     assert_eq!(
         outcome(&run_on(
             dir.path(),
             &socket,
             &["session", "overlay", "open", "--url", "http://localhost:1/", "--page"]
         )?),
-        (
-            Some(1),
-            String::new(),
-            "error: session.page: html overlays are not available in this build\n".to_owned()
-        )
+        (Some(1), String::new(), "error: no such session: active\n".to_owned())
     );
     assert_eq!(
         outcome(&run_on(dir.path(), &socket, &["catalog", "op", "op-1"])?),
