@@ -736,7 +736,7 @@ def test_the_value_options_are_the_ones_pytest_parses() -> None:
         if option.attrs().get("action", "store") in ("store", "append") and option.attrs().get("nargs") != 0
         for name in option.names()
     }
-    listed = re.search(r"^value_options=\(\n(.*?)^\)", SCRIPT.read_text(), re.M | re.S)
+    listed = re.search(r"^value_options=\(\n(.*?)^\)", SCRIPT.with_name("narrow.sh").read_text(), re.M | re.S)
     assert listed is not None
     assert set(listed.group(1).split()) == expected
 

@@ -17,8 +17,8 @@
 # The options are run-linux.sh's, --coverage included (an instrumented build in target\llvm-cov-target staged into
 # target\conformance-stage-cov, its profiles in target\llvm-cov-target, read after the suite into the desktop app's
 # e2e report on Windows in DIR\coverage), and --build-only and --shard (weighed by
-# conformance/shard-weights-windows.txt). One difference is left open: paths and node ids among the PYTEST_ARGS run
-# beside the layers here, not instead of them.
+# conformance/shard-weights-windows.txt). Paths and node ids among the PYTEST_ARGS run instead of the layers, as
+# there, in the POSIX or the Windows form (conformance\tests\cli\test_x.py::test_y).
 # The build needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the terminal fonts
 # (scripts/fetch-fonts.sh); its HTML overlays need the WebView2 runtime. The panes run Git for Windows' sh.exe (the
 # harness's CONFORMANCE_POSIX_SHELL, else the one beside git). Reports go to conformance/reports/rust-windows by
@@ -62,6 +62,8 @@ while (($#)); do
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+# One spelling of the suite, as the narrowed paths have it.
+tests="$(realpath -m -- "$tests")"
 if [[ -z "$ratchet_only" ]] && ((${#also[@]} + ${#also_k[@]})); then
     echo "--also and --also-k need --ratchet-only" >&2
     exit 2
@@ -108,6 +110,11 @@ if [[ -n "$ratchet_only" ]]; then
     done
     for expression in "${also_k[@]}"; do selection+=(--also-k "$expression"); done
 fi
+
+posix_path() { cygpath -u "$1"; }
+# shellcheck source=narrow.sh
+source "$here/narrow.sh"
+if ((${#narrowed[@]})); then layers=("${narrowed[@]}"); fi
 
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
 # absolute: the build runs from the repo and the harness's children from their instance homes
@@ -172,7 +179,10 @@ trap 'rmdir "$parent" 2>/dev/null || true' EXIT
 export CONFORMANCE_TMP="$(win "$parent")"
 
 win_layers=()
-for layer in "${layers[@]}"; do win_layers+=("$(win "$layer")"); done
+for layer in "${layers[@]}"; do
+    path="${layer%%::*}"
+    win_layers+=("$(win "$path")${layer:${#path}}")
+done
 set +e
 # The WebView2 runtime's cold start, paid once here and not by the suite's first page (tools/warm_webview2.py). Under
 # --coverage too, with no profile directory: the warm-up's profile goes with its instance root, not into the report.
@@ -182,7 +192,7 @@ fi
 started=$SECONDS
 "$python" -m pytest "${win_layers[@]}" --impl rust "${bin_args[@]}" -rfE \
     --junitxml "$(win "$out/junit.xml")" --nodeid-report "$(win "$out/nodeids.jsonl")" "${selection[@]}" \
-    "${shard_args[@]}" "${extra[@]}" 2>&1 | tee "$out/pytest.log"
+    "${shard_args[@]}" "${pytest_args[@]}" 2>&1 | tee "$out/pytest.log"
 pytest_status=${PIPESTATUS[0]}
 elapsed=$((SECONDS - started))
 ratchet_log="$("$python" "$(win "$here/check_ratchet.py")" --report "$(win "$out/nodeids.jsonl")" \
@@ -242,6 +252,12 @@ fi
 # files the run used (nodeids.jsonl names them, --catalog/--ui-ids in the pytest args included).
 catalog_line="$("$python" -m agterm_conformance.coverage "$(win "$out/nodeids.jsonl")" 2>&1)" || true
 
+# The plugin's run header holds the mode the ratchet check judged; the arguments only guess it when pytest wrote none.
+mode="$("$python" -c 'import json, sys; print(json.loads(open(sys.argv[1]).readline())["mode"])' \
+    "$(win "$out/nodeids.jsonl")" 2>/dev/null)" || mode=""
+if [[ -z "$mode" ]]; then
+    if [[ -n "$ratchet_only" ]]; then mode="ratchet-only"; elif [[ -n "$partial" ]]; then mode=partial; else mode=full; fi
+fi
 # A VM's copy of the sources may carry no .git: the report then says so rather than the run ending here.
 if build_commit="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"; then
     if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)"; fi
@@ -253,9 +269,13 @@ fi
     echo "## rust-windows conformance"
     echo
     echo "- build: $build_commit, \`$(win "$stage")\`"
-    if [[ -n "$ratchet_only" ]]; then
+    if [[ "$mode" == ratchet-only && -z "$ratchet_only" ]]; then
+        echo "- mode: ratchet-only, the tests that \`-- ${extra[*]}\` selected"
+    elif [[ "$mode" == ratchet-only ]]; then
         echo "- mode: ratchet-only, the ids of \`$(basename "$ratchet")\`$( ((${#also[@]})) && printf ' + --also %s' "${also[@]}")$( \
             ((${#also_k[@]})) && printf ' + --also-k %s' "${also_k[@]}")"
+    elif [[ "$mode" == partial ]]; then
+        echo "- mode: partial, the tests that \`-- ${extra[*]}\` selected"
     else
         echo "- mode: full"
     fi
