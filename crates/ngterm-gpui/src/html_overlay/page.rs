@@ -316,8 +316,8 @@ impl Page {
 
     // MARK: - the engine's page
 
-    /// The engine could not start: the page fails with the reason, and is not realized later; a page that
-    /// already failed keeps its own reason.
+    /// The engine could not start or make the page's view, or it ended: the page fails with the reason, for good;
+    /// a page that already failed keeps its own reason.
     pub(super) fn engine_failed(&self, failure: &str) {
         {
             let mut state = self.state.borrow_mut();
@@ -332,19 +332,15 @@ impl Page {
     /// There is no engine for now, and `reason` says why: the model's load fails with it, and a retry takes it back.
     /// Each prepaint asks again, so a reason already reported is not posted again.
     pub(super) fn engine_unavailable(&self, reason: &str) {
-        {
-            let mut state = self.state.borrow_mut();
-            if state.unavailable_reported.as_deref() == Some(reason) {
-                return;
-            }
-            state.unavailable_reported = Some(reason.to_owned());
+        if self.state.borrow().unavailable_reported.as_deref() == Some(reason) {
+            return;
         }
         self.report_load(HtmlLoadState::Failed, Some(reason.to_owned()));
+        self.state.borrow_mut().unavailable_reported = Some(reason.to_owned());
     }
 
     /// The user retried getting the engine: the page is loading again.
     pub(super) fn engine_retried(&self) {
-        self.state.borrow_mut().unavailable_reported = None;
         self.report_load(HtmlLoadState::Loading, None);
     }
 
@@ -540,7 +536,7 @@ impl Page {
             }
             Event::ViewFailed { message, .. } => {
                 tracing::warn!(page = %self.id, message, "the web engine could not build the page");
-                self.fail(message.clone());
+                self.engine_failed(message);
             }
             Event::NetworkFilterFailed { message, .. } => {
                 tracing::warn!(page = %self.id, message, "the page's network filter could not be compiled");
@@ -646,6 +642,8 @@ impl Page {
     }
 
     fn report_load(&self, load: HtmlLoadState, error: Option<String>) {
+        // another load result replaces the engine's reason in the model, so the next prepaint posts it again
+        self.state.borrow_mut().unavailable_reported = None;
         let id = self.id;
         post(&self.poster, move |state: &mut AppState| {
             if state.core.set_html_load_state(id, load, error) {
@@ -1496,6 +1494,77 @@ mod tests {
         assert_eq!(
             (model.overlay().load_state, model.overlay().load_error.as_deref()),
             (HtmlLoadState::Failed, Some(ended))
+        );
+    }
+
+    #[gpui_kit::test]
+    fn reload_current_after_a_view_failure_fails_again_and_loads_nothing(cx: &mut TestAppContext) {
+        let source = url_overlay();
+        let (page, web, mut model) = model_page(&source);
+        let message = "no such browser store";
+        let view = page.view_id().unwrap();
+        cx.update(|cx| {
+            page.event(
+                &Event::ViewFailed {
+                    view,
+                    message: message.to_owned(),
+                },
+                cx,
+            );
+        });
+        model.drain();
+        assert!(
+            model
+                .state
+                .core
+                .reload_html_overlay(page.id(), HtmlReloadTarget::Current)
+        );
+        let reloaded = model.overlay().clone();
+        cx.update(|cx| page.apply(&reloaded, true, cx));
+        model.drain();
+        assert!(
+            !web.recorder
+                .take()
+                .iter()
+                .any(|call| matches!(call, Call::Load(_) | Call::Reload))
+        );
+        assert_eq!(
+            (model.overlay().load_state, model.overlay().load_error.as_deref()),
+            (HtmlLoadState::Failed, Some(message))
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_later_load_error_lets_the_engine_reason_come_back(cx: &mut TestAppContext) {
+        let source = overlay(HtmlSource::File {
+            path: "/nonexistent/ngterm-test/page.html".to_owned(),
+            grant_root: None,
+        });
+        let mut model = Model::new(&source);
+        let page = Page::new(
+            &source,
+            None,
+            PanelColors::resolve(&super::super::panel::TerminalColors::default(), None),
+            Storage::Ephemeral,
+            &model.poster(),
+        );
+        let reason = "connection refused";
+        page.engine_unavailable(reason);
+        model.drain();
+        assert_eq!(model.overlay().load_error.as_deref(), Some(reason));
+        let colors = super::super::panel::TerminalColors {
+            background: Some("#fafafa".to_owned()),
+            foreground: Some("#111111".to_owned()),
+            palette: Vec::new(),
+        };
+        cx.update(|cx| page.apply_theme(&colors, cx));
+        model.drain();
+        assert_ne!(model.overlay().load_error.as_deref(), Some(reason));
+        page.engine_unavailable(reason);
+        model.drain();
+        assert_eq!(
+            (model.overlay().load_state, model.overlay().load_error.as_deref()),
+            (HtmlLoadState::Failed, Some(reason))
         );
     }
 
