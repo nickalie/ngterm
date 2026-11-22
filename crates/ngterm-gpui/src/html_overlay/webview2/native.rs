@@ -518,9 +518,15 @@ impl NativeView for Native {
 }
 
 /// The browser switches of every web view: wry's defaults, which a value of ours replaces, and paint holding off.
+/// wry's defaults are a copy of the `--disable-features` value in `webview2::InnerWebView::create_environment` of wry
+/// `WRY_VERSION`; compare them again when wry changes.
 /// After each load Chromium holds paint until the first contentful paint, up to 500 ms, and drops the wheel meanwhile,
 /// so a page that draws no text lost a scroll turned as it loaded; `WKWebView` holds no input.
 const BROWSER_ARGUMENTS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,PaintHolding";
+
+/// The wry version whose default browser switches `BROWSER_ARGUMENTS` copies.
+#[cfg(test)]
+const WRY_VERSION: &str = "0.57.1";
 
 /// The web view of `spec` (wry's part of it).
 fn build(spec: &Spec) -> Result<WebView, String> {
@@ -1361,12 +1367,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_browser_keeps_wrys_switches_and_holds_no_paint() {
-        let features = BROWSER_ARGUMENTS.strip_prefix("--disable-features=").unwrap();
-        let features: Vec<_> = features.split(',').collect();
-        for feature in ["msWebOOUI", "msPdfOOUI", "msSmartScreenProtection", "PaintHolding"] {
-            assert!(features.contains(&feature), "{feature} stays off");
-        }
+    fn the_browser_switches_copy_the_defaults_of_the_locked_wry() {
+        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock")).unwrap();
+        let mut lines = lock.lines().skip_while(|line| *line != "name = \"wry\"");
+        lines.next();
+        let locked = lines.next().unwrap_or_default();
+        assert_eq!(
+            locked,
+            format!("version = \"{WRY_VERSION}\""),
+            "wry moved: copy its default --disable-features into BROWSER_ARGUMENTS again, then set WRY_VERSION"
+        );
     }
 
     #[test]
