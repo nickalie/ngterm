@@ -474,6 +474,7 @@ fn a_saved_page_loads_before_its_profile_is_kept_and_a_closed_one_still_keeps_it
     let engine = pumped(cx);
     let directory = TempDir::new().unwrap();
     state_dir_at(directory.path());
+    assert_eq!(persistent_store_failure(), None);
     let source = url_overlay();
     let model = Model::new(&source);
     let page = page_of(&source, Storage::Saved, &model);

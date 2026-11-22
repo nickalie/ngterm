@@ -1357,8 +1357,10 @@ mod tests {
         let guide = in_root(&page, "sub/guide.md");
         let file = |url: &Url| page_url(&page, Some(url), Some(&guide)).and_then(|url| url.to_file_path().ok());
         let root = Path::new(&page.markdown_links.as_ref().unwrap().root).to_path_buf();
-        assert_eq!(file(&readme), Some(root.join("README.md")));
-        assert_eq!(file(&guide), Some(root.join("sub").join("guide.md")));
+        // a file URL cannot spell Windows' `\\?\` prefix, which the grant's real root has
+        let shown = |path: PathBuf| Url::from_file_path(path).unwrap().to_file_path().unwrap();
+        assert_eq!(file(&readme), Some(shown(root.join("README.md"))));
+        assert_eq!(file(&guide), Some(shown(root.join("sub").join("guide.md"))));
         assert_eq!(
             page_url(&page, None, Some(&guide)).and_then(|url| url.to_file_path().ok()),
             Some(PathBuf::from(page.source.text())),
@@ -1380,7 +1382,7 @@ mod tests {
             shown_after_page_change(&plain, Some(&readme), Some(&guide)),
             Some(guide.clone())
         );
-        let guide_file = root.join("sub").join("guide.md").to_string_lossy().into_owned();
+        let guide_file = shown(root.join("sub").join("guide.md")).to_string_lossy().into_owned();
         assert_eq!(markdown_link_read(guide.as_str(), page.id), Some(guide_file));
         assert_eq!(markdown_link_read(guide.as_str(), uuid::Uuid::new_v4()), None);
     }
