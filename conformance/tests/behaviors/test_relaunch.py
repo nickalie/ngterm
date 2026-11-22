@@ -9,7 +9,7 @@ import sys
 import uuid
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_ok, find_session, program_argv, workspaces
+from agterm_conformance.match import assert_absent, assert_ok, find_session, program_argv, session_ids, workspaces
 
 WINDOWS = sys.platform == "win32"
 WINDOWS_SHELLS = pytest.mark.requires(
@@ -213,6 +213,37 @@ def test_a_page_companion_comes_back_after_relaunch(launch):
     (shown,) = restored["htmlOverlays"]
     assert shown["file"] == str(page_file)
     assert find_session(tree, terminal)["parent"] == parent
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("behavior:restore.relaunch-keeps-layout", "session.page")
+def test_a_page_session_comes_back_with_its_companions_after_relaunch(launch):
+    ctl = launch()
+    target = _new(ctl)
+    page_file = ctl.instance.root / "session.html"
+    page_file.write_text("<!doctype html><title>Session</title><p>session page</p>")
+    held_file = ctl.instance.root / "held.html"
+    held_file.write_text("<!doctype html><title>Held</title><p>held page</p>")
+    page = assert_ok(ctl.request("session.page", target, html=str(page_file)))["id"]
+    terminal = assert_ok(ctl.request("session.companion.new", page, noSelect=True))["id"]
+    held = assert_ok(ctl.request("session.companion.page", page, html=str(held_file)))["id"]
+    # A structural change after the creates, so the saved layout is current when SIGTERM ends the run.
+    assert_ok(ctl.request("workspace.new", name="saved", collapsed=True))
+
+    ctl = launch.relaunch(ctl)
+    tree = ctl.wait_tree(lambda tree: find_session(tree, target)["realized"] is True)
+    ids = session_ids(tree)
+    assert ids[ids.index(target) :][:4] == [target, page, terminal, held]
+    restored = find_session(tree, page)
+    assert restored["content"] == "page"
+    assert_absent(restored, "parent")
+    (shown,) = restored["htmlOverlays"]
+    assert shown["file"] == str(page_file)
+    assert find_session(tree, terminal)["parent"] == page
+    companion_page = find_session(tree, held)
+    assert companion_page["content"] == "page" and companion_page["parent"] == page
+    (shown,) = companion_page["htmlOverlays"]
+    assert shown["file"] == str(held_file)
 
 
 @pytest.mark.covers("behavior:restore.rerun-types-pinned-command")

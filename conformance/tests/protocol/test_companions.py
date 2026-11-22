@@ -676,6 +676,55 @@ def test_page_session_refusals(ctl):
     assert_ok(ctl.request("workspace.delete", wid))
 
 
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.page", "session.close", "recent.list", "recent.open", "field:tree.session.content")
+def test_open_recent_brings_a_page_session_back_with_its_companions(ctl):
+    wid, (target,) = _workspace(ctl)
+    path, title = _page_file(ctl)
+    page = assert_ok(ctl.request("session.page", target, html=str(path)))["id"]
+    terminal = _companion(ctl, page)
+    held, _, _ = _page_companion(ctl, page)
+    assert assert_ok(ctl.request("session.close", page))["closed"] == [page, terminal, held]
+    entry = assert_ok(ctl.request("recent.list"))["recent"][0]
+    assert entry["sessionIDs"] == [page, terminal, held]
+
+    assert_ok(ctl.request("recent.open", entry["id"]))
+    tree = _loaded(ctl, page, title)
+    assert session_ids(tree, wid) == [target, page, terminal, held]
+    assert_subset(find_session(tree, page), {"content": "page"})
+    assert_absent(find_session(tree, page), "parent")
+    assert find_session(tree, terminal)["parent"] == page
+    assert_subset(find_session(tree, held), {"content": "page", "parent": page})
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+def _closing_page_file(ctl):
+    """A page whose script closes its window as it loads."""
+    path, _ = _page_file(ctl)
+    path.write_text("<!doctype html><title>Closing</title><body><script>window.close()</script><p>bye</p></body>")
+    return path
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.page", "pick.open", "pick.cancel", "recent.list")
+def test_a_page_sessions_own_close_closes_its_row_once_and_waits_for_a_pending_pick(ctl):
+    wid, (target,) = _workspace(ctl)
+    path = _closing_page_file(ctl)
+    page = assert_ok(ctl.request("session.page", target, html=str(path), javascript=True))["id"]
+    ctl.wait_tree(lambda tree: page not in session_ids(tree, wid))
+    assert session_ids(ctl.tree(), wid) == [target]
+    recorded = [item["sessionIDs"] for item in assert_ok(ctl.request("recent.list"))["recent"]]
+    assert recorded.count([page]) == 1
+
+    pick = assert_ok(ctl.request("pick.open", items=[{"id": "a", "label": "Alpha"}], prompt="Hold"))["id"]
+    held = assert_ok(ctl.request("session.page", target, html=str(path), javascript=True))["id"]
+    _loaded(ctl, held)
+    assert session_ids(ctl.tree(), wid) == [target, held]
+    assert_ok(ctl.request("pick.cancel", pick))
+    ctl.wait_tree(lambda tree: held not in session_ids(tree, wid))
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
 # -- Convert to Companion
 
 

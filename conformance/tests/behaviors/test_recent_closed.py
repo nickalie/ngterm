@@ -5,7 +5,7 @@ import json
 import uuid
 
 import pytest
-from agterm_conformance.match import assert_error, assert_ok, session_ids
+from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session, session_ids
 
 COMPANION_WITHOUT_PARENT = "parent session is not open or in Recent Closed"
 
@@ -32,3 +32,23 @@ def test_a_companion_whose_parent_is_nowhere_is_refused_by_name(launch):
 
     assert [item["id"] for item in assert_ok(ctl.request("recent.list"))["recent"]] == [entry]
     assert snapshot["id"] not in session_ids(ctl.tree())
+
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("recent.open", "field:tree.session.content")
+def test_a_page_session_whose_saved_page_this_build_cannot_open_reopens_as_a_page_row(launch):
+    ctl = launch()
+    entry, row = _id(), _id()
+    page = {"slot": "session", "source": {"kind": "url", "url": "ftp://127.0.0.1/saved"}}
+    snapshot = {"id": row, "customName": "docs", "cwd": "/tmp", "content": "page", "pages": [page]}
+    place = {"workspaceID": _id(), "workspaceName": "gone", "workspaceIndex": 0, "sessionIndex": 0}
+    item = {"id": entry, "kind": "session", "title": "docs", "closedAt": 0, "session": {**place, "snapshot": snapshot}}
+    (ctl.instance.state_dir / "recent-closed.json").write_text(json.dumps({"version": 1, "items": [item]}))
+    ctl = launch.relaunch(ctl)
+
+    assert_ok(ctl.request("recent.open", entry))
+    node = find_session(ctl.tree(), row)
+    # a page row that shows why its page is missing, never a terminal
+    assert_subset(node, {"name": "docs", "content": "page", "overlay": False})
+    assert_absent(node, "htmlOverlays")
