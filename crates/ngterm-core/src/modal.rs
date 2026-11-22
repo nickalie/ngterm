@@ -197,6 +197,8 @@ pub struct Modals {
     deadlines: HashMap<String, Instant>,
     /// The deadlines armed since the frontend last took them.
     expiries: Vec<InteractionExpiry>,
+    /// How far tests moved the deadlines' clock past `Instant::now`.
+    clock_skew: Duration,
 }
 
 impl Modals {
@@ -240,13 +242,14 @@ impl Modals {
     pub(crate) fn resolve_pick(&mut self, window: Uuid, outcome: ControlPickResult) {
         self.sequence += 1;
         let sequence = self.sequence;
+        let now = self.now();
         let Some(controller) = self.controllers.get_mut(&window) else {
             return;
         };
         let Some(pending) = controller.pending.take() else {
             return;
         };
-        let outcome = if expired(&self.deadlines, &pending.id) {
+        let outcome = if passed(&self.deadlines, &pending.id, now) {
             ControlPickResult::outcome(ControlPickOutcome::Cancelled)
         } else {
             outcome
@@ -343,7 +346,7 @@ impl Modals {
             return;
         };
         controller.ask_draft = None;
-        let outcome = if expired(&self.deadlines, &ask.id) {
+        let outcome = if self.expired(&ask.id) {
             ControlAskResult::outcome(ControlAskOutcome::Cancelled)
         } else {
             outcome
@@ -420,7 +423,7 @@ impl Modals {
     /// Ends ask or pick `id` unanswered `seconds` from now, a valid `--timeout`.
     pub(crate) fn arm_deadline(&mut self, id: &str, seconds: f64) {
         let delay = Duration::from_secs_f64(seconds);
-        self.deadlines.insert(id.to_owned(), Instant::now() + delay);
+        self.deadlines.insert(id.to_owned(), self.now() + delay);
         self.expiries.push(InteractionExpiry {
             delay,
             id: id.to_owned(),
@@ -430,7 +433,18 @@ impl Modals {
     /// Whether ask or pick `id`'s deadline passed; an answer then resolves cancelled.
     #[must_use]
     pub(crate) fn expired(&self, id: &str) -> bool {
-        expired(&self.deadlines, id)
+        passed(&self.deadlines, id, self.now())
+    }
+
+    /// The deadlines' clock.
+    fn now(&self) -> Instant {
+        Instant::now() + self.clock_skew
+    }
+
+    /// Moves the deadlines' clock `by` forward.
+    #[cfg(test)]
+    pub(crate) fn advance_clock(&mut self, by: Duration) {
+        self.clock_skew += by;
     }
 
     /// The session asks' outcomes as their deadlines leave them: one answered past its deadline is cancelled.
@@ -444,8 +458,8 @@ impl Modals {
     }
 }
 
-fn expired(deadlines: &HashMap<String, Instant>, id: &str) -> bool {
-    deadlines.get(id).is_some_and(|deadline| *deadline <= Instant::now())
+fn passed(deadlines: &HashMap<String, Instant>, id: &str, now: Instant) -> bool {
+    deadlines.get(id).is_some_and(|deadline| *deadline <= now)
 }
 
 fn held_by(controller: &PickController) -> Option<&'static str> {
@@ -597,7 +611,7 @@ impl crate::Core {
         let Some(deadline) = self.modals.deadlines.get(&expiry.id).copied() else {
             return;
         };
-        if let Some(rest) = deadline.checked_duration_since(Instant::now())
+        if let Some(rest) = deadline.checked_duration_since(self.modals.now())
             && !rest.is_zero()
         {
             self.modals.expiries.push(InteractionExpiry { delay: rest, ..expiry });

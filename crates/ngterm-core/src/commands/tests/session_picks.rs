@@ -258,6 +258,40 @@ fn a_timed_pick_ends_cancelled_at_its_deadline() {
     assert_eq!(slot_pick(&fixture, fixture.window), None);
 }
 
+/// The deadline runs on the modal clock: an expiry that fires early is armed again for the rest, and an answer
+/// before the deadline stays answered while one past it resolves cancelled.
+#[test]
+fn a_timed_pick_keeps_its_deadline_on_the_modal_clock() {
+    let mut fixture = Fixture::new(0);
+    fixture.core.modals.advance_clock(Duration::from_secs(1000));
+    let id = opened(&open(&mut fixture, None, |a| a.timeout = Some(60.0)));
+    let early = expiry(&mut fixture);
+    fixture.core.modals.advance_clock(Duration::from_secs(45));
+    fixture.core.expire_interaction(early);
+    let rest = expiry(&mut fixture).delay;
+    assert!(
+        rest > Duration::from_secs(14) && rest <= Duration::from_secs(15),
+        "{rest:?}"
+    );
+    fixture.core.resolve_pick(fixture.window, &id, picked_beta());
+    assert_eq!(result(&mut fixture, &id), json!(picked_beta()));
+
+    let mut fixture = Fixture::new(0);
+    let id = opened(&open(&mut fixture, None, |a| a.timeout = Some(60.0)));
+    let due = expiry(&mut fixture);
+    fixture.core.modals.advance_clock(Duration::from_secs(60));
+    fixture.core.expire_interaction(due);
+    fixture.core.commit();
+    assert!(fixture.core.take_interaction_expiries().is_empty());
+    assert_eq!(result(&mut fixture, &id), json!({"result": "cancelled"}));
+
+    let mut fixture = Fixture::new(0);
+    let id = opened(&open(&mut fixture, None, |a| a.timeout = Some(60.0)));
+    fixture.core.modals.advance_clock(Duration::from_secs(60));
+    fixture.core.resolve_pick(fixture.window, &id, picked_beta());
+    assert_eq!(result(&mut fixture, &id), json!({"result": "cancelled"}));
+}
+
 /// Upstream's `aPickAnsweredPastItsDeadlineResolvesCancelled`.
 #[test]
 fn a_pick_answered_past_its_deadline_resolves_cancelled() {
@@ -325,6 +359,25 @@ fn an_ask_answered_past_its_deadline_resolves_cancelled() {
     let mut fixture = Fixture::new(0);
     let id = open_ask(&mut fixture, "gui", 0.01);
     std::thread::sleep(Duration::from_millis(20));
+    fixture.core.answer_window_ask_button(fixture.window, &id, 0);
+    fixture.core.commit();
+    assert_eq!(ask_outcome(&mut fixture, &id), json!("cancelled"));
+}
+
+/// An ask answered once the modal clock passed its deadline resolves cancelled, a terminal ask and a GUI one.
+#[test]
+fn an_ask_answered_past_its_deadline_on_the_modal_clock_resolves_cancelled() {
+    let mut fixture = Fixture::new(0);
+    let session = fixture.sessions[0];
+    let id = open_ask(&mut fixture, "terminal", 60.0);
+    fixture.core.modals.advance_clock(Duration::from_secs(60));
+    fixture.core.answer_session_ask_button(session, &id, 0);
+    fixture.core.commit();
+    assert_eq!(ask_outcome(&mut fixture, &id), json!("cancelled"));
+
+    let mut fixture = Fixture::new(0);
+    let id = open_ask(&mut fixture, "gui", 60.0);
+    fixture.core.modals.advance_clock(Duration::from_secs(60));
     fixture.core.answer_window_ask_button(fixture.window, &id, 0);
     fixture.core.commit();
     assert_eq!(ask_outcome(&mut fixture, &id), json!("cancelled"));
