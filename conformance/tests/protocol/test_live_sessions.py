@@ -1224,10 +1224,11 @@ PAGE_NO_READ = "no overlay to read: the slot holds an html page"
 
 
 @contextlib.contextmanager
-def _page_presenter(live, kinds=PAGE_PRESENTER_KINDS):
-    """A Live session whose left pane follows a viewer's client, and a presenter of it whose hello lists `kinds`:
-    `(sid, presenter stream, its generation)`. Upstream hands a page over only while the pane's own client follows."""
-    sid = _live_session(live)
+def _page_presenter(live, kinds=PAGE_PRESENTER_KINDS, **session_args):
+    """A Live session (`session_args` go to `session.new`) whose left pane follows a viewer's client, and a presenter
+    of it whose hello lists `kinds`: `(sid, presenter stream, its generation)`. Upstream hands a page over only while
+    the pane's own client follows."""
+    sid = _live_session(live, **session_args)
     endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
     daemon = _entries(live, sid)["left"]["daemon"]
     with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
@@ -1527,6 +1528,12 @@ def test_content_pages_go_only_to_a_presenter_listing_page_content(live, tmp_pat
 
 # A presenter that forwards a path clicked in a pane it shows lists `link.click` (#923).
 LINK_CLICK_PRESENTER_KINDS = [*CONTENT_PRESENTER_KINDS, "link.click"]
+# A presenter that also builds an HTML document page lists `page.document`.
+DOCUMENT_PRESENTER_KINDS = [*LINK_CLICK_PRESENTER_KINDS, "page.document"]
+
+
+def _slot_pages(tree, sid):
+    return [slot.get("pageID") for slot in find_session(tree, sid).get("remoteOverlays", [])]
 
 
 def _forward_click(presenter, gen, rev, raw, pane):
@@ -1557,10 +1564,54 @@ def test_a_presenters_forwarded_click_opens_its_page_there_or_is_refused(live, t
             assert "remoteOverlays" not in find_session(live.tree(), sid), raw
         _forward_click(presenter, gen, len(refusals) + 2, str(readme), pane)
         request = wait_frame(presenter.read, "page.request", presenter.send)["page"]
-        assert request["source"] == {"markdown": {"path": foundation_resolved(str(readme))}}
+        assert request["source"] == {"markdown": {"path": str(readme)}}, "the path as clicked, symlinks kept"
         page_id = request["page"]
         live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == [{"pageID": page_id}])
         assert find_session(live.tree(), sid)["overlay"] is False, "nothing covers the session here"
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close", presenter.send)
+
+
+@LIVE
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("live.present", "field:tree.session.remoteOverlays", streams=("live.present",))
+def test_a_forwarded_relative_line_or_file_url_click_replaces_the_hidden_clicked_page(live, tmp_path):
+    """A relative path against the clicked pane's directory, a `path:line`, a `file://` URL and an HTML file each open
+    as the presenter's clicked page; once the presenter hides one, the next click closes it there first (#923)."""
+    folder, picture, readme, source = _content_files(tmp_path)
+    source.write_text("package main\n\nfunc main() {}\n")
+    document = folder / "pr.html"
+    document.write_text("<!doctype html><title>pr</title><p>a pull request</p>")
+    clicks = [
+        ("notes/README.md", {"markdown": {"path": str(readme)}}),
+        ("notes/main.go:3", {"text": {"path": str(source), "line": 3}}),
+        (picture.as_uri(), {"image": {"path": str(picture), "width": 1, "height": 1}}),
+        (str(document), {"document": {"path": str(document)}}),
+    ]
+    with _page_presenter(live, DOCUMENT_PRESENTER_KINDS, cwd=str(tmp_path)) as (sid, presenter, gen):
+        pane = _pane_id(live, sid)
+        hidden = None
+        for rev, (raw, expected) in enumerate(clicks, start=1):
+            _forward_click(presenter, gen, 2 * rev, raw, pane)
+            if hidden is not None:
+                assert wait_frame(presenter.read, "page.close", presenter.send)["page"]["page"] == hidden, raw
+            request = wait_frame(presenter.read, "page.request", presenter.send)["page"]
+            assert request["source"] == expected, raw
+            page_id = request["page"]
+            live.wait_tree(lambda tree, page_id=page_id: _slot_pages(tree, sid) == [page_id])
+            state = {
+                "page": page_id,
+                "title": "clicked",
+                "address": str(folder),
+                "load": "loaded",
+                "canGoBack": False,
+                "canGoForward": False,
+                "hidden": True,
+                "appliedSeq": 0,
+            }
+            presenter.send({"kind": "page.state", "gen": gen, "rev": 2 * rev + 1, "page": state})
+            live.wait_tree(lambda tree: find_session(tree, sid).get("hiddenOverlays") == ["session"])
+            hidden = page_id
         assert_ok(live.request("session.overlay.close", sid))
         wait_frame(presenter.read, "page.close", presenter.send)
 
