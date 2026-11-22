@@ -1,5 +1,6 @@
 //! Remote group attach receipts and lifecycle (upstream's `ControlServerRemoteGroupTests.swift`).
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -81,9 +82,12 @@ impl ChannelLink for Helper {
     fn stop(&self) {}
 }
 
-struct Launcher;
+/// Records each helper's key, so a test can end the page there.
+#[derive(Default)]
+struct Launcher(RefCell<Vec<HelperKey>>);
 impl PageHelperLauncher for Launcher {
-    fn launch(&self, _: &[String], _: HelperKey, _: Arc<Permits>) -> Result<Box<dyn ChannelLink>, String> {
+    fn launch(&self, _: &[String], key: HelperKey, _: Arc<Permits>) -> Result<Box<dyn ChannelLink>, String> {
+        self.0.borrow_mut().push(key);
         Ok(Box::new(Helper))
     }
 }
@@ -160,6 +164,7 @@ fn page_attach() -> RemoteCommandResult {
 struct Group {
     fixture: Fixture,
     runner: Arc<Runner>,
+    launcher: Rc<Launcher>,
 }
 
 impl Group {
@@ -171,8 +176,13 @@ impl Group {
         }
         fixture.core.set_remote_runner(runner.clone());
         fixture.core.set_html_host(Box::new(Host));
-        fixture.core.set_page_helper_launcher(Rc::new(Launcher));
-        Self { fixture, runner }
+        let launcher = Rc::new(Launcher::default());
+        fixture.core.set_page_helper_launcher(launcher.clone());
+        Self {
+            fixture,
+            runner,
+            launcher,
+        }
     }
 
     fn request(&mut self, cmd: LiveCmd, target: &str, args: Args) -> Response {
@@ -206,11 +216,35 @@ impl Group {
     }
 
     fn begin(&mut self) -> Dispatched {
+        self.begin_group("P", None)
+    }
+
+    fn begin_group(&mut self, target: &str, window: Option<Uuid>) -> Dispatched {
         self.fixture.core.begin(&Request {
             cmd: Command::Live(LiveCmd::AttachGroup),
-            target: Some("P".to_owned()),
-            args: Some(args(|a| a.host = Some("buildbox".to_owned()))),
+            target: Some(target.to_owned()),
+            args: Some(args(|a| {
+                a.host = Some("buildbox".to_owned());
+                a.window = window.map(wire);
+            })),
         })
+    }
+
+    fn attach_root(&mut self) -> Response {
+        self.request(
+            LiveCmd::AttachGroup,
+            "PR",
+            args(|a| a.host = Some("buildbox".to_owned())),
+        )
+    }
+
+    fn no_remote_rows(&self) -> bool {
+        let library = self.fixture.core.library();
+        library
+            .open_ids()
+            .into_iter()
+            .filter_map(|window| library.store(window))
+            .all(|store| store.sessions().all(|row| row.remote_host().is_none()))
     }
 
     fn until_calls(&mut self, mut dispatch: Dispatched, count: usize) -> Dispatched {
@@ -625,4 +659,339 @@ fn every_attached_group_row_reports_its_origin_id_in_the_tree_and_events() {
         events.iter().map(|e| e["kind"].as_str().unwrap()).collect::<Vec<_>>(),
         ["remote.opened", "remote.opened", "remote.opened", "remote.closed"]
     );
+}
+
+// MARK: - a group under a top-level page
+
+const ROOT_PAGE_ID: &str = "6B2F8D3C-4E5A-4F6B-9C7D-8E9F0A1B2C3D";
+
+fn page_root(members: &[&str]) -> Value {
+    let members: Vec<Value> = members
+        .iter()
+        .map(|id| json!({"id":id,"name":member_name(id)}))
+        .collect();
+    json!({"id":"PR","name":"dash","windowID":"w1","windowName":"main","workspaceID":"ws1","workspaceName":"work",
+        "cwd":"/srv","content":"page","panes":[],"companions":members})
+}
+
+fn page_under(id: &str, parent: &str) -> Value {
+    let mut row = page();
+    row["id"] = json!(id);
+    row["parent"] = json!(parent);
+    row
+}
+
+fn page_attach_of(id: &str, parent: Option<&str>, page: &str) -> RemoteCommandResult {
+    let mut value: Value = serde_json::from_str(&page_attach().stdout).unwrap();
+    value["result"]["id"] = json!(id);
+    value["result"]["parent"] = parent.map_or(Value::Null, |parent| json!(parent));
+    value["result"]["companionPage"]["page"] = json!(page);
+    result(0, &value)
+}
+
+fn root_attach() -> RemoteCommandResult {
+    page_attach_of("PR", None, ROOT_PAGE_ID)
+}
+
+/// Upstream's `testAPageRootGroupArrivesAsATopLevelReplicaRowWithItsCompanionsUnderIt`.
+#[test]
+fn a_page_root_group_arrives_as_a_top_level_replica_row_with_its_companions_under_it() {
+    let mut group = Group::new(vec![
+        tree(&[
+            page_root(&["c1", "pg"]),
+            terminal("c1", Some("PR")),
+            page_under("pg", "PR"),
+        ]),
+        root_attach(),
+        page_attach_of("pg", Some("PR"), PAGE_ID),
+    ]);
+    let current = group.fixture.store().current_workspace_id();
+
+    let reply = group.attach_root();
+
+    assert!(reply.ok, "{reply:?}");
+    let row = Uuid::parse_str(receipt(&reply).id.as_deref().unwrap()).unwrap();
+    let store = group.fixture.store();
+    let found = store.session(row).unwrap();
+    assert_eq!(found.parent_id(), None);
+    assert_eq!(found.content(), crate::model::SessionContent::Page);
+    assert_eq!(found.remote_host(), Some("buildbox"));
+    assert_eq!(found.display_name(), "dash");
+    assert_eq!(
+        found.overlay.page().unwrap().replica_of,
+        Uuid::parse_str(ROOT_PAGE_ID).ok()
+    );
+    assert_eq!(
+        store.workspace_for_session(row).map(crate::model::Workspace::id),
+        current
+    );
+    assert_eq!(group.fixture.selected(), Some(row));
+    assert_bound_to_the_origin(&group, row);
+    let receipt = receipt(&reply).remote_group.unwrap();
+    assert_eq!(
+        receipt.companions.iter().filter(|member| member.id.is_some()).count(),
+        2
+    );
+    let calls = group.runner.calls();
+    assert!(calls[1].last().unwrap().contains("page-attach"));
+    assert!(calls[1].last().unwrap().contains("PR"));
+}
+
+/// The page root's row and its page companion carry the origin's endpoint, which later companions find it by.
+fn assert_bound_to_the_origin(group: &Group, row: Uuid) {
+    let store = group.fixture.store();
+    let found = store.session(row).unwrap();
+    let binding = &found.remote_presentation().unwrap().binding;
+    assert_eq!(binding.remote_session_id, "PR");
+    let endpoint: ngterm_proto::ControlLiveEndpoint = serde_json::from_value(endpoint()).unwrap();
+    assert_eq!(
+        binding.origin,
+        Some(crate::model::RemoteOrigin {
+            host: "buildbox".to_owned(),
+            endpoint: endpoint.clone(),
+            session_name: "dash".to_owned(),
+        })
+    );
+    assert_eq!(binding.daemon(found.pane_identity), None, "a page owns no daemon");
+    assert_eq!(group.origins(row), ["c1", "pg"]);
+    let page_companion = store.companions(row).last().unwrap().id();
+    let page_binding = &store
+        .session(page_companion)
+        .unwrap()
+        .remote_presentation()
+        .unwrap()
+        .binding;
+    assert_eq!(
+        page_binding.origin.as_ref().map(|origin| &origin.endpoint),
+        Some(&endpoint)
+    );
+}
+
+/// Upstream's `testAPageRootGroupKeepsTheRootAndNamesAnUnavailableMember`.
+#[test]
+fn a_page_root_group_keeps_the_root_and_names_an_unavailable_member() {
+    let mut group = Group::new(vec![
+        tree(&[page_root(&["c1", "c2"]), terminal("c1", Some("PR"))]),
+        root_attach(),
+    ]);
+
+    let reply = group.attach_root();
+
+    let row = receipt(&reply).id.unwrap();
+    assert!(!reply.ok);
+    assert_eq!(
+        reply.error,
+        Some(format!(
+            "kept dash ({row}) and 1 companion(s); not attached: c2-name (unavailable on buildbox)"
+        ))
+    );
+    assert_eq!(group.origins(Uuid::parse_str(&row).unwrap()), ["c1"]);
+}
+
+/// Upstream's `testAPageRootTheOriginRefusesLeavesNoRow`.
+#[test]
+fn a_page_root_the_origin_refuses_leaves_no_row() {
+    let refused = json!({"ok":false,"error":"a page on this Mac's loopback cannot be shown on another Mac"});
+    let mut group = Group::new(vec![
+        tree(&[page_root(&["c1"]), terminal("c1", Some("PR"))]),
+        result(1, &refused),
+    ]);
+
+    let reply = group.attach_root();
+
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("a page on this Mac's loopback cannot be shown on another Mac")
+    );
+    assert!(group.no_remote_rows());
+}
+
+/// Upstream's `testAPageRootWhoseWorkspaceClosesDuringTheHandoffLeavesNoRow`.
+#[test]
+fn a_page_root_whose_workspace_closes_during_the_handover_leaves_no_row() {
+    let mut group = Group::new(vec![tree(&[page_root(&["c1"]), terminal("c1", Some("PR"))])]);
+    group.fixture.add_workspace("other", 1);
+    let destination = group.fixture.store().current_workspace_id().unwrap();
+    let dispatch = group.begin_group("PR", None);
+    let dispatch = group.until_calls(dispatch, 2);
+    assert!(
+        group
+            .fixture
+            .store_mut()
+            .unwrap()
+            .remove_workspace(destination)
+            .is_some()
+    );
+    group.runner.answer(1, root_attach());
+
+    let reply = dispatch.finish_now(&mut group.fixture.core);
+
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("the window or workspace to attach into was closed")
+    );
+    assert!(reply.result.is_none());
+    assert!(group.no_remote_rows());
+    assert_eq!(group.runner.calls().len(), 2, "no member is attempted");
+}
+
+/// Upstream's `testAPageRootWhoseWindowClosesDuringTheHandoffLeavesNoRow`.
+#[test]
+fn a_page_root_whose_window_closes_during_the_handover_leaves_no_row() {
+    let mut group = Group::new(vec![tree(&[page_root(&[])])]);
+    let destination = group.fixture.core.library_mut().new_window(Some("closing"));
+    let dispatch = group.begin_group("PR", Some(destination));
+    let dispatch = group.until_calls(dispatch, 2);
+    group.fixture.core.library_mut().close_window(destination);
+    group.runner.answer(1, root_attach());
+
+    let reply = dispatch.finish_now(&mut group.fixture.core);
+
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("the window or workspace to attach into was closed")
+    );
+    assert!(group.no_remote_rows());
+    let closed = group.fixture.core.library().store(destination);
+    assert!(closed.is_none_or(|store| store.sessions().all(|row| row.remote_host().is_none())));
+}
+
+/// Upstream's `testAPageRootEndingThereWhileItsGroupIsParkedFinalizesTheGroup`: Undo would bring back a dead page.
+#[test]
+fn a_page_root_ending_there_while_its_group_is_parked_finalizes_the_group() {
+    let mut group = Group::new(vec![
+        tree(&[
+            page_root(&["c1", "pg"]),
+            terminal("c1", Some("PR")),
+            page_under("pg", "PR"),
+        ]),
+        root_attach(),
+        page_attach_of("pg", Some("PR"), PAGE_ID),
+        result(0, &json!({"ok":true,"result":{}})),
+    ]);
+    let reply = group.attach_root();
+    assert!(reply.ok, "{reply:?}");
+    let root = Uuid::parse_str(receipt(&reply).id.as_deref().unwrap()).unwrap();
+    let members: Vec<Uuid> = group
+        .fixture
+        .store()
+        .companions(root)
+        .into_iter()
+        .map(crate::model::Session::id)
+        .collect();
+    assert_eq!(members.len(), 2);
+    assert!(group.fixture.store_mut().unwrap().soft_close_session(root));
+    group.fixture.core.commit();
+    assert!(group.fixture.store().pending_close_session(root).is_some());
+
+    let key = group.launcher.0.borrow()[0];
+    group.fixture.core.page_helper_closed(key, "exit 0");
+    group.fixture.core.commit();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while group.fixture.store().pending_close_session(root).is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        group.fixture.core.remote_tick(Instant::now() + Duration::from_secs(60));
+        group.fixture.core.commit();
+    }
+
+    let store = group.fixture.store_mut().unwrap();
+    assert!(store.pending_close_session(root).is_none());
+    for member in &members {
+        assert!(store.pending_close_session(*member).is_none());
+    }
+    assert!(!store.undo_pending_close(None));
+    assert!(store.session(root).is_none());
+    assert!(members.iter().all(|member| store.session(*member).is_none()));
+}
+
+/// Upstream's `ControlServerRemoteCompanionsTests.testAListedPageRootAttachesAtTopLevelAndItsCompanionsAttachUnderItLater`.
+#[test]
+fn a_listed_page_root_attaches_at_top_level_and_its_companions_attach_under_it_later() {
+    let listing = || {
+        tree(&[
+            page_root(&["c1", "pg"]),
+            terminal("c1", Some("PR")),
+            page_under("pg", "PR"),
+        ])
+    };
+    let mut group = Group::new(vec![
+        listing(),
+        root_attach(),
+        listing(),
+        listing(),
+        page_attach_of("pg", Some("PR"), PAGE_ID),
+    ]);
+    let current = group.fixture.store().current_workspace_id();
+    let attach = |group: &mut Group, session: &str| {
+        group.request(LiveCmd::Attach, session, args(|a| a.host = Some("buildbox".to_owned())))
+    };
+
+    let attached = attach(&mut group, "PR");
+
+    assert!(attached.ok, "{attached:?}");
+    assert_eq!(receipt(&attached).parent, None);
+    let row = Uuid::parse_str(receipt(&attached).id.as_deref().unwrap()).unwrap();
+    let found = group.fixture.store().session(row).unwrap();
+    assert_eq!(found.parent_id(), None);
+    assert_eq!(found.content(), crate::model::SessionContent::Page);
+    assert_eq!(found.remote_host(), Some("buildbox"));
+    assert_eq!(
+        group
+            .fixture
+            .store()
+            .workspace_for_session(row)
+            .map(crate::model::Workspace::id),
+        current
+    );
+
+    let terminal = attach(&mut group, "c1");
+    let page = attach(&mut group, "pg");
+
+    assert!(terminal.ok, "{terminal:?}");
+    assert!(page.ok, "{page:?}");
+    assert_eq!(group.origins(row), ["c1", "pg"]);
+    let contents: Vec<_> = group
+        .fixture
+        .store()
+        .companions(row)
+        .into_iter()
+        .map(crate::model::Session::content)
+        .collect();
+    assert_eq!(
+        contents,
+        [
+            crate::model::SessionContent::Terminal,
+            crate::model::SessionContent::Page
+        ]
+    );
+}
+
+/// Upstream's remote page contract: New Companion on a page root's row has the origin make one under that root.
+#[test]
+fn new_companion_on_a_page_roots_row_makes_one_under_that_root_on_the_origin() {
+    const C9: &str = "0E2B7C1A-5D4F-4E3B-9A61-7C2D8F0B1A23";
+    let created = json!({"ok":true,"result":{"id":C9,"parent":"PR"}});
+    let mut group = Group::new(vec![
+        tree(&[page_root(&[])]),
+        root_attach(),
+        tree(&[page_root(&[])]),
+        result(0, &created),
+        tree(&[page_root(&[C9]), terminal(C9, Some("PR"))]),
+    ]);
+    let reply = group.attach_root();
+    assert!(reply.ok, "{reply:?}");
+    let root = receipt(&reply).id.unwrap();
+
+    let response = group.fixture.session(
+        ngterm_proto::command::SessionCmd::CompanionNew,
+        Some(&root),
+        args(|a| a.no_select = Some(true)),
+    );
+
+    assert!(response.ok, "{response:?}");
+    assert_eq!(group.origins(Uuid::parse_str(&root).unwrap()), [C9]);
+    let create = group.runner.calls()[3].last().unwrap().clone();
+    for word in ["session", "new", "--parent", "PR"] {
+        assert!(create.contains(word), "{word}: {create}");
+    }
 }

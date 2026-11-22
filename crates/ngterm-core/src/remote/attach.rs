@@ -476,10 +476,12 @@ fn pick_item(session: &ControlRemoteSession) -> PickItem {
     }
 }
 
-/// The sessions of one app's answer a picker offers: a page companion attaches only under its parent's row, which the
-/// picker has no place for.
+/// The sessions of one app's answer a picker offers: a top-level page attaches as a group, but a page companion
+/// attaches only under its parent's row, which the picker has no place for.
 fn pickable(app: &ControlRemoteTree) -> impl Iterator<Item = &ControlRemoteSession> {
-    app.sessions.iter().filter(|session| is_pickable(session))
+    app.sessions
+        .iter()
+        .filter(|session| is_pickable(session) || session.parent.is_none())
 }
 
 /// What the Attach All row says of the `count` listed sessions no row here shows.
@@ -775,7 +777,11 @@ impl Core {
         let mut sessions: Vec<PickItem> = Vec::new();
         for app in tree.apps() {
             let rows = self.rows_attached_from(host, &app.endpoint);
-            unattached += pickable(app).filter(|session| !rows.contains_key(&session.id)).count();
+            // Attach All attaches no page, so a page row is no session it would attach
+            unattached += pickable_sessions(app)
+                .into_iter()
+                .filter(|session| !rows.contains_key(&session.id))
+                .count();
             let named = tree.beside.is_some().then(|| app.endpoint.peer());
             sessions.extend(app_items(app, named.filter(|peer| *peer != RemotePeer::Ngterm)));
         }

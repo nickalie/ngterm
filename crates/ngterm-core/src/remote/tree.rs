@@ -437,14 +437,25 @@ pub fn candidates(
             remote_session(node, window, workspace, daemons.get(node.id.as_str()).unwrap_or(&none))
         })
         .collect();
-    // a page companion owns no daemon, so it is listed with no panes when its parent is: it attaches under that
-    // parent's row through `session.companion.page.attach`, never on its own
-    let attachable: std::collections::HashSet<&str> = terminals.iter().map(|session| session.id.as_str()).collect();
+    // a page owns no daemon, so it is listed with no panes: this machine's own top-level page always, a page
+    // companion when its parent is; a row attached from another machine is never offered again
+    let own_page = |node: &ControlSessionNode| node.content.as_deref() == Some("page") && node.remote_host.is_none();
+    let attachable: std::collections::HashSet<&str> = terminals
+        .iter()
+        .map(|session| session.id.as_str())
+        .chain(
+            nodes(windows)
+                .filter(|(_, _, node)| own_page(node) && node.parent.is_none())
+                .map(|(_, _, node)| node.id.as_str()),
+        )
+        .collect();
     let pages: Vec<ControlRemoteSession> = nodes(windows)
-        .filter(|(_, _, node)| node.content.as_deref() == Some("page"))
+        .filter(|(_, _, node)| own_page(node))
         .filter_map(|(window, workspace, node)| {
-            let parent = node.parent.as_deref().filter(|parent| attachable.contains(parent))?;
-            Some(ControlRemoteSession {
+            let Some(parent) = node.parent.as_deref() else {
+                return Some(page_root(node, window, workspace));
+            };
+            attachable.contains(parent).then(|| ControlRemoteSession {
                 id: node.id.clone(),
                 name: node.name.clone(),
                 window_id: window.id.clone(),
@@ -525,19 +536,47 @@ fn remote_session(
         status_shape: node.status_shape.clone(),
         parent: node.parent.clone(),
         content: None,
-        // Membership comes from the unfiltered workspace, including rows that cannot attach.
-        companions: node.parent.is_none().then(|| {
-            workspace
-                .sessions
-                .iter()
-                .filter(|member| member.parent.as_deref() == Some(node.id.as_str()))
-                .map(|member| ControlRemoteMember {
-                    id: member.id.clone(),
-                    name: member.name.clone(),
-                })
-                .collect()
-        }),
+        companions: node.parent.is_none().then(|| members(node, workspace)),
     })
+}
+
+/// A top-level page session of this machine, listed with its whole group and no daemon.
+fn page_root(
+    node: &ControlSessionNode,
+    window: &RemoteWindowProjection,
+    workspace: &ControlWorkspaceNode,
+) -> ControlRemoteSession {
+    ControlRemoteSession {
+        id: node.id.clone(),
+        name: node.name.clone(),
+        window_id: window.id.clone(),
+        window_name: window.name.clone(),
+        workspace_id: workspace.id.clone(),
+        workspace_name: workspace.name.clone(),
+        context: node.context.clone(),
+        cwd: node.cwd.clone(),
+        split_axis: None,
+        panes: Vec::new(),
+        status: node.status.clone(),
+        status_color: node.status_color.clone(),
+        status_shape: node.status_shape.clone(),
+        parent: None,
+        content: Some("page".to_owned()),
+        companions: Some(members(node, workspace)),
+    }
+}
+
+// from the unfiltered workspace, so a companion this listing drops is still named as a member
+fn members(node: &ControlSessionNode, workspace: &ControlWorkspaceNode) -> Vec<ControlRemoteMember> {
+    workspace
+        .sessions
+        .iter()
+        .filter(|member| member.parent.as_deref() == Some(node.id.as_str()))
+        .map(|member| ControlRemoteMember {
+            id: member.id.clone(),
+            name: member.name.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -693,6 +732,104 @@ mod tests {
         assert_eq!(tree.sessions[1].parent.as_deref(), Some("s1"));
         assert_eq!(tree.sessions[1].content.as_deref(), Some("page"));
         assert_eq!(tree.sessions[0].parent, None);
+    }
+
+    fn page_node(id: &str, name: &str, parent: Option<&str>, remote_host: Option<&str>) -> ControlSessionNode {
+        let mut page = node(id, name, "/srv", false, None);
+        page.parent = parent.map(str::to_owned);
+        page.content = Some("page".to_owned());
+        page.remote_host = remote_host.map(str::to_owned);
+        page
+    }
+
+    fn companion(id: &str, name: &str, parent: &str) -> ControlSessionNode {
+        let mut companion = node(id, name, "/repo", false, Some(true));
+        companion.parent = Some(parent.to_owned());
+        companion
+    }
+
+    fn ids(tree: &ControlRemoteTree) -> Vec<&str> {
+        tree.sessions.iter().map(|session| session.id.as_str()).collect()
+    }
+
+    /// Upstream's `RemoteTreeTests.aTopLevelPageIsListedWithItsWholeGroupWithNoDaemonAtAll`.
+    #[test]
+    fn a_top_level_page_is_listed_with_its_whole_group_with_no_daemon_at_all() {
+        let mut root = page_node("pr", "dash", None, None);
+        root.status = Some("active".to_owned());
+        root.context = Some("board".to_owned());
+        let windows = [window(
+            "w-1",
+            "main",
+            vec![workspace(
+                "ws-1",
+                "work",
+                vec![
+                    root,
+                    companion("c1", "logs", "pr"),
+                    page_node("pg", "report", Some("pr"), None),
+                ],
+            )],
+        )];
+        let tree = candidates(&windows, &inventory(&[], true)).unwrap();
+        assert_eq!(ids(&tree), ["pr", "pg"]);
+        let listed = &tree.sessions[0];
+        assert!(listed.panes.is_empty());
+        assert_eq!(listed.parent, None);
+        assert_eq!(listed.content.as_deref(), Some("page"));
+        assert_eq!(listed.context.as_deref(), Some("board"));
+        assert_eq!(listed.status.as_deref(), Some("active"));
+        let member = |id: &str, name: &str| ControlRemoteMember {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        };
+        assert_eq!(
+            listed.companions,
+            Some(vec![member("c1", "logs"), member("pg", "report")]),
+            "a terminal companion with no daemon is still named as a member"
+        );
+        assert_eq!(tree.sessions[1].parent.as_deref(), Some("pr"));
+        assert_eq!(tree.endpoint, endpoint());
+    }
+
+    /// Upstream's `RemoteTreeTests.aTerminalCompanionOfATopLevelPageIsOfferedWhenItsDaemonRuns`.
+    #[test]
+    fn a_terminal_companion_of_a_top_level_page_is_offered_when_its_daemon_runs() {
+        let left = daemon_name(Uuid::new_v4());
+        let windows = [window(
+            "w-1",
+            "main",
+            vec![workspace(
+                "ws-1",
+                "work",
+                vec![page_node("pr", "dash", None, None), companion("c1", "logs", "pr")],
+            )],
+        )];
+        let tree = candidates(&windows, &inventory(&[running("c1", "left", &left)], true)).unwrap();
+        assert_eq!(ids(&tree), ["c1", "pr"]);
+        assert_eq!(tree.sessions[0].parent.as_deref(), Some("pr"));
+    }
+
+    /// Upstream's `RemoteTreeTests.aPageAttachedFromAnotherMacIsNeverOfferedAgain`.
+    #[test]
+    fn a_page_attached_from_another_machine_is_never_offered_again() {
+        let left = daemon_name(Uuid::new_v4());
+        let windows = [window(
+            "w-1",
+            "main",
+            vec![workspace(
+                "ws-1",
+                "work",
+                vec![
+                    page_node("pr", "dash", None, Some("buildbox")),
+                    page_node("pg", "report", Some("pr"), Some("buildbox")),
+                    node("s1", "build", "/repo", false, Some(true)),
+                    page_node("pg2", "notes", Some("s1"), Some("buildbox")),
+                ],
+            )],
+        )];
+        let tree = candidates(&windows, &inventory(&[running("s1", "left", &left)], true)).unwrap();
+        assert_eq!(ids(&tree), ["s1"]);
     }
 
     /// Upstream's `RemoteTreeTests.aParentListsEveryCompanionInSidebarOrderAttachableOrNot`.

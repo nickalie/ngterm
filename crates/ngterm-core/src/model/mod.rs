@@ -79,7 +79,7 @@ pub use pending_close::{
 };
 pub use recency::{RECENCY_LIMIT, RecencyStack};
 pub use recent_closed::{RecentClosedReopen, RecentClosedRestore};
-pub use remote_companions::{RemoteCompanionPlace, ReplicaPageRefusal, ReplicaPageSeed};
+pub use remote_companions::{RemoteCompanionPlace, ReplicaPageRefusal, ReplicaPageRoot, ReplicaPageSeed};
 pub(crate) use remote_overlay::HandedOn;
 pub use remote_overlay::{RemoteOverlayChange, RemoteOverlayOutcome, RemoteOverlaySlot, RemoteOverlays, RemotePage};
 pub use remote_presentation::{RemoteBinding, RemoteConnection, RemoteOrigin, RemotePresentationState};

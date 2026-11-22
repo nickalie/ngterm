@@ -177,7 +177,9 @@ fn an_unusable_page_handover_never_adds_a_companion_row() {
     let attach = PageAttach {
         origin_session: "remote-page".to_owned(),
         host: "studio".to_owned(),
-        parent,
+        spot: PageSpot::Companion(parent),
+        origin: None,
+        peer: crate::remote::peer::peer_of("studio"),
         select: false,
         reuse_shown: false,
         answer: Answer::default(),
@@ -186,7 +188,7 @@ fn an_unusable_page_handover_never_adds_a_companion_row() {
     let mut bad = page();
     bad.page = "invalid".to_owned();
     assert_eq!(
-        core.show_companion_page(&attach, &bad).unwrap_err(),
+        core.show_origin_page(&attach, &bad).unwrap_err(),
         "the page cannot be shown here"
     );
     bad = page();
@@ -194,13 +196,13 @@ fn an_unusable_page_handover_never_adds_a_companion_row() {
         address: "file:///etc/passwd".to_owned(),
     };
     assert_eq!(
-        core.show_companion_page(&attach, &bad).unwrap_err(),
+        core.show_origin_page(&attach, &bad).unwrap_err(),
         "the page cannot be shown here"
     );
     bad = page();
     bad.token = "bad token".to_owned();
     assert_eq!(
-        core.show_companion_page(&attach, &bad).unwrap_err(),
+        core.show_origin_page(&attach, &bad).unwrap_err(),
         "the page cannot be reached on studio"
     );
     assert_eq!(core.library().store(window).unwrap().sessions().count(), before);

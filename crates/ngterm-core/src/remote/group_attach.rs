@@ -1,21 +1,23 @@
-//! One discovery followed by ordered companion attachments (upstream `ControlServer+RemoteGroup.swift`).
+//! One discovery followed by ordered companion attachments (upstream `ControlServer+RemoteGroup.swift`). A group
+//! whose parent is a top-level page session starts with that page's handover, as a top-level row here.
 
 use std::time::Duration;
 
 use ngterm_proto::{
-    ControlRemoteGroup, ControlRemoteGroupMember, ControlRemoteMember, ControlRemoteTree, ControlResult, Request,
-    Response,
+    ControlRemoteGroup, ControlRemoteGroupMember, ControlRemoteMember, ControlRemoteSession, ControlRemoteTree,
+    ControlResult, Request, Response,
 };
 use uuid::Uuid;
 
 use super::attach::{AttachRequest, Placement, start_tree_read};
-use super::companions::{PageAttach, Step};
+use super::companions::{PageAttach, PageSpot, Step};
 use super::origin_replies::read_remote_tree;
 use super::tree;
 use super::viewer::{Answer, take_answer};
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
+use crate::model::RemoteOrigin;
 use crate::pane_env::uuid_string;
 use crate::resolve::{Resolver, trimmed};
 
@@ -32,7 +34,16 @@ pub(crate) struct GroupRun {
 #[derive(Debug)]
 enum State {
     Discovering(Answer),
+    /// The group's parent is a top-level page, whose handover runs before its members attach.
+    Rooting(Box<Rooting>),
     Attaching(Box<Attached>),
+}
+
+#[derive(Debug)]
+struct Rooting {
+    tree: ControlRemoteTree,
+    remote: ControlRemoteSession,
+    page: PageAttach,
 }
 
 #[derive(Debug)]
@@ -100,12 +111,35 @@ pub(crate) fn step(core: &mut Core, mut run: GroupRun) -> GroupStep {
             let Some(result) = take_answer(answer) else {
                 return GroupStep::Pending(run, POLL);
             };
-            let attached = match discovered(core, &run.request, &result) {
-                Ok(attached) => attached,
+            run.state = match discovered(core, &run.request, &result) {
+                Ok(state) => state,
                 Err(error) => return GroupStep::Done(Response::failure(error.to_string())),
             };
-            run.state = State::Attaching(Box::new(attached));
             step(core, run)
+        }
+        State::Rooting(rooting) => {
+            let Rooting { tree, remote, page } = *rooting;
+            let result = match core.step_page_attach(page) {
+                Step::Pending(page, after) => {
+                    run.state = State::Rooting(Box::new(Rooting { tree, remote, page }));
+                    return GroupStep::Pending(run, after);
+                }
+                Step::Done(result) => *result,
+            };
+            let parent = result.and_then(|result| {
+                result
+                    .id
+                    .as_deref()
+                    .and_then(super::frames::parse_uuid)
+                    .ok_or_else(|| "attach failed".to_owned())
+            });
+            match parent {
+                Ok(parent) => {
+                    run.state = State::Attaching(Box::new(Attached::new(tree, &remote, parent)));
+                    step(core, run)
+                }
+                Err(error) => GroupStep::Done(Response::failure(error)),
+            }
         }
         State::Attaching(mut attached) => {
             if let Some(page) = attached.page.take() {
@@ -134,7 +168,7 @@ fn discovered(
     core: &mut Core,
     request: &AttachRequest,
     result: &super::tree::RemoteCommandResult,
-) -> Result<Attached, ControlError> {
+) -> Result<State, ControlError> {
     let tree = read_remote_tree(result, &request.host).map_err(ControlError::rejected)?;
     let tree = tree.listing(&request.session).clone();
     let remote = tree
@@ -143,8 +177,9 @@ fn discovered(
         .find(|row| row.id == request.session)
         .ok_or_else(|| {
             ControlError::rejected(format!("no attachable session {} on {}", request.session, request.host))
-        })?;
-    if remote.parent.is_some() || remote.content.is_some() {
+        })?
+        .clone();
+    if remote.parent.is_some() {
         return Err(ControlError::rejected(format!(
             "{} is a companion, not a group's parent",
             request.session
@@ -154,31 +189,28 @@ fn discovered(
     let placement = core
         .workspace_placement(window, true)
         .ok_or_else(|| ControlError::rejected("no window to attach into"))?;
-    let result = core.attach_remote_session(remote, &tree, &request.host, placement)?;
+    if remote.content.as_deref() == Some("page") {
+        let origin = RemoteOrigin {
+            host: request.host.clone(),
+            endpoint: tree.endpoint.clone(),
+            session_name: remote.name.clone(),
+        };
+        let spot = PageSpot::Root {
+            window,
+            workspace: placement.workspace,
+        };
+        let page = core
+            .start_page_attach(&remote.id, &request.host, spot, Some(origin), true)
+            .map_err(ControlError::rejected)?;
+        return Ok(State::Rooting(Box::new(Rooting { tree, remote, page })));
+    }
+    let result = core.attach_remote_session(&remote, &tree, &request.host, placement)?;
     let parent = result
         .id
         .as_deref()
         .and_then(super::frames::parse_uuid)
         .ok_or_else(|| ControlError::rejected("could not create the session"))?;
-    let members = remote.companions.clone().unwrap_or_else(|| {
-        tree.sessions
-            .iter()
-            .filter(|row| row.parent.as_deref() == Some(remote.id.as_str()))
-            .map(|row| ControlRemoteMember {
-                id: row.id.clone(),
-                name: row.name.clone(),
-            })
-            .collect()
-    });
-    Ok(Attached {
-        parent,
-        name: remote.name.clone(),
-        known: remote.companions.is_some(),
-        members,
-        outcomes: Vec::new(),
-        page: None,
-        tree,
-    })
+    Ok(State::Attaching(Box::new(Attached::new(tree, &remote, parent))))
 }
 
 fn next_member(core: &mut Core, host: &str, attached: &mut Attached) -> Option<PageAttach> {
@@ -192,7 +224,12 @@ fn next_member(core: &mut Core, host: &str, attached: &mut Attached) -> Option<P
         return None;
     };
     let outcome = if row.content.as_deref() == Some("page") {
-        match core.start_page_attach(&row.id, host, attached.parent, false) {
+        let origin = RemoteOrigin {
+            host: host.to_owned(),
+            endpoint: attached.tree.endpoint.clone(),
+            session_name: row.name.clone(),
+        };
+        match core.start_page_attach(&row.id, host, PageSpot::Companion(attached.parent), Some(origin), false) {
             Ok(page) => return Some(page),
             Err(reason) => Err(reason),
         }
@@ -205,6 +242,30 @@ fn next_member(core: &mut Core, host: &str, attached: &mut Attached) -> Option<P
 }
 
 impl Attached {
+    /// The group of `remote`, one session of `tree`, whose row here is `parent`: its members, from the origin's own
+    /// list when it gave one, else the listed sessions under it.
+    fn new(tree: ControlRemoteTree, remote: &ControlRemoteSession, parent: Uuid) -> Self {
+        let members = remote.companions.clone().unwrap_or_else(|| {
+            tree.sessions
+                .iter()
+                .filter(|row| row.parent.as_deref() == Some(remote.id.as_str()))
+                .map(|row| ControlRemoteMember {
+                    id: row.id.clone(),
+                    name: row.name.clone(),
+                })
+                .collect()
+        });
+        Self {
+            parent,
+            name: remote.name.clone(),
+            known: remote.companions.is_some(),
+            members,
+            outcomes: Vec::new(),
+            page: None,
+            tree,
+        }
+    }
+
     fn record(&mut self, result: Result<ControlResult, String>) {
         let origin = self.members[self.outcomes.len()].id.clone();
         let (id, error) = match result {

@@ -332,7 +332,8 @@ fn an_origin_refusal_or_an_older_origin_creates_nothing_here() {
 
 /// Runs one page attachment to its end.
 fn attach_page(core: &mut Core, parent: Uuid) -> Result<ngterm_proto::ControlResult, String> {
-    let mut attach = core.start_page_attach(CREATED, "buildbox", parent, false)?;
+    let spot = crate::remote::companions::PageSpot::Companion(parent);
+    let mut attach = core.start_page_attach(CREATED, "buildbox", spot, None, false)?;
     loop {
         match core.step_page_attach(attach) {
             crate::remote::companions::Step::Pending(next, _) => attach = next,

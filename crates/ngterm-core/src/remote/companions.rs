@@ -6,7 +6,8 @@
 //!
 //! A page companion stays the other machine's: the row here shows one attachment of it (`session.companion.page.attach`
 //! there), over its own page channel, and closes when the page ends there, its outcome copied in first. `live attach`
-//! of a page row attaches it under the one row here showing its parent.
+//! of a page companion attaches it under the one row here showing its parent; of a top-level page session, as a
+//! top-level row of the window's current workspace, which takes the origin's later companions under it.
 //!
 //! Each run is a [`CompanionFlow`] stepped on the main loop: a control request waits on it ([`drive`]), the GUI's runs
 //! from the remote tick with a progress and a failure HUD over the row ([`Core::begin_gui_remote_companion`]). Closing
@@ -36,7 +37,10 @@ use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::html::{self, HtmlOverlay, HtmlPageFlags, HtmlSource};
-use crate::model::{CompanionOptions, RemoteBinding, ReplicaPageRefusal, ReplicaPageSeed, SessionContent, SidebarTint};
+use crate::model::{
+    CompanionOptions, RemoteBinding, RemoteOrigin, ReplicaPageRefusal, ReplicaPageRoot, ReplicaPageSeed,
+    SessionContent, SidebarTint,
+};
 use crate::pane_env::uuid_string;
 use crate::resolve::Resolver;
 
@@ -47,6 +51,9 @@ const POLL: Duration = Duration::from_millis(50);
 const NOT_ATTACHED: &str = "the remote session is not attached";
 const INVALID_HOST: &str = "invalid host";
 const PARENT_CLOSED: &str = "its parent row here was closed";
+/// Upstream's refusal of a top-level page whose destination closed during the handover.
+const DESTINATION_CLOSED: &str = "the window or workspace to attach into was closed";
+const NO_WINDOW: &str = "no window to attach into";
 
 /// A page companion the origin is asked to open: the page `session.companion.page` validated.
 #[derive(Debug, Clone)]
@@ -194,12 +201,24 @@ pub(crate) struct CompanionFlow {
     progress: Option<String>,
 }
 
-/// One attachment of a page companion of another machine being shown here (upstream's `attachRemotePage`).
+/// Where an origin's page goes here (upstream's `RemotePageSpot`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PageSpot {
+    /// Under this top-level row attached from that machine.
+    Companion(Uuid),
+    /// A top-level row of `workspace` in window `window`.
+    Root { window: Uuid, workspace: Uuid },
+}
+
+/// One attachment of a page session of another machine being shown here (upstream's `attachRemotePage`).
 #[derive(Debug)]
 pub(crate) struct PageAttach {
     origin_session: String,
     host: String,
-    parent: Uuid,
+    spot: PageSpot,
+    /// The origin's endpoint and session name, which let a companion attached later find this row as its parent.
+    origin: Option<RemoteOrigin>,
+    peer: super::peer::RemotePeer,
     select: bool,
     /// The row already showing this companion answers the attach instead of a second one. Only the two attaches that
     /// can race for one new companion set it, a headless origin's handover and this machine's own create; a
@@ -209,6 +228,14 @@ pub(crate) struct PageAttach {
 }
 
 impl PageAttach {
+    /// The row the page goes under; `None` for a top-level page.
+    fn parent(&self) -> Option<Uuid> {
+        match self.spot {
+            PageSpot::Companion(parent) => Some(parent),
+            PageSpot::Root { .. } => None,
+        }
+    }
+
     /// This attach answers with a row already showing its companion ([`PageAttach::reuse_shown`]).
     fn reusing_shown(self) -> Self {
         Self {
@@ -239,8 +266,9 @@ fn drive_page(attach: PageAttach) -> Dispatched {
     }
 }
 
-/// `live.attach HOST ID` of a page companion (upstream's `attachRemotePageRow`): attached under the one row here, in
-/// the request's window, showing its parent from the same origin.
+/// `live.attach HOST ID` of a page (upstream's `attachRemotePageRow`): a top-level page as a row of the request's
+/// window's current workspace, a page companion under the one row here, in that window, showing its parent from the
+/// same origin.
 pub(crate) fn begin_page_row_attach(
     core: &mut Core,
     remote: &ControlRemoteSession,
@@ -252,18 +280,37 @@ pub(crate) fn begin_page_row_attach(
         Ok(window) => window,
         Err(error) => return Dispatched::done(Err(error)),
     };
-    let rows = matching_parent_rows(core, window, host, remote.parent.as_deref(), &tree.endpoint);
-    let [parent] = rows[..] else {
-        let error = if rows.is_empty() {
-            format!("attach the page's parent session from {host} first")
-        } else {
-            "more than one row here shows the page's parent".to_owned()
-        };
-        return Dispatched::done(Err(ControlError::rejected(error)));
+    let spot = match page_row_spot(core, window, remote, tree, host) {
+        Ok(spot) => spot,
+        Err(error) => return Dispatched::done(Err(ControlError::rejected(error))),
     };
-    match core.start_page_attach(&remote.id, host, parent, true) {
+    let origin = RemoteOrigin {
+        host: host.to_owned(),
+        endpoint: tree.endpoint.clone(),
+        session_name: remote.name.clone(),
+    };
+    match core.start_page_attach(&remote.id, host, spot, Some(origin), true) {
         Ok(attach) => drive_page(attach),
         Err(error) => Dispatched::done(Err(ControlError::rejected(error))),
+    }
+}
+
+fn page_row_spot(
+    core: &Core,
+    window: Uuid,
+    remote: &ControlRemoteSession,
+    tree: &ControlRemoteTree,
+    host: &str,
+) -> Result<PageSpot, String> {
+    if remote.parent.is_none() {
+        let workspace = core.workspace_placement(window, true).ok_or(NO_WINDOW)?.workspace;
+        return Ok(PageSpot::Root { window, workspace });
+    }
+    let rows = matching_parent_rows(core, window, host, remote.parent.as_deref(), &tree.endpoint);
+    match rows[..] {
+        [parent] => Ok(PageSpot::Companion(parent)),
+        [] => Err(format!("attach the page's parent session from {host} first")),
+        _ => Err("more than one row here shows the page's parent".to_owned()),
     }
 }
 
@@ -455,7 +502,9 @@ impl Core {
         flow.progress = Some("attaching the companion…".to_owned());
         if matches!(flow.request, RemoteCompanionRequest::Page(_)) {
             // a page is attachable as soon as it exists, so there is nothing to wait for
-            return match self.start_page_attach(&created, &host, flow.parent, flow.select) {
+            let origin = self.companion_origin(flow.parent, &created);
+            let spot = PageSpot::Companion(flow.parent);
+            return match self.start_page_attach(&created, &host, spot, origin, flow.select) {
                 // a headless origin's handover of the same companion may attach it first
                 Ok(attach) => {
                     let attach = attach.reusing_shown();
@@ -558,7 +607,8 @@ impl Core {
 
     // MARK: - a page companion's attachment
 
-    /// Asks `host` for one attachment of its page companion `origin_session`, to show under row `parent` here.
+    /// Asks `host` for one attachment of its page session `origin_session`, to show at `spot` here; `origin` binds
+    /// the row to the origin's endpoint.
     ///
     /// # Errors
     ///
@@ -567,10 +617,15 @@ impl Core {
         &mut self,
         origin_session: &str,
         host: &str,
-        parent: Uuid,
+        spot: PageSpot,
+        origin: Option<RemoteOrigin>,
         select: bool,
     ) -> Result<PageAttach, String> {
-        let peer = self.remote_row_peer(parent, host);
+        let peer = match (spot, &origin) {
+            (PageSpot::Companion(parent), _) => self.remote_row_peer(parent, host),
+            (PageSpot::Root { .. }, Some(origin)) => origin.endpoint.peer(),
+            (PageSpot::Root { .. }, None) => super::peer::peer_of(host),
+        };
         let argv = control_command(
             host,
             peer,
@@ -582,7 +637,9 @@ impl Core {
         Ok(PageAttach {
             origin_session: origin_session.to_owned(),
             host: host.to_owned(),
-            parent,
+            spot,
+            origin,
+            peer,
             select,
             reuse_shown: false,
             answer,
@@ -593,15 +650,72 @@ impl Core {
         match take_answer(&attach.answer) {
             None => Step::Pending(attach, POLL),
             Some(result) => {
-                Step::done(handed_page(&result, &attach.host).and_then(|page| self.show_companion_page(&attach, &page)))
+                Step::done(handed_page(&result, &attach.host).and_then(|page| self.show_origin_page(&attach, &page)))
             }
         }
     }
 
-    /// Shows the page `host` handed over as a page companion row under `parent` (the rest of upstream's
-    /// `attachRemotePage`); the row carries the origin's page session, so New Companion on it makes a sibling there.
-    fn show_companion_page(&mut self, attach: &PageAttach, page: &PresentationPage) -> Result<ControlResult, String> {
+    /// Shows the page `host` handed over as a row at the attach's spot (the rest of upstream's `attachRemotePage`);
+    /// the row carries the origin's page session, so New Companion on it has that machine make one there.
+    fn show_origin_page(&mut self, attach: &PageAttach, page: &PresentationPage) -> Result<ControlResult, String> {
         let host = attach.host.as_str();
+        self.check_origin_page(host, page)?;
+        if let Some(parent) = attach.parent() {
+            if self.library().store_for_session(parent).is_none() {
+                return Err(PARENT_CLOSED.to_owned());
+            }
+            // the origin's handover and this machine's own create can both attach the same companion
+            if attach.reuse_shown
+                && let Some(shown) = self.shown_page_companion(parent, &attach.origin_session)
+            {
+                return Ok(self.reuse_page_companion(attach, shown));
+            }
+        }
+        let cannot_show = || "the page cannot be shown here".to_owned();
+        let origin = frames::parse_uuid(&page.page).ok_or_else(cannot_show)?;
+        let source = super::replica_page::replica_source(&page.source).ok_or_else(cannot_show)?;
+        let serve = page_serve_command(host, attach.peer, &page.token)
+            .map_err(|_| format!("the page cannot be reached on {host}"))?;
+        let flags = HtmlPageFlags {
+            navigation: page.navigation,
+            javascript: page.javascript,
+            chromeless: page.chromeless,
+            persistent: page.persistent,
+            browse: page.browse,
+        };
+        let mut overlay = HtmlOverlay::new(source, flags);
+        overlay.replica_of = Some(origin);
+        let local = overlay.id;
+        let seed = ReplicaPageSeed {
+            overlay,
+            background_color: page.background_color.clone(),
+            remote_session_id: Some(attach.origin_session.clone()),
+        };
+        let row = self.place_origin_page(attach, seed)?;
+        if let Some(store) = self.library_mut().store_for_session_mut(row) {
+            store.bind_remote(
+                RemoteBinding::new(
+                    attach.origin_session.clone(),
+                    HashMap::new(),
+                    None,
+                    attach.origin.clone(),
+                ),
+                row,
+            );
+        }
+        // its outcome is the other machine's, copied in when that machine ends the page; a close here dismisses it
+        self.register_page_outcome(local);
+        self.follow_companion_replica(local, row, origin, host, &serve);
+        Ok(ControlResult {
+            page_id: Some(uuid_string(local)),
+            parent: attach.parent().map(uuid_string),
+            ..ControlResult::id(uuid_string(row))
+        })
+    }
+
+    /// Whether this machine can show `page` from `host`: never one on that machine's loopback, only with web views
+    /// that run, and a persistent one only with a usable browser store.
+    fn check_origin_page(&self, host: &str, page: &PresentationPage) -> Result<(), String> {
         if let PresentationPageSource::Url { address } = &page.source
             && html::is_loopback(address)
         {
@@ -617,64 +731,55 @@ impl Core {
         {
             return Err(failure);
         }
-        if self.library().store_for_session(attach.parent).is_none() {
-            return Err(PARENT_CLOSED.to_owned());
-        }
-        // the origin's handover and this machine's own create can both attach the same companion
-        if attach.reuse_shown
-            && let Some(shown) = self.shown_page_companion(attach.parent, &attach.origin_session)
-        {
-            return Ok(self.reuse_page_companion(attach, shown));
-        }
-        let cannot_show = || "the page cannot be shown here".to_owned();
-        let origin = frames::parse_uuid(&page.page).ok_or_else(cannot_show)?;
-        let source = super::replica_page::replica_source(&page.source).ok_or_else(cannot_show)?;
-        let peer = self.remote_row_peer(attach.parent, host);
-        let serve =
-            page_serve_command(host, peer, &page.token).map_err(|_| format!("the page cannot be reached on {host}"))?;
-        let flags = HtmlPageFlags {
-            navigation: page.navigation,
-            javascript: page.javascript,
-            chromeless: page.chromeless,
-            persistent: page.persistent,
-            browse: page.browse,
-        };
-        let mut overlay = HtmlOverlay::new(source, flags);
-        overlay.replica_of = Some(origin);
-        let local = overlay.id;
+        Ok(())
+    }
+
+    /// Adds the row showing `seed` at the attach's spot, read only now: the ssh wait lets the parent row, the window
+    /// or the workspace close.
+    fn place_origin_page(&mut self, attach: &PageAttach, seed: ReplicaPageSeed) -> Result<Uuid, String> {
         let home = self.library().home().to_owned();
-        let store = self
-            .library_mut()
-            .store_for_session_mut(attach.parent)
-            .ok_or(PARENT_CLOSED)?;
-        let row = store
-            .add_replica_page_companion(
-                attach.parent,
-                ReplicaPageSeed {
-                    overlay,
-                    background_color: page.background_color.clone(),
-                    remote_session_id: Some(attach.origin_session.clone()),
-                },
-                attach.select,
-                &home,
-            )
-            .map_err(|refusal| match refusal {
-                ReplicaPageRefusal::ParentGone => "the parent row here is gone".to_owned(),
-                ReplicaPageRefusal::NotOpened(failure) => {
-                    crate::commands::overlay_page::open_failure(failure, None).to_owned()
-                }
-            })?;
-        store.bind_remote(
-            RemoteBinding::new(attach.origin_session.clone(), HashMap::new(), None, None),
-            row,
-        );
-        // its outcome is the other machine's, copied in when that machine ends the page; a close here dismisses it
-        self.register_page_outcome(local);
-        self.follow_companion_replica(local, row, origin, host, &serve);
-        Ok(ControlResult {
-            page_id: Some(uuid_string(local)),
-            parent: Some(uuid_string(attach.parent)),
-            ..ControlResult::id(uuid_string(row))
+        let refused = |refusal: ReplicaPageRefusal| match refusal {
+            ReplicaPageRefusal::NotOpened(failure) => {
+                crate::commands::overlay_page::open_failure(failure, None).to_owned()
+            }
+            other => other.message().unwrap_or_default().to_owned(),
+        };
+        match attach.spot {
+            PageSpot::Companion(parent) => self
+                .library_mut()
+                .store_for_session_mut(parent)
+                .ok_or(PARENT_CLOSED)?
+                .add_replica_page_companion(parent, seed, attach.select, &home)
+                .map_err(refused),
+            PageSpot::Root { window, workspace } => {
+                let name = attach.origin.as_ref().map(|origin| origin.session_name.clone());
+                let open = self.library().is_open(window);
+                self.library_mut()
+                    .store_mut(window)
+                    .filter(|store| open && store.workspace(workspace).is_some())
+                    .ok_or(DESTINATION_CLOSED)?
+                    .add_replica_page_root(
+                        ReplicaPageRoot {
+                            workspace,
+                            host: attach.host.clone(),
+                            name,
+                        },
+                        seed,
+                        attach.select,
+                        &home,
+                    )
+                    .map_err(refused)
+            }
+        }
+    }
+
+    /// The origin of a companion `session` of remote row `parent`: the parent's endpoint, under the companion's name.
+    fn companion_origin(&self, parent: Uuid, session: &str) -> Option<RemoteOrigin> {
+        let found = self.library().held_session(parent)?;
+        let origin = found.remote_presentation()?.binding.origin.as_ref()?;
+        Some(RemoteOrigin {
+            session_name: session.to_owned(),
+            ..origin.clone()
         })
     }
 
@@ -702,7 +807,7 @@ impl Core {
         }
         ControlResult {
             page_id: Some(uuid_string(page)),
-            parent: Some(uuid_string(attach.parent)),
+            parent: attach.parent().map(uuid_string),
             ..ControlResult::id(uuid_string(row))
         }
     }
@@ -719,7 +824,7 @@ impl Core {
             .viewer
             .handed_companions
             .iter()
-            .any(|attach| attach.parent == row && attach.origin_session == origin_session);
+            .any(|attach| attach.parent() == Some(row) && attach.origin_session == origin_session);
         if pending || self.shown_page_companion(row, origin_session).is_some() {
             return;
         }
@@ -732,7 +837,8 @@ impl Core {
         let Some(host) = host else {
             return;
         };
-        match self.start_page_attach(origin_session, &host, row, false) {
+        let origin = self.companion_origin(row, origin_session);
+        match self.start_page_attach(origin_session, &host, PageSpot::Companion(row), origin, false) {
             Ok(attach) => self.remote.viewer.handed_companions.push(attach.reusing_shown()),
             Err(reason) => self.handed_companion_failed(row, &host, &reason),
         }
@@ -741,11 +847,11 @@ impl Core {
     /// Moves every handed-over page companion's attach on.
     pub(crate) fn advance_handed_companions(&mut self) {
         for attach in std::mem::take(&mut self.remote.viewer.handed_companions) {
-            let (row, host) = (attach.parent, attach.host.clone());
+            let (row, host) = (attach.parent(), attach.host.clone());
             match self.step_page_attach(attach) {
                 Step::Pending(attach, _) => self.remote.viewer.handed_companions.push(attach),
                 Step::Done(done) => {
-                    if let Err(reason) = *done {
+                    if let (Err(reason), Some(row)) = (*done, row) {
                         self.handed_companion_failed(row, &host, &reason);
                     }
                 }

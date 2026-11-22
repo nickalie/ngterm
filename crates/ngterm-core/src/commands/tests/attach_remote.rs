@@ -2251,6 +2251,43 @@ fn choosing_a_parent_rediscovers_its_group_even_when_the_picker_said_empty() {
     assert_eq!(attach.runner.hosts().len(), 2);
 }
 
+/// Upstream's `RemoteAttachTests.testThePickerOffersATopLevelPageAsAGroupAndHidesPageCompanions`: Attach All
+/// attaches no page, so its count leaves the page root out.
+#[test]
+fn the_picker_offers_a_top_level_page_as_a_group_and_hides_page_companions() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let mut dash = page_session(5, 0);
+    dash["name"] = json!("dash");
+    dash.as_object_mut().unwrap().remove("parent");
+    dash["companions"] = json!([{ "id": Uuid::from_u128(6).to_string().to_uppercase(), "name": "page" }]);
+    let listed = [
+        numbered_session("one", 1, None),
+        page_session(4, 1),
+        dash,
+        page_session(6, 5),
+    ];
+    let picker = attach.open_session_picker(0, &listed);
+    assert_eq!(labels(&picker), ["Attach All", "New Session", "one", "dash"]);
+    assert_eq!(picker.items[0], attach_all_row("1 session not attached here"));
+
+    attach.resolve(&picker, picker.picked(FIRST_SESSION + 1).unwrap());
+    attach.wait_for_runs(2);
+    attach.runner.answer(1, listing(&listed));
+    attach.wait_for_runs(3);
+
+    let line = &attach.runner.lines()[2];
+    assert!(
+        line.contains("page-attach"),
+        "the group starts with the page's handover: {line}"
+    );
+    assert!(line.contains(&Uuid::from_u128(5).to_string().to_uppercase()), "{line}");
+    attach.runner.answer(2, refused("no such page"));
+    attach.drive("the attach ends", |attach| {
+        attach.hud() == Some(failure("no such page"))
+    });
+    assert!(attach.remote_rows().is_empty());
+}
+
 #[test]
 fn choosing_a_companion_attaches_it_alone_with_a_hierarchical_picker_label() {
     let mut attach = Attach::new(Some("studio\n"));

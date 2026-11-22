@@ -1,33 +1,26 @@
-"""Loopback pages of a session attached from another machine (`live attach HOST ID`), against an origin that is a second
-instance of the build behind the harness's own sshd (`remote_origin`): a page the origin opens at
-`http://127.0.0.1:PORT/` names a server on the origin, so the viewer forwards a port of its own loopback to it over ssh
-and loads the page there (`ngterm-core`'s `remote/page_tunnel.rs`). Upstream refuses such a page instead.
+"""Pages of sessions attached from another machine (`live attach HOST ID`), against an origin that is a second instance
+of the build behind the harness's own sshd (`remote_origin`).
 
-The origin and the viewer share this machine's loopback, so the origin's server port is always busy here, and every
-forward takes a port of its own."""
+A page the origin opens at `http://127.0.0.1:PORT/` names a server on the origin, so the viewer forwards a port of its
+own loopback to it over ssh and loads the page there (`ngterm-core`'s `remote/page_tunnel.rs`). Upstream refuses such a
+page instead. The origin and the viewer share this machine's loopback, so the origin's server port is always busy here,
+and every forward takes a port of its own.
+
+A top-level page session (`session.page`) of the origin attaches as a top-level row with its group (#930)."""
 
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlsplit
 
 import pytest
 from agterm_conformance.loopback import serve
-from agterm_conformance.match import assert_ok, find_session, session_ids
+from agterm_conformance.match import assert_absent, assert_ok, assert_subset, find_session, session_ids
 from agterm_conformance.plugin import Ctl
 
-pytestmark = [
-    # the loopback machine's sshd is POSIX only
-    pytest.mark.requires(
-        "posix-command-line",
-        reason="the remote origin's sshd is POSIX only, and a Windows viewer runs a remote pane through viewer-run",
-    ),
-    # The forward has no capability of its own; the build claims live-any-shell wherever it runs Live, and the
-    # reference, which refuses a loopback page bound for another machine, does not.
-    pytest.mark.requires(
-        "live-any-shell",
-        reason="the origin's session must be Live in any login shell, and the loopback page forward is the Rust "
-        "build's extension: upstream refuses the page",
-    ),
-]
+# the loopback machine's sshd is POSIX only
+POSIX_SSHD = pytest.mark.requires(
+    "posix-command-line",
+    reason="the remote origin's sshd is POSIX only, and a Windows viewer runs a remote pane through viewer-run",
+)
 
 TITLE = "Origin Board"
 BODY = f"<!doctype html><title>{TITLE}</title><p>served on the origin</p>".encode()
@@ -77,6 +70,14 @@ def _loaded(viewer, local):
     return page
 
 
+@POSIX_SSHD
+# The forward has no capability of its own; the build claims live-any-shell wherever it runs Live, and the reference,
+# which refuses a loopback page bound for another machine, does not.
+@pytest.mark.requires(
+    "live-any-shell",
+    reason="the origin's session must be Live in any login shell, and the loopback page forward is the Rust "
+    "build's extension: upstream refuses the page",
+)
 @pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
 def test_two_loopback_pages_opened_at_once_on_a_port_busy_here_each_load_on_a_port_of_their_own(
     remote_origin, remote_viewer
@@ -111,4 +112,79 @@ def test_two_loopback_pages_opened_at_once_on_a_port_busy_here_each_load_on_a_po
         for local in locals_:
             assert_ok(remote_viewer.request("session.close", local))
         for sid in sids:
+            assert_ok(origin.request("session.close", sid))
+
+
+def _page_file(ctl, name):
+    """A static page titled `name` in a folder of its own under the instance's root."""
+    folder = ctl.instance.root / f"remote-page-{name}"
+    folder.mkdir()
+    path = folder / f"{name}.html"
+    path.write_text(f"<!doctype html><title>{name}</title><body><p>{name}</p></body>")
+    return path
+
+
+def _page_loaded(viewer, local, title):
+    def loaded(tree):
+        pages = find_session(tree, local).get("htmlOverlays") or []
+        return any(page["state"] == "loaded" and page.get("title") == title for page in pages)
+
+    loaded.__qualname__ = f"the page {title} loaded in {local}"
+    return viewer.wait_tree(loaded)
+
+
+@pytest.mark.since("0.42.0")
+@POSIX_SSHD
+@pytest.mark.requires(
+    "live-sessions", reason="the origin lists its sessions only in Live mode, and its terminal companion must be Live"
+)
+@pytest.mark.covers("live.tree", "live.attach.group", "session.page", "session.companion.new", "field:result.remote")
+def test_a_top_level_page_session_attaches_from_another_machine_as_a_top_level_row_with_its_group(
+    remote_origin, remote_viewer
+):
+    origin = Ctl(remote_origin.instance)
+    host = remote_origin.host
+    target = _origin_session(origin)
+    root = assert_ok(origin.request("session.page", target, html=str(_page_file(origin, "dash"))))["id"]
+    terminal = assert_ok(origin.request("session.companion.new", root, noSelect=True))["id"]
+    origin.wait_mounted(terminal, "left")
+    held = assert_ok(origin.request("session.companion.page", root, html=str(_page_file(origin, "report"))))["id"]
+    local = None
+    try:
+        # the origin lists its own top-level page with its whole group and no daemon, and a page companion under it
+        def listed(response):
+            rows = {row["id"] for row in assert_ok(response)["remote"]["sessions"]}
+            return {root, terminal, held} <= rows
+
+        listing = origin.wait_response(origin.vocabulary.command("live.tree"), None, listed)
+        rows = {row["id"]: row for row in assert_ok(listing)["remote"]["sessions"]}
+        assert_subset(rows[root], {"content": "page", "panes": []})
+        assert_absent(rows[root], "parent")
+        assert [member["id"] for member in rows[root]["companions"]] == [terminal, held]
+        assert_subset(rows[held], {"content": "page", "parent": root, "panes": []})
+
+        reply = assert_ok(
+            remote_viewer.request(remote_viewer.vocabulary.command("live.attach.group"), root, host=host)
+        )
+        local = reply["id"]
+        tree = _page_loaded(remote_viewer, local, "dash")
+        node = find_session(tree, local)
+        assert_subset(node, {"content": "page", "remoteHost": host})
+        assert_absent(node, "parent")
+        members = [member["id"] for member in reply["remoteGroup"]["companions"]]
+        assert len(members) == 2 and all(members), reply
+        tree = _page_loaded(remote_viewer, members[1], "report")
+        assert [find_session(tree, member).get("parent") for member in members] == [local, local]
+        assert [find_session(tree, member).get("content") for member in members] == [None, "page"]
+
+        # New Companion on the page's row has the origin make one under its page
+        created = assert_ok(remote_viewer.request("session.companion.new", local, noSelect=True))
+        assert created["parent"] == local
+        origin_tree = origin.tree()
+        under_root = [row for row in session_ids(origin_tree) if find_session(origin_tree, row).get("parent") == root]
+        assert len(under_root) == 3, under_root
+    finally:
+        if local is not None:
+            assert_ok(remote_viewer.request("session.close", local))
+        for sid in (root, target):
             assert_ok(origin.request("session.close", sid))
