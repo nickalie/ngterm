@@ -63,6 +63,7 @@ mod restart;
 mod restore;
 mod session;
 mod session_info;
+mod session_picks;
 mod sidebar;
 mod surface;
 mod text_changes;

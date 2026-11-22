@@ -15,7 +15,7 @@ use super::hud::resolve_pane_placement;
 use super::{Outcome, args_of};
 use crate::Core;
 use crate::error::ControlError;
-use crate::modal::AskOwner;
+use crate::modal::{AskOwner, TIMEOUT_ERROR, is_valid_timeout};
 use crate::model::{
     AskAlignment, AskAnchor, AskChoiceForm, AskForm, AskInputForm, AskInputMode, AskStyle, MAX_ASK_BUTTONS,
     MAX_ASK_CHOICES, OverlayPane, PendingAsk,
@@ -86,6 +86,9 @@ fn validated(target: Option<&str>, args: &Args) -> Result<(PendingAsk, Option<Ov
             OverlayPane::from_control_name(raw).ok_or_else(|| ControlError::rejected("--pane must be left or right"))
         })
         .transpose()?;
+    if args.timeout.is_some_and(|timeout| !is_valid_timeout(timeout)) {
+        return Err(ControlError::rejected(TIMEOUT_ERROR));
+    }
     let ask = PendingAsk {
         id: uuid_string(Uuid::new_v4()),
         title: title.to_owned(),
@@ -351,6 +354,11 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         let window = Resolver::new(core.library()).open_placement_window(window)?;
         open_gui(core, ask, window, None, &placement)
     };
+    if let (Ok(result), Some(timeout)) = (&opened, args.timeout)
+        && let Some(id) = result.id.as_deref()
+    {
+        core.modals.arm_deadline(id, timeout);
+    }
     core.sync_modals();
     opened
 }
@@ -488,7 +496,7 @@ fn lookup(core: &Core, id: &str) -> Option<(ControlAskResult, Uuid)> {
 }
 
 /// Cancels ask `id` while it is pending; a finished one is a no-op that keeps its outcome.
-fn cancel(core: &mut Core, id: &str, window: Option<&str>) -> Result<(), ControlError> {
+pub(crate) fn cancel(core: &mut Core, id: &str, window: Option<&str>) -> Result<(), ControlError> {
     let result = ask_result(core, id, window)?;
     if result.result != ControlAskOutcome::Pending {
         return Ok(());

@@ -227,6 +227,7 @@ impl HeadlessState {
         self.arm_info_timers();
         self.arm_job_expiries();
         self.arm_page_claim_expiries();
+        self.arm_interaction_expiries();
         self.arm_remote_tick();
     }
 
@@ -445,6 +446,18 @@ impl HeadlessState {
             self.after(delay, "page claim expiry", |state| {
                 if !state.quitting() {
                     state.core.expire_remote_page_claims();
+                    state.settle();
+                }
+            });
+        }
+    }
+
+    fn arm_interaction_expiries(&mut self) {
+        for expiry in self.core.take_interaction_expiries() {
+            let delay = expiry.delay;
+            self.after(delay, "interaction expiry", move |state| {
+                if !state.quitting() {
+                    state.core.expire_interaction(expiry);
                     state.settle();
                 }
             });

@@ -53,6 +53,7 @@ pub mod page_channel;
 pub mod page_serve;
 pub mod page_tunnel;
 pub mod peer;
+pub mod pick;
 pub mod reconnect;
 pub(crate) mod relaunch;
 pub mod remotes;
@@ -452,6 +453,17 @@ impl Core {
         }
     }
 
+    /// The `pick` read-back of each session in `tree` with a session-bound pick or a replica of one.
+    pub(crate) fn project_session_picks(&self, tree: &mut ControlTree) {
+        for node in tree
+            .workspaces
+            .iter_mut()
+            .flat_map(|workspace| workspace.sessions.iter_mut())
+        {
+            node.pick = frames::parse_uuid(&node.id).and_then(|id| self.modals.session_picks.node(id));
+        }
+    }
+
     /// The `presenters` read-back of each session in `tree` some viewer watches (upstream's `presentersNode`).
     pub(crate) fn project_presenters(&self, tree: &mut ControlTree) {
         if self.remote.hub.is_empty() {
@@ -639,7 +651,10 @@ impl Core {
             }
             for event in events {
                 match event {
-                    HubEvent::PresenterLost(session) => self.take_back_remote_ask(session),
+                    HubEvent::PresenterLost(session) => {
+                        self.take_back_remote_ask(session);
+                        self.take_back_remote_pick(session, None);
+                    }
                     HubEvent::SurfaceLost {
                         session,
                         surface: Surface::Overlays,

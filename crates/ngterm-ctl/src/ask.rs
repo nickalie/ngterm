@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use ngterm_core::modal::{TIMEOUT_ERROR, is_valid_timeout};
 use ngterm_core::model::OverlayPane;
 use ngterm_core::paths::Env;
 use ngterm_proto::command::AskCmd;
@@ -191,6 +192,9 @@ pub struct Open {
     #[arg(long, help = "Raise the owning window.")]
     follow: bool,
 
+    #[arg(long, help = "Cancel the dialog unanswered after this many seconds (at most 86400).")]
+    timeout: Option<f64>,
+
     #[arg(long, help = "Print the dialog id and return without waiting.")]
     no_block: bool,
 
@@ -203,6 +207,9 @@ impl Open {
     fn validate(&self) -> Result<(), String> {
         if self.title.trim().is_empty() {
             return Err("ask.open requires a title".to_owned());
+        }
+        if self.timeout.is_some_and(|timeout| !is_valid_timeout(timeout)) {
+            return Err(TIMEOUT_ERROR.to_owned());
         }
         if self.style == "gui" && (self.pane.is_some() || self.pane_id.is_some()) && self.target.is_none() {
             return Err("--pane requires a session".to_owned());
@@ -334,6 +341,7 @@ impl Open {
             pane_id: self.pane_id.clone(),
             title: Some(self.title.clone()),
             width: self.parsed_width().map_err(Failure::Usage)?,
+            timeout: self.timeout,
             ..Args::default()
         };
         Ok(Request {
@@ -445,6 +453,22 @@ mod tests {
 
     fn open_request(argv: &[&str]) -> Value {
         serde_json::to_value(open(argv).request().ok().unwrap()).unwrap()
+    }
+
+    /// Upstream's `AskCommandsTests` timeout cases: a valid `--timeout` is sent as `timeout`, one out of range is
+    /// refused before anything is sent.
+    #[test]
+    fn a_timeout_is_sent_and_one_out_of_range_refused() {
+        let request = open_request(&["Choose", "--button", "ok", "--timeout", "30"]);
+        assert_eq!(request["args"]["timeout"], json!(30.0));
+        assert_eq!(open_request(&["Choose", "--button", "ok"])["args"].get("timeout"), None);
+        for timeout in ["0", "86400.5", "inf", "nan"] {
+            assert_eq!(
+                parse(&["Choose", "--button", "ok", "--timeout", timeout]).err(),
+                Some(TIMEOUT_ERROR.to_owned()),
+                "{timeout}"
+            );
+        }
     }
 
     #[test]

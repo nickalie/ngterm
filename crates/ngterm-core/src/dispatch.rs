@@ -832,6 +832,7 @@ impl Core {
         self.project_live(store, &mut tree);
         self.project_foreground(store, &mut tree);
         self.project_presenters(&mut tree);
+        self.project_session_picks(&mut tree);
         tree.zoomed_surface = if commands::quick::zoomed(self) {
             Some("quick".to_owned())
         } else {

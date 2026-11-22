@@ -279,7 +279,7 @@ pub const PAGE_DETACHED_KIND: &str = "page.detached";
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
-pub const SUPPORTED_KINDS: [&str; 25] = [
+pub const SUPPORTED_KINDS: [&str; 29] = [
     "status",
     "hud",
     "notify",
@@ -305,9 +305,18 @@ pub const SUPPORTED_KINDS: [&str; 25] = [
     PAGE_KINDS[3],
     PAGE_KINDS[4],
     PAGE_KINDS[5],
+    PICK_KINDS[0],
+    PICK_KINDS[1],
+    PICK_KINDS[2],
+    PICK_KINDS[3],
 ];
 
-/// The kinds a presenter must speak to be handed a page (upstream's `pageKinds`), the last of [`SUPPORTED_KINDS`].
+/// The kinds a presenter must speak to be handed a session-bound pick (upstream's `pickKinds`), the last of
+/// [`SUPPORTED_KINDS`].
+pub const PICK_KINDS: [&str; 4] = ["pick.request", "pick.resolve", "pick.rejected", "pick.dismiss"];
+
+/// The kinds a presenter must speak to be handed a page (upstream's `pageKinds`), before [`PICK_KINDS`] in
+/// [`SUPPORTED_KINDS`].
 pub const PAGE_KINDS: [&str; 6] = [
     "page.request",
     "page.rejected",
@@ -601,7 +610,11 @@ impl PresentationHub {
                     self.reroute_surfaces(session);
                 }
             }
-            body @ (Body::AskResolve(_) | Body::AskRejected(_) | Body::LinkClick(_))
+            body @ (Body::AskResolve(_)
+            | Body::AskRejected(_)
+            | Body::PickResolve(_)
+            | Body::PickRejected(_)
+            | Body::LinkClick(_))
                 if self.grant.holder(session) == Some(from) =>
             {
                 self.events.push(HubEvent::PresenterFrame(session, Box::new(body)));
@@ -1344,8 +1357,8 @@ mod tests {
 
     #[test]
     fn the_kinds_follow_upstreams_order() {
-        // upstream's, with this build's loopback forward, companion pages and page detach before the page kinds, which
-        // close the list
+        // upstream's, with this build's loopback forward, companion pages and page detach before the page kinds, and
+        // the pick kinds closing the list
         assert_eq!(
             SUPPORTED_KINDS,
             [
@@ -1373,7 +1386,11 @@ mod tests {
                 "page.close",
                 "page.closed",
                 "page.command",
-                "page.state"
+                "page.state",
+                "pick.request",
+                "pick.resolve",
+                "pick.rejected",
+                "pick.dismiss"
             ]
         );
     }

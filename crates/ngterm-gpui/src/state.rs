@@ -538,6 +538,7 @@ impl AppState {
         self.arm_info_timers();
         self.arm_job_expiries();
         self.arm_page_claim_expiries();
+        self.arm_interaction_expiries();
         self.arm_remote_tick();
     }
 
@@ -1016,6 +1017,26 @@ impl AppState {
             Err(_) => {
                 tracing::error!(%cmd, "control handler panicked on a page channel's request");
                 call.reply.answer(&ControlError::HandlerPanicked(cmd).into());
+            }
+        }
+    }
+
+    /// Arms the ask and pick `--timeout` deadlines the core asked for since the last arm.
+    fn arm_interaction_expiries(&mut self) {
+        let expiries = self.core.take_interaction_expiries();
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        for expiry in expiries {
+            let delay = expiry.delay;
+            let task = Box::new(move |state: &mut Self| {
+                if !state.quitting {
+                    state.core.expire_interaction(expiry);
+                    state.settle();
+                }
+            });
+            if main_loop.post_after(delay, task).is_err() {
+                tracing::debug!("interaction expiry dropped: the loop is closed");
             }
         }
     }

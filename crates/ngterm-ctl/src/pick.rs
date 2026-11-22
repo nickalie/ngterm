@@ -4,6 +4,7 @@
 
 use std::io::{self, Read};
 
+use ngterm_core::modal::{TIMEOUT_ERROR, is_valid_timeout};
 use ngterm_core::paths::Env;
 use ngterm_proto::command::PickCmd;
 use ngterm_proto::{Args, Command, PickItem, Request};
@@ -33,6 +34,14 @@ enum PickCommand {
 }
 
 impl Pick {
+    /// What the parser cannot check (upstream's `validate()`).
+    pub fn check(&self) -> Result<(), String> {
+        match &self.command {
+            PickCommand::Open(command) => command.validate(),
+            PickCommand::Result(_) | PickCommand::Cancel(_) => Ok(()),
+        }
+    }
+
     /// Runs the command.
     pub fn execute(&self, env: &dyn Env) -> Result<(), Failure> {
         match &self.command {
@@ -115,14 +124,31 @@ pub struct Open {
     #[arg(long, help = "Raise the target window when the picker opens.")]
     follow: bool,
 
+    #[arg(long, help = "Cancel the picker unanswered after this many seconds (at most 86400).")]
+    timeout: Option<f64>,
+
     #[arg(long, help = "Print the picker id and return without waiting for a result.")]
     no_block: bool,
+
+    #[arg(
+        long,
+        help = "Bind the picker to a session: it shows wherever that session is presented."
+    )]
+    session: Option<String>,
 
     #[command(flatten)]
     options: ClientOptions,
 }
 
 impl Open {
+    /// Upstream's `validate()`.
+    fn validate(&self) -> Result<(), String> {
+        if self.timeout.is_some_and(|timeout| !is_valid_timeout(timeout)) {
+            return Err(TIMEOUT_ERROR.to_owned());
+        }
+        Ok(())
+    }
+
     /// The open request for the items in `input`.
     pub fn request(&self, input: &[u8]) -> Result<Request, Failure> {
         let args = Args {
@@ -132,11 +158,12 @@ impl Open {
             query: self.query.clone(),
             allow_custom: self.allow_custom.then_some(true),
             selection: self.select.clone(),
+            timeout: self.timeout,
             ..Args::default()
         };
         Ok(Request {
             cmd: Command::Pick(PickCmd::Open),
-            target: None,
+            target: self.session.clone(),
             args: self.options.with_window(Some(args)),
         })
     }
@@ -256,10 +283,31 @@ mod tests {
     }
 
     #[test]
-    fn open_is_the_default_and_has_no_timeout() {
+    fn open_is_the_default() {
         assert!(matches!(parse(&[]), Ok(PickCommand::Open(_))));
         assert!(matches!(parse(&["--no-block"]), Ok(PickCommand::Open(_))));
-        assert!(parse(&["--timeout", "60"]).is_err());
+    }
+
+    /// Upstream's `MiscCommandsTests` pick cases: `--session` is the request's target and `--timeout` its `timeout`.
+    #[test]
+    fn session_and_timeout_reach_the_request() {
+        let request = open_request(&["--session", "S1", "--timeout", "2.5"], "a\n");
+        assert_eq!(request["target"], json!("S1"));
+        assert_eq!(request["args"]["timeout"], json!(2.5));
+        let plain = open_request(&[], "a\n");
+        assert_eq!(plain.get("target"), None);
+        assert_eq!(plain["args"].get("timeout"), None);
+    }
+
+    #[test]
+    fn a_timeout_out_of_range_is_refused_before_sending() {
+        for timeout in ["0", "86400.5", "inf", "NaN"] {
+            let Ok(PickCommand::Open(open)) = parse(&["--timeout", timeout]) else {
+                panic!("{timeout} does not parse")
+            };
+            assert_eq!(open.validate(), Err(TIMEOUT_ERROR.to_owned()), "{timeout}");
+        }
+        assert_eq!(open(&["--timeout", "86400"]).validate(), Ok(()));
     }
 
     #[test]

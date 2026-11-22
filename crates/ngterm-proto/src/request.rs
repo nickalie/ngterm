@@ -99,6 +99,8 @@ pub struct Args {
     pub rev: Option<i64>,
     /// The target session's pane identities when the operation was decided.
     pub panes: Option<Vec<String>>,
+    /// How many seconds an `ask.open` or `pick.open` waits for an answer before its origin cancels it.
+    pub timeout: Option<f64>,
     pub name: Option<String>,
     pub cwd: Option<String>,
     pub targets: Option<Vec<String>>,
@@ -552,6 +554,20 @@ mod tests {
         };
         let keys: Vec<&str> = map.keys().map(String::as_str).collect();
         assert_eq!(keys, ["opID", "epoch", "rev", "panes", "name"]);
+    }
+
+    /// Upstream's `ControlArgs` declares `timeout` after the operation fields, before `name`.
+    #[test]
+    fn a_timeout_round_trips_after_the_operation_fields() {
+        let wire = json!({"cmd": "pick.open", "target": "S", "args": {"panes": ["P"], "timeout": 2.5, "items": []}});
+        let request: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(request.args.as_ref().and_then(|args| args.timeout), Some(2.5));
+        assert_eq!(serde_json::to_value(&request).unwrap(), wire);
+        let Value::Object(map) = serde_json::to_value(request.args.unwrap()).unwrap() else {
+            panic!("args is not an object")
+        };
+        let keys: Vec<&str> = map.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["panes", "timeout", "items"]);
     }
 
     #[test]

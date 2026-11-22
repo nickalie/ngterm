@@ -838,10 +838,9 @@ fn a_taken_slot_refuses_the_page() {
 fn a_viewer_without_web_views_refuses_pages_and_lists_no_page_kind() {
     let mut replica = Replica::new();
     let hello = replica.viewer.sent("hello");
-    assert_eq!(
-        hello[0]["hello"]["kinds"],
-        json!(crate::remote::client::viewer_kinds(true))
-    );
+    let mut kinds = crate::remote::client::viewer_kinds(true);
+    kinds.extend(crate::remote::hub::PICK_KINDS.map(str::to_owned));
+    assert_eq!(hello[0]["hello"]["kinds"], json!(kinds));
 
     replica.host.0.borrow_mut().unavailable = Some("no GPU".to_owned());
     replica.request(Replica::page(Replica::url("https://example.com/")));

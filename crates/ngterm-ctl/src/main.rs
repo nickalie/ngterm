@@ -144,7 +144,8 @@ impl Command {
             Self::Catalog(command) => command.check(),
             Self::Terminfo(command) => command.check(),
             Self::Agent(command) => command.check(),
-            Self::Pick(_) | Self::Server(_) | Self::Clipboard(_) | Self::Version(_) => Ok(()),
+            Self::Pick(command) => command.check(),
+            Self::Server(_) | Self::Clipboard(_) | Self::Version(_) => Ok(()),
         }
     }
 

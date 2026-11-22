@@ -1,6 +1,8 @@
 //! `pick.open`, `pick.result` and `pick.cancel`: validation and its messages as upstream's
 //! `ControlDispatcher+Pick.swift`, the effects as `agterm/Control/ControlServer+Pick.swift`. The picker holds its
-//! window's modal slot; the frontend draws it and answers through [`Core::resolve_pick`].
+//! window's modal slot; the frontend draws it and answers through [`Core::resolve_pick`]. A pick bound to a session
+//! (`pick.open` with a target) is drawn by the session's presenter when the session presents remotely, otherwise in
+//! the session's own window ([`crate::modal::SessionPicks`]).
 
 use std::collections::HashSet;
 
@@ -12,7 +14,7 @@ use super::ask::contains_control_characters;
 use super::{Outcome, args_of};
 use crate::Core;
 use crate::error::ControlError;
-use crate::modal::{MAX_PICK_ITEMS, PendingPick};
+use crate::modal::{MAX_PICK_ITEMS, PICK_ALREADY_PENDING, PendingPick, TIMEOUT_ERROR, is_valid_timeout};
 use crate::model::{AgentStatus, StatusShape, is_valid_color_hex};
 use crate::pane_env::uuid_string;
 use crate::resolve::Resolver;
@@ -27,11 +29,13 @@ pub(crate) fn dispatch(core: &mut Core, cmd: PickCmd, request: &Request) -> Outc
         PickCmd::Open => {
             let pick = validated(request)?;
             let id = pick.id.clone();
-            let owner = placement_window(core, window)?;
-            core.modals.open_pick(owner, pick).map_err(ControlError::rejected)?;
-            if args.follow == Some(true) {
-                core.request_window(WindowRequest::Raise(owner));
-                core.take_frontmost(owner);
+            let follow = args.follow == Some(true);
+            match request.target.as_deref() {
+                Some(target) => open_session_pick(core, pick, target, window, follow)?,
+                None => open_window_pick(core, pick, window, follow)?,
+            }
+            if let Some(timeout) = args.timeout {
+                core.modals.arm_deadline(&id, timeout);
             }
             core.sync_modals();
             Ok(ControlResult::id(id))
@@ -92,6 +96,9 @@ fn validated(request: &Request) -> Result<PendingPick, ControlError> {
     {
         return Err(ControlError::rejected("pick select must name an item id"));
     }
+    if args.timeout.is_some_and(|timeout| !is_valid_timeout(timeout)) {
+        return Err(ControlError::rejected(TIMEOUT_ERROR));
+    }
     Ok(PendingPick {
         id: uuid_string(Uuid::new_v4()),
         items: items.to_vec(),
@@ -100,6 +107,49 @@ fn validated(request: &Request) -> Result<PendingPick, ControlError> {
         allow_custom,
         selection: args.selection.clone(),
     })
+}
+
+/// A window's own pick, in the `--window` window or the frontmost one.
+fn open_window_pick(
+    core: &mut Core,
+    pick: PendingPick,
+    window: Option<&str>,
+    follow: bool,
+) -> Result<(), ControlError> {
+    let owner = placement_window(core, window)?;
+    core.modals.open_pick(owner, pick).map_err(ControlError::rejected)?;
+    raise(core, owner, follow);
+    Ok(())
+}
+
+/// A pick bound to session `target` (upstream's `openSessionPick`): its presenter draws it when the session presents
+/// remotely, otherwise the session's own window does, whichever window is frontmost.
+fn open_session_pick(
+    core: &mut Core,
+    pick: PendingPick,
+    target: &str,
+    window: Option<&str>,
+    follow: bool,
+) -> Result<(), ControlError> {
+    let resolved = Resolver::new(core.library()).session(Some(target), window)?;
+    match core.present_pick_remotely(&pick, resolved.session, Some(resolved.window), follow) {
+        Some(true) => return Ok(()),
+        Some(false) => return Err(ControlError::rejected(PICK_ALREADY_PENDING)),
+        None => {}
+    }
+    core.modals
+        .open_session_pick_local(pick, resolved.session, resolved.window)
+        .map_err(ControlError::rejected)?;
+    raise(core, resolved.window, follow);
+    Ok(())
+}
+
+/// `--follow`: raise the window showing the picker and make it frontmost.
+fn raise(core: &mut Core, window: Uuid, follow: bool) {
+    if follow {
+        core.request_window(WindowRequest::Raise(window));
+        core.take_frontmost(window);
+    }
 }
 
 fn has_control_characters(item: &PickItem) -> bool {
@@ -161,10 +211,18 @@ fn pick_result(core: &Core, id: &str, window: Option<&str>) -> Result<ControlPic
             .live_pick(id)
             .or_else(|| core.modals.retained_pick(id))
             .map(|(_, result)| result)
+            .or_else(|| core.modals.session_picks.result(id))
             .ok_or_else(|| unknown_pick(id));
     }
     if let Some((owner, result)) = core.modals.retained_pick(id) {
         return if Resolver::new(core.library()).window_id(window)? == owner {
+            Ok(result)
+        } else {
+            Err(unknown_pick(id))
+        };
+    }
+    if let Some(result) = core.modals.session_picks.result(id) {
+        return if Some(Resolver::new(core.library()).window_id(window)?) == core.modals.session_picks.window_of(id) {
             Ok(result)
         } else {
             Err(unknown_pick(id))
@@ -178,11 +236,15 @@ fn pick_result(core: &Core, id: &str, window: Option<&str>) -> Result<ControlPic
 }
 
 /// Cancels picker `id` while it is pending; a finished one is a no-op (upstream's `cancelPick`).
-fn cancel(core: &mut Core, id: &str, window: Option<&str>) -> Result<(), ControlError> {
+pub(crate) fn cancel(core: &mut Core, id: &str, window: Option<&str>) -> Result<(), ControlError> {
     let owner = if window.is_none() {
         match core.modals.live_pick(id) {
             Some((owner, _)) => owner,
             None if core.modals.retained_pick(id).is_some() => return Ok(()),
+            None if core.modals.cancel_session_pick(id) => {
+                core.sync_modals();
+                return Ok(());
+            }
             None => return Err(unknown_pick(id)),
         }
     } else {
@@ -192,6 +254,14 @@ fn cancel(core: &mut Core, id: &str, window: Option<&str>) -> Result<(), Control
             } else {
                 Err(unknown_pick(id))
             };
+        }
+        if core.modals.session_picks.result(id).is_some() {
+            if Some(Resolver::new(core.library()).window_id(window)?) != core.modals.session_picks.window_of(id) {
+                return Err(unknown_pick(id));
+            }
+            core.modals.cancel_session_pick(id);
+            core.sync_modals();
+            return Ok(());
         }
         let owner = placement_window(core, window)?;
         if core

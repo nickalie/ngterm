@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use super::link_click::RemoteLinkRefusal;
+pub use super::pick::{PresentationPick, PresentationPickAnswer, PresentationPickRef};
 use crate::html::HtmlLoadState;
 use crate::hud::{HudPosition, HudSpec, HudSpinner};
 use crate::model::{
@@ -505,7 +506,7 @@ impl PresentationAsk {
 }
 
 /// Whether `body` encodes within [`MAX_FRAME_BYTES`] with the widest counters.
-fn fits(body: Body) -> bool {
+pub(super) fn fits(body: Body) -> bool {
     encode(&PresentationFrame {
         generation: i64::MAX,
         rev: i64::MAX,
@@ -1093,6 +1094,13 @@ pub enum Body {
     AskRejected(PresentationAskRef),
     /// The ask ended on the origin; the presenter takes its dialog down without answering.
     AskDismiss(PresentationAskRef),
+    /// A session-bound pick the origin hands its presenter to draw.
+    PickRequest(PresentationPick),
+    PickResolve(PresentationPickAnswer),
+    /// The presenter cannot show the pick, so the origin takes it back.
+    PickRejected(PresentationPickRef),
+    /// The pick ended on the origin; the presenter takes its picker down without answering.
+    PickDismiss(PresentationPickRef),
     OverlayRequest(PresentationOverlay),
     /// The presenter cannot show the overlay; the origin fails the job without launching anything.
     OverlayRejected(PresentationOverlayChange),
@@ -1151,6 +1159,10 @@ impl Body {
             Self::AskResolve(_) => "ask.resolve",
             Self::AskRejected(_) => "ask.rejected",
             Self::AskDismiss(_) => "ask.dismiss",
+            Self::PickRequest(_) => "pick.request",
+            Self::PickResolve(_) => "pick.resolve",
+            Self::PickRejected(_) => "pick.rejected",
+            Self::PickDismiss(_) => "pick.dismiss",
             Self::OverlayRequest(_) => "overlay.request",
             Self::OverlayRejected(_) => "overlay.rejected",
             Self::OverlayClose(_) => "overlay.close",
@@ -1189,6 +1201,11 @@ impl Body {
             Self::AskRequest(ask) => entry("ask", serde_json::to_value(ask)),
             Self::AskResolve(answer) => entry("ask", serde_json::to_value(answer)),
             Self::AskRejected(reference) | Self::AskDismiss(reference) => entry("ask", serde_json::to_value(reference)),
+            Self::PickRequest(pick) => entry("pick", serde_json::to_value(pick)),
+            Self::PickResolve(answer) => entry("pick", serde_json::to_value(answer)),
+            Self::PickRejected(reference) | Self::PickDismiss(reference) => {
+                entry("pick", serde_json::to_value(reference))
+            }
             Self::OverlayRequest(overlay) => entry("overlay", serde_json::to_value(overlay)),
             Self::OverlayRejected(change)
             | Self::OverlayClose(change)
@@ -1346,6 +1363,10 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "ask.resolve" => Body::AskResolve(required(object, "ask")?),
         "ask.rejected" => Body::AskRejected(required(object, "ask")?),
         "ask.dismiss" => Body::AskDismiss(required(object, "ask")?),
+        "pick.request" => Body::PickRequest(required(object, "pick")?),
+        "pick.resolve" => Body::PickResolve(required(object, "pick")?),
+        "pick.rejected" => Body::PickRejected(required(object, "pick")?),
+        "pick.dismiss" => Body::PickDismiss(required(object, "pick")?),
         "overlay.request" => Body::OverlayRequest(required(object, "overlay")?),
         "overlay.rejected" => Body::OverlayRejected(required(object, "overlay")?),
         "overlay.close" => Body::OverlayClose(required(object, "overlay")?),

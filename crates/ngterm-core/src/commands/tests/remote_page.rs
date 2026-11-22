@@ -1313,7 +1313,9 @@ fn a_local_page_omits_the_remote_fields_and_a_replica_reports_its_origin_path() 
 }
 
 #[test]
-fn the_page_kinds_close_upstreams_list() {
-    let pages = crate::remote::hub::PAGE_KINDS;
-    assert_eq!(&SUPPORTED_KINDS[SUPPORTED_KINDS.len() - pages.len()..], pages);
+fn the_page_and_pick_kinds_close_upstreams_list() {
+    let (pages, picks) = (crate::remote::hub::PAGE_KINDS, crate::remote::hub::PICK_KINDS);
+    let end = SUPPORTED_KINDS.len() - picks.len();
+    assert_eq!(&SUPPORTED_KINDS[end..], picks);
+    assert_eq!(&SUPPORTED_KINDS[end - pages.len()..end], pages);
 }

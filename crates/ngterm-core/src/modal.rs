@@ -6,12 +6,34 @@
 //! dialog ended, so a polling client that arrives late still reads its answer: a pick's per window and, once the
 //! window is gone, app-wide; an ask's app-wide.
 
+mod session_pick;
+
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, SystemTime};
 
 use ngterm_proto::{ControlAskOutcome, ControlAskResult, ControlPickOutcome, ControlPickResult, PickItem};
 use uuid::Uuid;
 
 use crate::model::{AskDraft, EndedAsk, PendingAsk};
+pub use session_pick::{PICK_ALREADY_PENDING, Placement, SessionPicks};
+
+/// The longest `--timeout` of an ask or a pick, a day like the HUD's ceiling (upstream's `ControlInteraction.maxTimeout`).
+pub const MAX_TIMEOUT: f64 = 86_400.0;
+/// The refusal of a `--timeout` out of range (upstream's `ControlInteraction.timeoutError`).
+pub const TIMEOUT_ERROR: &str = "timeout must be more than 0 and at most 86400 seconds";
+
+/// Whether `seconds` is a usable `--timeout` (upstream's `ControlInteraction.isValidTimeout`).
+#[must_use]
+pub fn is_valid_timeout(seconds: f64) -> bool {
+    seconds.is_finite() && seconds > 0.0 && seconds <= MAX_TIMEOUT
+}
+
+/// One armed `--timeout`: after `delay` the frontend runs [`crate::Core::expire_interaction`] with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractionExpiry {
+    pub delay: Duration,
+    id: String,
+}
 
 /// The most items one picker takes (upstream's `ControlPickItem.maxItems`).
 pub const MAX_PICK_ITEMS: usize = 1_000;
@@ -169,6 +191,12 @@ pub struct Modals {
     finished_asks: VecDeque<(String, ControlAskResult, Uuid)>,
     /// The windows whose open modal currently pauses their auto-follow.
     pub(crate) suppressing: Vec<Uuid>,
+    /// The picks bound to a session rather than to a window.
+    pub(crate) session_picks: SessionPicks,
+    /// When each ask or pick opened with `--timeout` ends unanswered, by id.
+    deadlines: HashMap<String, SystemTime>,
+    /// The deadlines armed since the frontend last took them.
+    expiries: Vec<InteractionExpiry>,
 }
 
 impl Modals {
@@ -218,15 +246,21 @@ impl Modals {
         let Some(pending) = controller.pending.take() else {
             return;
         };
+        let outcome = if expired(&self.deadlines, &pending.id) {
+            ControlPickResult::outcome(ControlPickOutcome::Cancelled)
+        } else {
+            outcome
+        };
         controller.recent.retain(|resolved| resolved.id != pending.id);
         controller.recent.push_back(ResolvedPick {
-            id: pending.id,
-            result: outcome,
+            id: pending.id.clone(),
+            result: outcome.clone(),
             sequence,
         });
         while controller.recent.len() > WINDOW_RETAINED_PICKS {
             controller.recent.pop_front();
         }
+        self.session_pick_resolved(&pending.id, &outcome);
     }
 
     /// The live picker `id` and its window, looked up by its globally unique id (upstream's `livePick`).
@@ -253,6 +287,7 @@ impl Modals {
         if !self.controllers.contains_key(&window) {
             return;
         }
+        self.session_picks_window_closing(window);
         self.resolve_pick(window, ControlPickResult::outcome(ControlPickOutcome::Cancelled));
         self.resolve_window_ask(window, ControlAskResult::outcome(ControlAskOutcome::Cancelled));
         let Some(controller) = self.controllers.remove(&window) else {
@@ -308,6 +343,11 @@ impl Modals {
             return;
         };
         controller.ask_draft = None;
+        let outcome = if expired(&self.deadlines, &ask.id) {
+            ControlAskResult::outcome(ControlAskOutcome::Cancelled)
+        } else {
+            outcome
+        };
         if self.ask_owners.get(&ask.id) == Some(&AskOwner::Window(window)) {
             self.retain_ask(&ask.id, outcome, window);
         }
@@ -374,6 +414,38 @@ impl Modals {
     pub fn window_ask(&self, window: Uuid) -> Option<&PendingAsk> {
         self.controllers.get(&window).and_then(PickController::pending_ask)
     }
+
+    // MARK: - deadlines
+
+    /// Ends ask or pick `id` unanswered `seconds` from now, a valid `--timeout`.
+    pub(crate) fn arm_deadline(&mut self, id: &str, seconds: f64) {
+        let delay = Duration::from_secs_f64(seconds);
+        self.deadlines.insert(id.to_owned(), SystemTime::now() + delay);
+        self.expiries.push(InteractionExpiry {
+            delay,
+            id: id.to_owned(),
+        });
+    }
+
+    /// Whether ask or pick `id`'s deadline passed; an answer then resolves cancelled.
+    #[must_use]
+    pub(crate) fn expired(&self, id: &str) -> bool {
+        expired(&self.deadlines, id)
+    }
+
+    /// The session asks' outcomes as their deadlines leave them: one answered past its deadline is cancelled.
+    fn past_deadline(&self, mut ended: Vec<EndedAsk>) -> Vec<EndedAsk> {
+        for ask in &mut ended {
+            if ask.result.result != ControlAskOutcome::Pending && self.expired(&ask.id) {
+                ask.result = ControlAskResult::outcome(ControlAskOutcome::Cancelled);
+            }
+        }
+        ended
+    }
+}
+
+fn expired(deadlines: &HashMap<String, SystemTime>, id: &str) -> bool {
+    deadlines.get(id).is_some_and(|deadline| *deadline <= SystemTime::now())
 }
 
 fn held_by(controller: &PickController) -> Option<&'static str> {
@@ -497,14 +569,46 @@ impl crate::Core {
         let ended = self.library_mut().take_ended_asks();
         self.dismiss_remote_asks(&ended);
         self.answer_replica_asks(&ended);
+        let ended = self.modals.past_deadline(ended);
         self.modals.retain_ended(ended);
         for window in self.modals.windows() {
             if !self.library().is_open(window) {
                 self.modals.unregister(window);
             }
         }
+        for session in self.modals.session_picks.sessions() {
+            if self.library().store_for_session(session).is_none() {
+                self.modals.session_ended(session);
+            }
+        }
         self.cancel_stray_window_asks();
         self.sync_modal_suppression();
+        self.flush_session_picks();
+    }
+
+    /// The `--timeout` deadlines armed since the last take, for the frontend to run on its main loop.
+    pub fn take_interaction_expiries(&mut self) -> Vec<InteractionExpiry> {
+        std::mem::take(&mut self.modals.expiries)
+    }
+
+    /// An armed `--timeout` elapsed: its ask or pick ends cancelled if still pending, and its presenter or window takes
+    /// it down (upstream's `timed`). One that fires early is armed again for the rest. Commit afterwards.
+    pub fn expire_interaction(&mut self, expiry: InteractionExpiry) {
+        let Some(deadline) = self.modals.deadlines.get(&expiry.id).copied() else {
+            return;
+        };
+        if let Ok(rest) = deadline.duration_since(SystemTime::now())
+            && !rest.is_zero()
+        {
+            self.modals.expiries.push(InteractionExpiry { delay: rest, ..expiry });
+            return;
+        }
+        self.modals.deadlines.remove(&expiry.id);
+        if self.modals.ask_owner(&expiry.id).is_some() {
+            drop(crate::commands::ask::cancel(self, &expiry.id, None));
+        } else {
+            drop(crate::commands::pick::cancel(self, &expiry.id, None));
+        }
     }
 
     /// Cancels the GUI asks whose anchor is no longer on screen (upstream's `askAnchorIsValid`): the anchored session

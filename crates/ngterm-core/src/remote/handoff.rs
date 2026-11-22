@@ -74,7 +74,7 @@ impl Core {
 
     /// Whether what opens in that place goes to the presenter (upstream's `presentsRemotely`): always on a presenter-only
     /// (headless) origin, which draws nothing itself, else only where [`Self::follows_remotely`].
-    pub(super) fn presents_remotely(&self, session: &Session, pane_identity: Option<Uuid>) -> bool {
+    pub(crate) fn presents_remotely(&self, session: &Session, pane_identity: Option<Uuid>) -> bool {
         self.presenter_only() || self.follows_remotely(session, pane_identity)
     }
 
@@ -216,6 +216,8 @@ impl Core {
                     self.take_back_remote_ask(session);
                 }
             }
+            Body::PickResolve(answer) => self.resolve_remote_pick(session, &answer),
+            Body::PickRejected(reference) => self.take_back_remote_pick(session, Some(&reference)),
             Body::OverlayRejected(change) => {
                 let held = self
                     .library_mut()

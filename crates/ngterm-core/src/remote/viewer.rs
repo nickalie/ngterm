@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::client::{ClientEffect, LinkKey, PresentationClient, PresentationTransport};
 use super::frames::{
     Body, PresentationAsk, PresentationAskAnswer, PresentationAskRef, PresentationHud, PresentationNotify,
-    PresentationOverlay, PresentationOverlayChange, PresentationPageChange, PresentationSound,
+    PresentationOverlay, PresentationOverlayChange, PresentationPageChange, PresentationPickRef, PresentationSound,
 };
 use super::reconnect::{ReconnectBook, RemoteLinkNotice};
 use super::tree::{RemoteCommandResult, RemoteCommandRunner};
@@ -427,6 +427,7 @@ impl Core {
         self.remote.viewer.last_client += 1;
         let mut client = PresentationClient::new(session, self.remote.viewer.last_client, argv, version);
         client.set_shows_pages(self.shows_replica_pages());
+        client.set_shows_picks(true);
         let Some(transport) = self.remote.viewer.transport.clone() else {
             tracing::debug!(%session, "no presentation transport installed");
             return;
@@ -440,6 +441,7 @@ impl Core {
         if let Some(mut client) = self.remote.viewer.clients.remove(&session) {
             client.stop();
         }
+        self.modals.drop_replica_picks(session);
     }
 
     // MARK: - effects
@@ -487,18 +489,10 @@ impl Core {
             ClientEffect::Notify(notify) => self.mirror_notification(session, &notify),
             ClientEffect::Sound(sound) => self.play_remote_sound(session, sound),
             ClientEffect::Layout(layout) => self.apply_remote_layout(&layout, session),
-            ClientEffect::AskRequest(ask) => {
-                if !self.show_replica_ask(&ask, session) {
-                    self.answer_origin(
-                        session,
-                        Body::AskRejected(PresentationAskRef {
-                            id: ask.id,
-                            owner: ask.owner,
-                        }),
-                    );
-                }
-            }
-            ClientEffect::AskDismiss(reference) => self.dismiss_replica_ask(&reference, session),
+            effect @ (ClientEffect::AskRequest(_)
+            | ClientEffect::AskDismiss(_)
+            | ClientEffect::PickRequest(_)
+            | ClientEffect::PickDismiss(_)) => self.apply_dialog_effect(session, effect),
             ClientEffect::OverlayRequest(overlay) => {
                 if !self.show_replica_overlay(&overlay, session) {
                     self.answer_origin(
@@ -571,6 +565,7 @@ impl Core {
         // the origin parks a handed-over page when the stream goes (an older one ends it), and nothing could reach it
         // from here
         self.close_replica_pages(session);
+        self.modals.drop_replica_picks(session);
         let replicas = self.remote.viewer.replicas.get(&session).cloned().unwrap_or_default();
         for replica in replicas {
             if replica.ended {
@@ -717,6 +712,30 @@ impl Core {
         self.library_mut()
             .store_mut(window)
             .is_some_and(|store| store.open_replica_ask(session, pending, pane_identity, ask.owner))
+    }
+
+    /// Shows an ask or a pick the origin handed over, or refuses it so the origin takes it back; takes one down that
+    /// the origin ended.
+    fn apply_dialog_effect(&mut self, session: Uuid, effect: ClientEffect) {
+        match effect {
+            ClientEffect::AskRequest(ask) if !self.show_replica_ask(&ask, session) => {
+                let reference = PresentationAskRef {
+                    id: ask.id,
+                    owner: ask.owner,
+                };
+                self.answer_origin(session, Body::AskRejected(reference));
+            }
+            ClientEffect::AskDismiss(reference) => self.dismiss_replica_ask(&reference, session),
+            ClientEffect::PickRequest(pick) if !self.show_replica_pick(&pick, session) => {
+                let reference = PresentationPickRef {
+                    id: pick.id,
+                    owner: pick.owner,
+                };
+                self.answer_origin(session, Body::PickRejected(reference));
+            }
+            ClientEffect::PickDismiss(reference) => self.dismiss_replica_pick(&reference, session),
+            _ => {}
+        }
     }
 
     /// Takes a replica down without answering it, once its origin ended the ask (upstream's `dismissReplicaAsk`).

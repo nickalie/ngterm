@@ -22,7 +22,8 @@ use super::frames::{
 };
 use super::hub::{
     AGENT_KIND, COMPANION_PAGE_KIND, LINK_CLICK_KIND, NO_OVERLAYS_KIND, OPT_IN_KINDS, PAGE_CONTENT_KIND,
-    PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, STATUS_CHECKMARK_KIND, SUPPORTED_KINDS,
+    PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, PICK_KINDS, STATUS_CHECKMARK_KIND,
+    SUPPORTED_KINDS,
 };
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
@@ -42,13 +43,16 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 /// once. `status.shapes` ([`super::hub::STATUS_SHAPES_KIND`]) is always listed: desktop and both mobile apps draw
 /// every shape it names. `status.checkmark` ([`STATUS_CHECKMARK_KIND`]) is listed too: a viewer that does not draw the
 /// checkmark leaves it out of its hello ([`PresentationClient::set_draws_checkmark`]). A Markdown page's links
-/// ([`PAGE_LINKS_KIND`]) are not listed yet: an origin hands this build's presenter a Markdown page without them.
+/// ([`PAGE_LINKS_KIND`]) are not listed yet: an origin hands this build's presenter a Markdown page without them. The
+/// pick kinds ([`PICK_KINDS`]) are left out: a viewer that shows handed-over picks adds them
+/// ([`PresentationClient::set_shows_picks`]).
 #[must_use]
 pub fn viewer_kinds(pages: bool) -> Vec<String> {
     SUPPORTED_KINDS
         .iter()
         // listed once this build's presenter loads a link page from the machine that opened it
         .filter(|kind| **kind != PAGE_LINKS_KIND)
+        .filter(|kind| !PICK_KINDS.contains(kind))
         .filter(|kind| {
             pages
                 || !(PAGE_KINDS.contains(kind)
@@ -110,6 +114,9 @@ pub enum ClientEffect {
     /// Shows an ask the origin handed over; the owner sends `ask.rejected` when it cannot.
     AskRequest(PresentationAsk),
     AskDismiss(PresentationAskRef),
+    /// Shows a session-bound pick the origin handed over; the owner sends `pick.rejected` when it cannot.
+    PickRequest(super::frames::PresentationPick),
+    PickDismiss(super::frames::PresentationPickRef),
     /// Shows an overlay the origin handed over; the owner sends `overlay.rejected` when it cannot.
     OverlayRequest(PresentationOverlay),
     OverlayClose(PresentationOverlayChange),
@@ -154,6 +161,8 @@ pub struct PresentationClient {
     shows_pages: bool,
     /// The hello lists [`STATUS_CHECKMARK_KIND`] ([`PresentationClient::set_draws_checkmark`]).
     draws_checkmark: bool,
+    /// [`PICK_KINDS`] while the hello lists them ([`PresentationClient::set_shows_picks`]), else empty.
+    pick_kinds: &'static [&'static str],
     /// The [`OPT_IN_KINDS`] the hello lists; [`AGENT_KIND`]'s frames are reported only when it is one.
     opt_in: Vec<&'static str>,
     /// The kinds the origin's last hello answer listed, kept after its link goes so what is said about that link's
@@ -195,6 +204,7 @@ impl PresentationClient {
             mode: None,
             shows_pages: false,
             draws_checkmark: true,
+            pick_kinds: &[],
             opt_in: Vec::new(),
             origin_kinds: Vec::new(),
         }
@@ -209,6 +219,12 @@ impl PresentationClient {
     /// by default. A viewer that does not draw it gets its status without that shape and draws its own one instead.
     pub fn set_draws_checkmark(&mut self, draws_checkmark: bool) {
         self.draws_checkmark = draws_checkmark;
+    }
+
+    /// Whether this viewer shows the session-bound picks an origin hands over, which the next hello says
+    /// ([`PICK_KINDS`]); off by default, so a viewer that draws none (the mobile apps) is never handed one.
+    pub fn set_shows_picks(&mut self, shows_picks: bool) {
+        self.pick_kinds = if shows_picks { &PICK_KINDS } else { &[] };
     }
 
     /// Whether this viewer shows what each pane runs (the Android chat view): the next hello lists [`AGENT_KIND`], an
@@ -249,6 +265,7 @@ impl PresentationClient {
         if !self.draws_checkmark {
             kinds.retain(|kind| kind != STATUS_CHECKMARK_KIND);
         }
+        kinds.extend(self.pick_kinds.iter().map(|kind| (*kind).to_owned()));
         kinds.extend(
             OPT_IN_KINDS
                 .iter()
@@ -412,6 +429,8 @@ impl PresentationClient {
             Body::PresenterRefused => self.report_mode(PresentationMode::Mirror, effects),
             Body::AskRequest(ask) => effects.push(ClientEffect::AskRequest(ask)),
             Body::AskDismiss(reference) => effects.push(ClientEffect::AskDismiss(reference)),
+            Body::PickRequest(pick) => effects.push(ClientEffect::PickRequest(pick)),
+            Body::PickDismiss(reference) => effects.push(ClientEffect::PickDismiss(reference)),
             Body::OverlayRequest(overlay) => effects.push(ClientEffect::OverlayRequest(overlay)),
             Body::OverlayClose(change) => effects.push(ClientEffect::OverlayClose(change)),
             Body::OverlayResize(change) => effects.push(ClientEffect::OverlayResize(change)),
@@ -427,6 +446,8 @@ impl PresentationClient {
             | Body::LinkClick(_)
             | Body::AskResolve(_)
             | Body::AskRejected(_)
+            | Body::PickResolve(_)
+            | Body::PickRejected(_)
             | Body::OverlayRejected(_)
             | Body::OverlayClosed(_)
             | Body::PageRejected(_)
@@ -880,12 +901,15 @@ mod tests {
         use super::super::frames::{PresentationPage, PresentationPageAction, PresentationPageSource};
         let mut harness = Harness::new(Some(1));
         harness.client.set_shows_pages(true);
+        harness.client.set_shows_picks(true);
         harness.start();
         let hello = harness.transport.link(0).0.borrow().sent[0].body.clone();
         let Body::Hello(hello) = hello else {
             panic!("{hello:?}");
         };
-        assert_eq!(hello.kinds, viewer_kinds(true));
+        let mut expected = viewer_kinds(true);
+        expected.extend(PICK_KINDS.map(str::to_owned));
+        assert_eq!(hello.kinds, expected);
         assert_eq!(
             hello.kinds.len(),
             SUPPORTED_KINDS.len() - 1,

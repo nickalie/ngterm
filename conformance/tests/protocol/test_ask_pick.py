@@ -6,8 +6,10 @@ import contextlib
 
 import pytest
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session
+from agterm_conformance.wait import wait_response
 
 UNKNOWN = "zzz"
+TIMEOUT_REFUSAL = "timeout must be more than 0 and at most 86400 seconds"
 YES_NO = [{"id": "yes", "label": "Yes", "hotkey": "Y"}, {"id": "no", "label": "No"}]
 ITEMS = [{"id": "a", "label": "Alpha", "subtitle": "first"}, {"id": "b", "label": "Beta"}]
 CHOICES = [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]
@@ -491,3 +493,58 @@ def test_a_pick_bound_to_a_session_waits_on_its_session(ctl):
         assert _pick_result(ctl, pick_id) == {"result": "cancelled"}
     assert_error(ctl.request("pick.open", UNKNOWN, items=ITEMS), f"no such session: {UNKNOWN}")
     assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("pick.open", "pick.result", "pick.cancel", "field:tree.session.pick")
+def test_a_session_pick_holds_the_session_and_its_window_slot(ctl):
+    """A second pick on the session is refused while the first waits, and the window's own pick slot shows it too."""
+    sid = _new(ctl)
+    with _cancelled(ctl, "pick.cancel", assert_ok(ctl.request("pick.open", sid, items=ITEMS))["id"]) as pick_id:
+        assert _top(ctl)["pickPending"] == pick_id
+        assert_error(ctl.request("pick.open", sid, items=ITEMS), "pick already pending")
+    assert_absent(_top(ctl), "pickPending")
+
+
+# -- timeouts
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("pick.open", "ask.open")
+@pytest.mark.parametrize("cmd", ["pick.open", "ask.open"])
+@pytest.mark.parametrize("timeout", [0, -1, 86400.5], ids=["zero", "negative", "over-a-day"])
+def test_a_timeout_out_of_range_is_refused(ctl, cmd, timeout):
+    args = {"items": ITEMS} if cmd == "pick.open" else {"title": "Proceed?", "buttons": YES_NO}
+    assert_error(ctl.request(cmd, timeout=timeout, **args), TIMEOUT_REFUSAL)
+    assert_absent(_top(ctl), "pickPending")
+    assert_absent(_top(ctl), "askPending")
+
+
+def _ends_cancelled(ctl, cmd, opened_id):
+    noun = cmd.split(".")[0]
+    reply = wait_response(ctl, cmd, opened_id, lambda response: response.result[noun]["result"] != "pending")
+    assert reply.result[noun] == {"result": "cancelled"}
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("pick.open", "pick.result", "field:tree.session.pick")
+def test_a_timed_pick_ends_cancelled(ctl):
+    """`--timeout` cancels a pick left unanswered, a window's own and one bound to a session."""
+    pick_id = assert_ok(ctl.request("pick.open", items=ITEMS, timeout=0.5))["id"]
+    with _cancelled(ctl, "pick.cancel", pick_id):
+        _ends_cancelled(ctl, "pick.result", pick_id)
+        assert_absent(_top(ctl), "pickPending")
+    sid = _new(ctl)
+    pick_id = assert_ok(ctl.request("pick.open", sid, items=ITEMS, timeout=0.5))["id"]
+    with _cancelled(ctl, "pick.cancel", pick_id):
+        _ends_cancelled(ctl, "pick.result", pick_id)
+        assert_absent(_node(ctl, sid), "pick")
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("ask.open", "ask.result", "field:tree.session.ask")
+def test_a_timed_ask_ends_cancelled(ctl):
+    sid = _new(ctl)
+    with _cancelled(ctl, "ask.cancel", _ask(ctl, sid, timeout=0.5)["id"]) as ask_id:
+        _ends_cancelled(ctl, "ask.result", ask_id)
+        assert_absent(_node(ctl, sid), "ask")
