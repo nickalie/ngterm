@@ -114,4 +114,9 @@ fn a_page_sessions_own_close_takes_the_session_close(cx: &mut TestAppContext) {
         "{asked:?}"
     );
     assert!(h.store().session(id).is_some(), "nothing closes before the answer");
+    h.state.page_closed_itself(page);
+    assert!(
+        h.state.take_frontend_work().actions.is_empty(),
+        "a cancel does not ask again"
+    );
 }
