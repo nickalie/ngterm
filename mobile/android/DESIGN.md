@@ -1023,7 +1023,7 @@ chat view off, its terminal picked, or an origin with no chat) opens as its term
 | An agent's notification (`ngtermctl notify`) | its title (or the session's name) / its body; the session as the header's subtext | each its own, until the session is detached |
 | Waiting (status `blocked`) | "docs-site is waiting for you" / the session's context, or "On build-01" | one per session: the next status replaces it, any other takes it down, and so does opening the session or detaching it |
 | Done (status `completed`) | "docs-site finished" / as above | as above |
-| A machine lost for good while sessions are attached | "Lost build-01" / the core's reason, or that its host key changed | until it connects again; the tap opens the app |
+| A machine lost for good while sessions are attached | "Lost build-01" / the core's reason, or that its host key changed | until it connects again or its last attached session goes; the tap opens the app |
 | An ask out of sight | its title / its message; "docs-site on build-01" as the subtext | until answered, taken back, or shown as the sheet |
 
 - **Asks in a notification:** a button ask gets an action per button; an input ask an inline reply per answering

@@ -28,6 +28,7 @@ import com.nickalie.ngterm.android.NgtermApplication
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.AlertKind
 import com.nickalie.ngterm.android.platform.LINK_NOTIFICATION_ID
+import com.nickalie.ngterm.core.ffi.MobileEvent
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -40,13 +41,14 @@ import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.Collections
 
 /**
  * Every notification switch turned off in Settings, end to end: the session's agent asks a question (its sheet, while
  * the session is on screen), the app goes to the background, and there the agent sets its status to waiting and sends
- * a notification. None of them posts: the attached session's quiet notification, which Android needs to keep the
- * connection, is the only one of the agents' and machines' up. Then Questions is turned on again, and the question
- * that still waits posts: the events did come, and only the switches held them.
+ * a notification. The test sees the status and the notification reach the app, and then that none of them posts: the
+ * attached session's quiet notification, which Android needs to keep the connection, is the only one of the agents'
+ * and machines' up. Then Questions is turned on again, and the question that still waits posts.
  *
  * The machine is the private `ngterm-headless` behind the private `sshd` that `scripts/test-android-e2e.sh` starts;
  * without the script's arguments the test is skipped. No live ngterm.
@@ -106,6 +108,11 @@ class NotificationsOffE2eTest {
         addMachine()
         turnEverySwitchOff()
         openANewSession()
+        val came = Collections.synchronizedSet(mutableSetOf<String>())
+        graph().connections.listen { event ->
+            if (event is MobileEvent.SessionStatus && event.status?.status == "blocked") came += "status"
+            if (event is MobileEvent.Notify) came += "notice"
+        }
 
         // the agent's three signals, a moment after the app goes to the background
         compose.waitUntil(CONNECT_WAIT_MS) { terminalText().isNotBlank() }
@@ -123,6 +130,8 @@ class NotificationsOffE2eTest {
         shell("input keyevent KEYCODE_HOME")
         // the test rule's clock moves only when the test waits for it: then the app sees it left the screen
         compose.waitUntil(CONNECT_WAIT_MS) { asks.onScreen.value == null }
+        compose.waitUntil(CONNECT_WAIT_MS) { came.containsAll(listOf("status", "notice")) }
+        // a post that a switch let through would land a moment after its event
         Thread.sleep(SETTLE_MS)
         compose.waitForIdle()
         Log.i(TAG, "notifications up in the background: ${manager().activeNotifications.map { it.tag }}")
@@ -262,7 +271,6 @@ class NotificationsOffE2eTest {
         const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
         const val CONNECT_WAIT_MS = 60_000L
 
-        // how long the status and the notice have to post, had a switch let them
-        const val SETTLE_MS = 12_000L
+        const val SETTLE_MS = 2_000L
     }
 }

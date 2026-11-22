@@ -263,6 +263,35 @@ class AlertsTest {
         }
 
     @Test
+    fun aMachineBackWhileErrorsWasOffStaysDownWhenItIsTurnedOn() =
+        runTest {
+            attached()
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Errors
+            settle()
+            core.emit(MobileEvent.MachineState("m1", MachineState.Unreachable("refused")))
+            core.emit(MobileEvent.MachineState("m1", MachineState.Connected))
+            enabled.value = AlertKind.entries.toSet()
+            settle()
+            assertFalse(sink.up(lostTag("m1")))
+            assertEquals(emptyList<Alert>(), sink.posted.filterIsInstance<Alert.Lost>())
+        }
+
+    @Test
+    fun aMachineWithNothingAttachedLeftStaysDownWhenErrorsIsTurnedOn() =
+        runTest {
+            attached()
+            core.emit(MobileEvent.MachineState("m1", MachineState.Unreachable("refused")))
+            connections.detach("m1", "s1")
+            settle()
+            assertFalse(sink.up(lostTag("m1")))
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Errors
+            settle()
+            enabled.value = AlertKind.entries.toSet()
+            settle()
+            assertFalse(sink.up(lostTag("m1")))
+        }
+
+    @Test
     fun aStatusThatCameWhileItsKindWasOffPostsWhenItIsTurnedOn() =
         runTest {
             attached()
@@ -286,6 +315,23 @@ class AlertsTest {
         }
 
     @Test
+    fun aStatusBroughtBackShowsTheSessionsNameAndContextOfNow() =
+        runTest {
+            attached()
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Waiting
+            settle()
+            core.emit(status("blocked"))
+            core.emit(MobileEvent.SessionName("m1", "s1", "Fix Linux"))
+            core.emit(MobileEvent.SessionContext("m1", "s1", "Sidebar rename drops the suffix"))
+            settle()
+            enabled.value = AlertKind.entries.toSet()
+            settle()
+            val status = sink.posted.filterIsInstance<Alert.Status>().single()
+            assertEquals("Fix Linux", status.session)
+            assertEquals("Sidebar rename drops the suffix", status.context)
+        }
+
+    @Test
     fun aKindTurnedOffWhileItsPostIsOnTheWayTakesItDown() =
         runTest {
             attached()
@@ -295,9 +341,13 @@ class AlertsTest {
             val emitter = thread { core.emit(status("blocked")) }
             sink.posting.await()
             enabled.value = AlertKind.entries.toSet() - AlertKind.Waiting
-            settle()
+            val switcher = thread { settle() }
+            val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HOLD_MS)
+            while (switcher.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.yield()
+            assertEquals(Thread.State.BLOCKED, switcher.state)
             release.countDown()
             emitter.join()
+            switcher.join()
             assertFalse(sink.up(statusTag(key)))
         }
 
@@ -441,6 +491,6 @@ class AlertsTest {
     }
 
     private companion object {
-        const val HOLD_MS = 500L
+        const val HOLD_MS = 5_000L
     }
 }

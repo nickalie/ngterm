@@ -158,7 +158,7 @@ fun askTag(
  * - an agent status change to waiting (`blocked`) or done (`completed`) while its session isn't on screen, replaced
  *   by the next change and taken down by one to anything else, by the session coming on screen or being detached;
  * - a machine with attached sessions lost for good ([AlertKind.Errors]: unreachable, or its host key changed), taken
- *   down when it connects again;
+ *   down when it connects again or its last attached session goes;
  * - every open ask out of sight ([AlertKind.Questions]; the ask rule: a dialog while its session is on screen, a
  *   notification otherwise), taken down when it is answered, dismissed, or comes on screen.
  *
@@ -225,6 +225,7 @@ class Alerts(
                     cancelStatus(gone)
                     synchronized(lock) { noticeTags.remove(gone)?.forEach(sink::cancel) }
                 }
+                before.mapTo(HashSet()) { it.machineId }.filter { attached[it].isNullOrEmpty() }.forEach(::dropLost)
                 before = now
             }
         }
@@ -267,10 +268,7 @@ class Alerts(
 
                     MachineState.Connected -> {
                         keyChanged -= event.machineId
-                        synchronized(lock) {
-                            lostAlerts -= event.machineId
-                            sink.cancel(lostTag(event.machineId))
-                        }
+                        dropLost(event.machineId)
                     }
 
                     // it retries on its own: nothing is lost yet
@@ -294,7 +292,7 @@ class Alerts(
         pane: String?,
     ) = withKinds { on ->
         if (AlertKind.Notices !in on) return@withKinds
-        val session = sessionName(key)
+        val session = connections.sessionName(key)
         val tag = "notice:${key.machineId}:${key.sessionId}:${notices.incrementAndGet()}"
         noticeTags.getOrPut(key) { mutableSetOf() } += tag
         sink.post(Alert.Notice(tag, key, machineName(key.machineId), session, title.ifBlank { session }, body, pane))
@@ -315,10 +313,8 @@ class Alerts(
             cancelStatus(key)
             return
         }
-        val stream = live.value[key]
-        val listed = connections.listing(key)?.context?.takeIf { it.isNotBlank() }
-        val context = if (stream?.contextSaid == true) stream.context else listed
-        val alert = Alert.Status(key, machineName(key.machineId), sessionName(key), kind, context, pane)
+        val context = connections.contextOf(key, live.value)
+        val alert = Alert.Status(key, machineName(key.machineId), connections.sessionName(key), kind, context, pane)
         withKinds { on ->
             statuses[key] = alert
             if (kind in on) sink.post(alert) else sink.cancel(alert.tag)
@@ -348,7 +344,8 @@ class Alerts(
         posted.retainAll(wanted.keys)
         for ((tag, ask) in wanted) {
             if (!posted.add(tag)) continue
-            sink.post(Alert.Ask(ask, machineName(ask.key.machineId), sessionName(ask.key), deliveryOf(ask.ask)))
+            val session = connections.sessionName(ask.key)
+            sink.post(Alert.Ask(ask, machineName(ask.key.machineId), session, deliveryOf(ask.ask)))
         }
     }
 
@@ -371,8 +368,25 @@ class Alerts(
                     kind !in on && kind in before -> sink.cancel(alert.tag)
                 }
             }
-            statuses.values.forEach { turn(it.kind, it) }
-            lostAlerts.values.forEach { turn(AlertKind.Errors, it) }
+            // the names and context of now, as they may have changed while the kind was off
+            for (status in statuses.values) {
+                val key = status.key
+                val now =
+                    status.copy(
+                        machine = machineName(key.machineId),
+                        session = connections.sessionName(key),
+                        context = connections.contextOf(key, live.value),
+                    )
+                turn(status.kind, now)
+            }
+            lostAlerts.values.forEach { turn(AlertKind.Errors, it.copy(machine = machineName(it.machineId))) }
+        }
+
+    // the machine is back, or nothing is attached on it now: its lost alert is no longer current
+    private fun dropLost(machineId: String) =
+        synchronized(lock) {
+            lostAlerts -= machineId
+            sink.cancel(lostTag(machineId))
         }
 
     private fun cancelStatus(key: SessionKey) =
@@ -382,8 +396,17 @@ class Alerts(
         }
 
     private fun machineName(machineId: String): String = names[machineId] ?: machineId
-
-    private fun sessionName(key: SessionKey): String = connections.listing(key)?.name ?: key.sessionId
 }
 
 private fun Connections.listing(key: SessionKey) = trees.value[key.machineId]?.firstOrNull { it.id == key.sessionId }
+
+private fun Connections.sessionName(key: SessionKey): String = listing(key)?.name ?: key.sessionId
+
+// a session's context: its stream's once it has said one, its listing's until then
+private fun Connections.contextOf(
+    key: SessionKey,
+    live: Map<SessionKey, LiveSession>,
+): String? {
+    val stream = live[key]
+    return if (stream?.contextSaid == true) stream.context else listing(key)?.context?.takeIf { it.isNotBlank() }
+}
