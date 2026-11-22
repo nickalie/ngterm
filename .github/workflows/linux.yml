@@ -61,9 +61,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      # Only main saves caches: a branch's would crowd main's out of the repository's cache space. cross-platform.yml's
-      # Ubuntu leg reads the cargo cache, that leg and the headless-e2e job the vendor cache (docs/development.md, CI
-      # caches).
+      # Only main saves the cargo and vendor caches: a branch's would crowd main's out of the repository's cache space
+      # (the wpe job's package cache saves on a miss on every ref). cross-platform.yml's Ubuntu leg reads the cargo
+      # cache, that leg and the headless-e2e job the vendor cache (docs/development.md, CI caches).
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: linux
@@ -215,17 +215,19 @@ jobs:
               exec pacman -Suu --needed --noconfirm "$@"
             fi
             rm -f /var/lib/pacman/db.lck
-            # the archive's mirror sends its snapshot's package links to archive.org, which has no recent packages
-            # yet: take the files from the mirror's pool (pacman checks each against the snapshot's db)
-            pacman -Suup --needed --print-format '%n %f' "$@" 2>/dev/null | while read -r name file; do
-              case "$file" in *.pkg.tar.*) ;; *) continue ;; esac
-              for f in "$file" "$file.sig"; do
-                [ -f "/var/cache/pacman/pkg/$f" ] && continue
-                timeout 5m curl -fsSL --retry 3 -o "/var/cache/pacman/pkg/$f.part" "$pool/${name:0:1}/$name/$f" &&
-                  mv "/var/cache/pacman/pkg/$f.part" "/var/cache/pacman/pkg/$f"
-              done
-            done
             if [ "$attempt" -lt 3 ]; then
+              # the archive's mirror sends its snapshot's package links to archive.org, which has no recent packages
+              # yet: take the files from the mirror's pool (pacman checks each against the snapshot's db)
+              deadline=$(($(date +%s) + 600))
+              pacman -Suup --needed --print-format '%n %f' "$@" 2>/dev/null | while read -r name file; do
+                case "$file" in *.pkg.tar.*) ;; *) continue ;; esac
+                for f in "$file" "$file.sig"; do
+                  [ -f "/var/cache/pacman/pkg/$f" ] && continue
+                  [ "$(date +%s)" -lt "$deadline" ] || exit 0
+                  timeout 5m curl -fsSL --connect-timeout 30 --retry 3 -o "/var/cache/pacman/pkg/$f.part" \
+                    "$pool/${name:0:1}/$name/$f" && mv "/var/cache/pacman/pkg/$f.part" "/var/cache/pacman/pkg/$f"
+                done
+              done
               echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
               sleep 30
             fi
