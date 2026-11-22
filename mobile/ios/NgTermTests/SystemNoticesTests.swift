@@ -222,6 +222,7 @@ internal struct SystemNoticesTests {
             try await Self.listed([question.id])
             notices.withdraw(kinds: [.questions])
             notices.post(question)
+            await notices.delivered()
             notices.withdraw(["other-\(tag)"])
             await notices.delivered()
             #expect(await Self.category(offering: action("kind-again")) != nil)
