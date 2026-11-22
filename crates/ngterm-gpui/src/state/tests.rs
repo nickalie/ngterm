@@ -1083,11 +1083,17 @@ fn remote_primary_paths_stay_remote_while_scratch_paths_stay_local() {
     let remote_path = std::env::temp_dir().join("remote-origin").join("a.png");
     click(&mut state, &main_loop, &remote_path.to_string_lossy(), session, "R");
     click(&mut state, &main_loop, "relative.bin", session, "R");
-    assert!(state.frontend.reveals.is_empty());
-    let local = std::env::temp_dir().join("remote.png");
+    // upstream's forwardsRemotely: a file:// link of any host names a file on the origin, as a path does
+    let local_directory = tempfile::tempdir().unwrap();
+    let local = local_directory.path().join("remote.png");
+    std::fs::write(&local, "local file").unwrap();
     let file_url = url::Url::from_file_path(&local).unwrap();
     click(&mut state, &main_loop, file_url.as_str(), session, "R");
-    assert_eq!(state.frontend.reveals, vec![local]);
+    assert!(state.frontend.reveals.is_empty() && state.frontend.open_urls.is_empty());
+    assert_eq!(
+        state.frontend.sounds, ["default"; 3],
+        "this machine does not present the session, so each forward is refused"
+    );
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("local.bin");
     std::fs::write(&path, "scratch file").unwrap();
