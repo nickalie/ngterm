@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 from agterm_conformance import transport
-from agterm_conformance.command_line import CommandLines
+from agterm_conformance.command_line import CommandLines, read_written
 from agterm_conformance.match import (
     ANY,
     assert_absent,
@@ -43,7 +43,7 @@ def _written(path):
 
     def written():
         assert path.exists(), f"{path.name} not written yet"
-        return path.read_text()
+        return read_written(path)
 
     written.__qualname__ = f"{path.name} written"
     return wait_until(written)

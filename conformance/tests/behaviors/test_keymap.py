@@ -3,7 +3,7 @@ its own instance; the file is the instance's `<state>/config/keymap.conf`, and e
 file in the instance root, by absolute path, in the build's command-line dialect (`agterm_conformance.command_line`)."""
 
 import pytest
-from agterm_conformance.command_line import CommandLines
+from agterm_conformance.command_line import CommandLines, read_written
 from agterm_conformance.match import assert_error, assert_ok
 from agterm_conformance.wait import wait_until
 
@@ -24,7 +24,7 @@ def _commands(ctl):
 def _ran(ctl, name, marker):
     sid = assert_ok(ctl.request("tree"))["tree"]["workspaces"][0]["sessions"][0]["id"]
     assert assert_ok(ctl.request("keymap.run", sid, name=name)) == {"id": sid}
-    assert wait_until(lambda: marker.exists() and marker.read_text()) == sid
+    assert wait_until(lambda: marker.exists() and read_written(marker)) == sid
 
 
 @pytest.mark.covers("behavior:keymap.loaded-at-launch")

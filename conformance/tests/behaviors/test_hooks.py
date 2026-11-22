@@ -5,7 +5,7 @@ path, in the build's command-line dialect (`agterm_conformance.command_line`).""
 import json
 
 import pytest
-from agterm_conformance.command_line import CommandLines
+from agterm_conformance.command_line import CommandLines, read_written
 from agterm_conformance.match import assert_absent, assert_ok, session_ids
 from agterm_conformance.wait import wait_until
 
@@ -21,7 +21,7 @@ def _recording(lines, kind, marker, tag):
 
 
 def _written(marker):
-    return wait_until(lambda: marker.exists() and marker.read_text())
+    return wait_until(lambda: marker.exists() and read_written(marker))
 
 
 @pytest.mark.covers("behavior:hooks.loaded-at-launch")

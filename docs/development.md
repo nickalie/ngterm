@@ -1459,7 +1459,8 @@ cargo test -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ng
 cargo test -p ngterm-gpui --no-default-features && cargo test -p ngterm-gpui   # without and with the HTML overlays
 python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance
 .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py conformance/selftests/test_client.py \
-  conformance/selftests/test_windows_launch.py conformance/selftests/test_uia.py   # pipe, launch, UIA mappings
+  conformance/selftests/test_windows_launch.py conformance/selftests/test_uia.py \
+  conformance/selftests/test_read_written.py   # pipe, launch, UIA mappings, renamed-file reads
 conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 ```
 

@@ -264,7 +264,7 @@ jobs:
         run: >-
           .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py
           conformance/selftests/test_client.py conformance/selftests/test_windows_launch.py
-          conformance/selftests/test_uia.py
+          conformance/selftests/test_uia.py conformance/selftests/test_read_written.py
       - name: build and stage
         run: conformance/tools/run-windows.sh ${{ matrix.flag }} --build-only
       # the staged tree the shards run, as a tar that keeps the modification time the live sessions' server's build

@@ -9,7 +9,7 @@ import re
 import shlex
 
 import pytest
-from agterm_conformance.command_line import CommandLines
+from agterm_conformance.command_line import CommandLines, read_written
 from agterm_conformance.match import active_session_id, assert_ok, find_session, session_ids
 from agterm_conformance.plugin import Ctl
 from agterm_conformance.wait import wait_until
@@ -36,7 +36,7 @@ def _written(path):
 
     written.__qualname__ = f"{path.name} written"
     wait_until(written)
-    return path.read_text()
+    return read_written(path)
 
 
 @pytest.mark.since("0.42.0")

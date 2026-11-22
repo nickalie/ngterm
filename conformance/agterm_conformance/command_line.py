@@ -4,16 +4,39 @@ the Rust build on Windows, which runs such a line as `%ComSpec% /D /S /C "<line>
 test as unsupported.
 
 Every line built here writes only the paths it is given, each quoted for its dialect; a file meant to be read whole
-is written to a temp name and renamed, so a reader never sees it half written."""
+is written to a temp name and renamed, so a reader never sees it half written; [`read_written`] reads such a
+file."""
 
 from __future__ import annotations
 
 import os
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 
 import pytest
+
+if sys.platform == "win32":
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32.CreateFileW.restype = wintypes.HANDLE
+    _kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    _GENERIC_READ = 0x80000000
+    _SHARE_ALL = 0x1 | 0x2 | 0x4  # FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    _OPEN_EXISTING = 3
+    _INVALID_HANDLE = wintypes.HANDLE(-1).value
 
 POSIX = "posix-command-line"
 CMD = "cmd-command-line"
@@ -26,6 +49,23 @@ def env_has_argv0(env: str = "/usr/bin/env") -> bool:
     except OSError:
         return False
     return run.returncode == 0
+
+
+def read_written(path) -> str:
+    """The text of a file that [`CommandLines.write`] renamed into place.
+
+    On Windows, `move` renames through a handle with delete access and closes that handle only after the rename, so
+    the file is already at its name while the handle is open. A plain `open` does not share delete access and fails
+    with a sharing violation (`PermissionError`) in that moment; this open shares it."""
+    if sys.platform != "win32":
+        with open(path, encoding="utf-8") as file:
+            return file.read()
+    handle = _kernel32.CreateFileW(os.fspath(path), _GENERIC_READ, _SHARE_ALL, None, _OPEN_EXISTING, 0, None)
+    if handle == _INVALID_HANDLE:
+        error = ctypes.get_last_error()
+        raise OSError(None, ctypes.FormatError(error).strip(), os.fspath(path), error)
+    with open(msvcrt.open_osfhandle(handle, os.O_RDONLY), encoding="utf-8") as file:
+        return file.read()
 
 
 @dataclass(frozen=True)
