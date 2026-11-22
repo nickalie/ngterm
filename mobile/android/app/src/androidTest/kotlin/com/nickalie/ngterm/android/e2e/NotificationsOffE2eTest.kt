@@ -112,8 +112,10 @@ class NotificationsOffE2eTest {
         // with no hardware keyboard, only a tap gives the terminal the focus that the typed keys need
         compose.onNode(terminal()).performClick()
         compose.waitForIdle()
-        shell("input text $SIGNALS")
-        shell("input keyevent KEYCODE_ENTER")
+        for (line in SIGNALS) {
+            shell("input text $line")
+            shell("input keyevent KEYCODE_ENTER")
+        }
 
         // the question opens on screen, as its sheet; then the app goes to the background, where it would post
         val asks = graph().asks
@@ -231,14 +233,18 @@ class NotificationsOffE2eTest {
         const val SESSION = "qa-quiet-work"
 
         /**
-         * Typed into the session's shell (fish; `%s` is a space to `input text`): a question at once, and once the app
-         * is in the background, waiting and a notification; each names this session, as the origin's active one is
-         * another.
+         * Typed into the session's shell (fish; `%s` is a space to `input text`), a line each, since a long line loses
+         * its end: `t` names this session, as the origin's active one is another; a separate process (fish runs a
+         * `begin` block in the foreground) sends waiting and a notification once the app is in the background; the
+         * question comes at once.
          */
-        const val SIGNALS =
-            "begin;sleep%s6;ngtermctl%ssession%sstatus%sblocked;" +
-                "ngtermctl%snotify%sqaoffbody%s--title%sQaOff%s--target%s\$NGTERM_SESSION_ID;end%s&;" +
-                "ngtermctl%sask%sopen%sQaOffQuestion%s--button%syes%s--button%sno%s--target%s\$NGTERM_SESSION_ID"
+        val SIGNALS =
+            listOf(
+                "set%s-x%st%s\$NGTERM_SESSION_ID",
+                "fish%s-c%s'sleep%s10;ngtermctl%ssession%sstatus%sblocked%s--target%s\$t;" +
+                    "ngtermctl%snotify%sqaoff%s--target%s\$t'%s&",
+                "ngtermctl%sask%sopen%sQaOff%s--button%syes%s--button%sno%s--target%s\$t",
+            )
 
         val SWITCHES =
             listOf(

@@ -162,10 +162,12 @@ fun askTag(
  * - every open ask out of sight ([AlertKind.Questions]; the ask rule: a dialog while its session is on screen, a
  *   notification otherwise), taken down when it is answered, dismissed, or comes on screen.
  *
- * The kinds the user turned off ([enabled]) are not posted, and turning one off takes its notifications down. Until
- * [enabled] has said which kinds are on, nothing posts on a guess. Names come from [machines] and the machines'
- * listings, and a session's context from its stream ([live]) once it has said one, its listing's until then.
- * Events arrive on the core's thread; [sink] is called from it and from [scope].
+ * The kinds the user turned off ([enabled]) are not posted, and turning one off takes its notifications down. Turned
+ * on again, a kind brings back what is still current: the open asks, each session's last waiting or done status and
+ * each machine still lost; an agent's notice is a message of its time and does not come back. Until [enabled] has said
+ * which kinds are on, nothing posts on a guess. Names come from [machines] and the machines' listings, and a session's
+ * context from its stream ([live]) once it has said one, its listing's until then. Events arrive on the core's thread;
+ * [sink] is called from it and from [scope].
  */
 @Suppress("LongParameterList") // a parameter per source the alerts read, and the sink they post to
 class Alerts(
@@ -179,13 +181,13 @@ class Alerts(
 ) {
     @Volatile private var names: Map<String, String> = emptyMap()
 
-    private val enabled = enabled.catch { emit(AlertKind.entries.toSet()) }
+    private val choices = enabled.catch { emit(AlertKind.entries.toSet()) }
 
-    // null until enabled has said
+    // the core's events and a change of the kinds on hold it, so a post and a kind turned off do not cross
+    private val lock = Any()
+
+    // the kinds the notifications up follow; null until choices has said
     @Volatile private var kinds: Set<AlertKind>? = null
-
-    // the kinds on: on the core's thread before enabled has said, it waits for its first word
-    private val kindsOn: Set<AlertKind> get() = kinds ?: runBlocking { enabled.first() }
     private val notices = AtomicLong()
 
     // the machines whose host key changed since they were last connected
@@ -194,12 +196,12 @@ class Alerts(
     // the asks posted, by tag (scope's thread)
     private val posted = mutableSetOf<String>()
 
-    // the agents' notices up, by session: taken down with its detach, since their tap leads to an attached session
-    private val noticeTags = ConcurrentHashMap<SessionKey, MutableSet<String>>()
-
-    // the status notifications up, by session, and the machines whose lost notification is up
-    private val statusUp = ConcurrentHashMap<SessionKey, AlertKind>()
-    private val lostUp: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    // under lock: the agents' notices up, by session, taken down with its detach since their tap leads to an attached
+    // session; each session's current waiting or done status; each machine's current lost alert. The last two are up
+    // while their kind is on.
+    private val noticeTags = HashMap<SessionKey, MutableSet<String>>()
+    private val statuses = HashMap<SessionKey, Alert.Status>()
+    private val lostAlerts = HashMap<String, Alert.Lost>()
 
     init {
         connections.listen(::onEvent)
@@ -209,9 +211,9 @@ class Alerts(
                     list.associate { it.id to it.title }
             }
         }
-        scope.launch { this@Alerts.enabled.collect(::onKinds) }
+        scope.launch { choices.collect(::onKinds) }
         scope.launch {
-            combine(asks.open, asks.onScreen, this@Alerts.enabled, ::Triple).collect { (open, shown, on) ->
+            combine(asks.open, asks.onScreen, choices, ::Triple).collect { (open, shown, on) ->
                 syncAsks(open.takeIf { AlertKind.Questions in on }.orEmpty(), shown)
             }
         }
@@ -221,11 +223,18 @@ class Alerts(
                 val now = attached.flatMap { (machine, ids) -> ids.map { SessionKey(machine, it) } }.toSet()
                 (before - now).forEach { gone ->
                     cancelStatus(gone)
-                    noticeTags.remove(gone)?.forEach(sink::cancel)
+                    synchronized(lock) { noticeTags.remove(gone)?.forEach(sink::cancel) }
                 }
                 before = now
             }
         }
+    }
+
+    // runs [block] under lock with the kinds on; on the core's thread before choices has said, it waits for its first
+    // word, outside the lock
+    private inline fun withKinds(block: (Set<AlertKind>) -> Unit) {
+        val read = kinds ?: runBlocking { choices.first() }
+        synchronized(lock) { block(kinds ?: read.also { kinds = it }) }
     }
 
     private fun onEvent(event: MobileEvent) {
@@ -258,8 +267,10 @@ class Alerts(
 
                     MachineState.Connected -> {
                         keyChanged -= event.machineId
-                        lostUp -= event.machineId
-                        sink.cancel(lostTag(event.machineId))
+                        synchronized(lock) {
+                            lostAlerts -= event.machineId
+                            sink.cancel(lostTag(event.machineId))
+                        }
                     }
 
                     // it retries on its own: nothing is lost yet
@@ -281,11 +292,11 @@ class Alerts(
         title: String,
         body: String,
         pane: String?,
-    ) {
-        if (AlertKind.Notices !in kindsOn) return
+    ) = withKinds { on ->
+        if (AlertKind.Notices !in on) return@withKinds
         val session = sessionName(key)
         val tag = "notice:${key.machineId}:${key.sessionId}:${notices.incrementAndGet()}"
-        noticeTags.computeIfAbsent(key) { ConcurrentHashMap.newKeySet() } += tag
+        noticeTags.getOrPut(key) { mutableSetOf() } += tag
         sink.post(Alert.Notice(tag, key, machineName(key.machineId), session, title.ifBlank { session }, body, pane))
     }
 
@@ -300,15 +311,18 @@ class Alerts(
                 "completed" -> AlertKind.Done
                 else -> null
             }
-        if (kind == null || kind !in kindsOn || asks.onScreen.value == key) {
+        if (kind == null || asks.onScreen.value == key) {
             cancelStatus(key)
             return
         }
         val stream = live.value[key]
-        val context =
-            if (stream?.contextSaid == true) stream.context else listing(key)?.context?.takeIf { it.isNotBlank() }
-        statusUp[key] = kind
-        sink.post(Alert.Status(key, machineName(key.machineId), sessionName(key), kind, context, pane))
+        val listed = connections.listing(key)?.context?.takeIf { it.isNotBlank() }
+        val context = if (stream?.contextSaid == true) stream.context else listed
+        val alert = Alert.Status(key, machineName(key.machineId), sessionName(key), kind, context, pane)
+        withKinds { on ->
+            statuses[key] = alert
+            if (kind in on) sink.post(alert) else sink.cancel(alert.tag)
+        }
     }
 
     // only a machine the user has sessions attached on: one without is lost quietly, as its own screen shows
@@ -316,9 +330,12 @@ class Alerts(
         machineId: String,
         reason: LostReason,
     ) {
-        if (AlertKind.Errors !in kindsOn || connections.attached.value[machineId].isNullOrEmpty()) return
-        lostUp += machineId
-        sink.post(Alert.Lost(machineId, machineName(machineId), reason))
+        if (connections.attached.value[machineId].isNullOrEmpty()) return
+        val alert = Alert.Lost(machineId, machineName(machineId), reason)
+        withKinds { on ->
+            lostAlerts[machineId] = alert
+            if (AlertKind.Errors in on) sink.post(alert)
+        }
     }
 
     private fun syncAsks(
@@ -335,28 +352,38 @@ class Alerts(
         }
     }
 
-    // a kind turned off takes its notifications down
-    private fun onKinds(on: Set<AlertKind>) {
-        kinds = on
-        if (AlertKind.Notices !in on) noticeTags.keys.forEach { key -> noticeTags.remove(key)?.forEach(sink::cancel) }
-        statusUp.filterValues { it !in on }.keys.forEach(::cancelStatus)
-        if (AlertKind.Errors !in on) {
-            lostUp.toList().forEach { machineId ->
-                lostUp -= machineId
-                sink.cancel(lostTag(machineId))
+    // a kind turned off takes its notifications down, and one turned on brings back what is still current
+    private fun onKinds(on: Set<AlertKind>) =
+        synchronized(lock) {
+            val before = kinds.orEmpty()
+            kinds = on
+            if (AlertKind.Notices !in on) {
+                noticeTags.values.forEach { tags -> tags.forEach(sink::cancel) }
+                noticeTags.clear()
             }
-        }
-    }
 
-    private fun cancelStatus(key: SessionKey) {
-        statusUp.remove(key)
-        sink.cancel(statusTag(key))
-    }
+            fun turn(
+                kind: AlertKind,
+                alert: Alert,
+            ) {
+                when {
+                    kind in on && kind !in before -> sink.post(alert)
+                    kind !in on && kind in before -> sink.cancel(alert.tag)
+                }
+            }
+            statuses.values.forEach { turn(it.kind, it) }
+            lostAlerts.values.forEach { turn(AlertKind.Errors, it) }
+        }
+
+    private fun cancelStatus(key: SessionKey) =
+        synchronized(lock) {
+            statuses.remove(key)
+            sink.cancel(statusTag(key))
+        }
 
     private fun machineName(machineId: String): String = names[machineId] ?: machineId
 
-    private fun listing(key: SessionKey) =
-        connections.trees.value[key.machineId]?.firstOrNull { it.id == key.sessionId }
-
-    private fun sessionName(key: SessionKey): String = listing(key)?.name ?: key.sessionId
+    private fun sessionName(key: SessionKey): String = connections.listing(key)?.name ?: key.sessionId
 }
+
+private fun Connections.listing(key: SessionKey) = trees.value[key.machineId]?.firstOrNull { it.id == key.sessionId }

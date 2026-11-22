@@ -175,7 +175,7 @@ class Connections(
 
     /**
      * Hands [listener] every event the core reports from now on, after this class has taken it, on the core's
-     * thread: it must not block.
+     * thread: it must not block, except for a short wait such as the one first read of stored settings.
      */
     fun listen(listener: (MobileEvent) -> Unit) {
         listeners += listener

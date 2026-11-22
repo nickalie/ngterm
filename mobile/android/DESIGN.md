@@ -731,7 +731,7 @@ compact                            medium (rail open)               expanded
 An origin hands this app an ask (`ngtermctl ask`) for any attached session: the agent has stopped and waits for an
 answer. The ask rule says where it shows: a **sheet over the session** while that session is on screen (its view
 open under Sessions and the app in the foreground), and a **notification** otherwise, including while the app is in
-the background, which is as good a place to answer as any.
+the background, which is as good a place to answer as any (while Questions is on, Settings).
 
 The plan, reviewed against the brief:
 
@@ -1030,8 +1030,11 @@ chat view off, its terminal picked, or an origin with no chat) opens as its term
   button (its placeholder as the hint; a one-line field's line breaks become spaces) and its cancel button as a plain
   action; a choice ask, or one with more than three buttons, says "Tap to answer in ngterm." (as its text, or under
   its message) and opens the session, where the ask is then its sheet. An ask says it once (`onlyAlertOnce`) and isn't cleared by a tap.
-- Waiting, Done, agents' notifications and lost machines can each be turned off (Settings); asks can't, since they
-  wait for an answer. A status change of the session on screen posts nothing: the user is looking at it.
+- Questions, Waiting, Done, agents' notifications and lost machines can each be turned off (Settings). A kind turned
+  off takes its notifications down; turned on again, it brings back the open asks, each session's last waiting or
+  done status and each machine that is still lost (an agent's notification is a message, and does not come back).
+  With Questions off, an ask shows only as its sheet while its session is on screen. A status change of the session
+  on screen posts nothing: the user is looking at it.
 
 ### Keeping sessions connected (`service/LinkService.kt`)
 

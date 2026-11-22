@@ -27,6 +27,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /** The core's events and the open asks mapped to notifications, through a sink that records them. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -39,16 +43,28 @@ class AlertsTest {
 
     /** What the alerts did, in order: `post <alert>` or `cancel <tag>`. */
     private class Sink : AlertSink {
-        val posted = mutableListOf<Alert>()
-        val cancelled = mutableListOf<String>()
+        val posted: MutableList<Alert> = Collections.synchronizedList(mutableListOf())
+        val cancelled: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+        // the tags in the order of their posts and cancels, and the post that waits (a race's window) when set
+        val log: MutableList<Pair<String, Boolean>> = Collections.synchronizedList(mutableListOf())
+        val posting = CountDownLatch(1)
+
+        @Volatile var hold: CountDownLatch? = null
 
         override fun post(alert: Alert) {
+            posting.countDown()
+            hold?.await(HOLD_MS, TimeUnit.MILLISECONDS)
             posted += alert
+            log += alert.tag to true
         }
 
         override fun cancel(tag: String) {
             cancelled += tag
+            log += tag to false
         }
+
+        fun up(tag: String): Boolean = log.lastOrNull { it.first == tag }?.second == true
     }
 
     private val sink = Sink()
@@ -214,6 +230,78 @@ class AlertsTest {
         }
 
     @Test
+    fun aKindTurnedOnAgainBringsBackWhatIsStillCurrent() =
+        runTest {
+            attached()
+            core.emit(status("blocked"))
+            core.emit(MobileEvent.MachineState("m1", MachineState.Unreachable("refused")))
+            core.emit(MobileEvent.Notify("m1", "s1", RemoteNotice("t", "b", null, "notify")))
+            val notice = sink.posted.filterIsInstance<Alert.Notice>().single()
+            enabled.value = setOf(AlertKind.Questions)
+            settle()
+            assertFalse(sink.up(statusTag(key)) || sink.up(lostTag("m1")) || sink.up(notice.tag))
+            sink.posted.clear()
+            enabled.value = AlertKind.entries.toSet()
+            settle()
+            assertTrue(sink.up(statusTag(key)) && sink.up(lostTag("m1")))
+            assertEquals(
+                AlertKind.Waiting,
+                sink.posted
+                    .filterIsInstance<Alert.Status>()
+                    .single()
+                    .kind,
+            )
+            assertEquals(
+                LostReason.Unreachable("refused"),
+                sink.posted
+                    .filterIsInstance<Alert.Lost>()
+                    .single()
+                    .reason,
+            )
+            // a notice is a message of its time: it does not come back
+            assertFalse(sink.up(notice.tag))
+        }
+
+    @Test
+    fun aStatusThatCameWhileItsKindWasOffPostsWhenItIsTurnedOn() =
+        runTest {
+            attached()
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Waiting
+            settle()
+            core.emit(status("blocked"))
+            assertFalse(sink.up(statusTag(key)))
+            enabled.value = AlertKind.entries.toSet()
+            settle()
+            assertTrue(sink.up(statusTag(key)))
+            // a change of another kind does not post it again, and a status gone by then does not come back
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Notices
+            settle()
+            assertEquals(1, sink.posted.filterIsInstance<Alert.Status>().size)
+            core.emit(status("active"))
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Waiting
+            settle()
+            enabled.value = AlertKind.entries.toSet()
+            settle()
+            assertFalse(sink.up(statusTag(key)))
+        }
+
+    @Test
+    fun aKindTurnedOffWhileItsPostIsOnTheWayTakesItDown() =
+        runTest {
+            attached()
+            val release = CountDownLatch(1)
+            sink.hold = release
+            // the core's thread posts waiting, and the user turns Waiting off before that post lands
+            val emitter = thread { core.emit(status("blocked")) }
+            sink.posting.await()
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Waiting
+            settle()
+            release.countDown()
+            emitter.join()
+            assertFalse(sink.up(statusTag(key)))
+        }
+
+    @Test
     fun anEventBeforeTheChoicesAreReadWaitsForThem() =
         runTest {
             // the alerts' own scope never runs: their collectors have not read the choices when the events come
@@ -350,5 +438,9 @@ class AlertsTest {
         )
         assertEquals(AskDelivery.Reply, deliveryOf(testAsk(input = RemoteAskInput(false, "", null))))
         assertEquals(AskDelivery.OpenApp, deliveryOf(testAsk(choices = testChoices())))
+    }
+
+    private companion object {
+        const val HOLD_MS = 500L
     }
 }
