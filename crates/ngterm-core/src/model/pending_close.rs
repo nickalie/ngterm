@@ -680,8 +680,9 @@ impl AppStore {
 
     /// Puts one session back at its recorded place, rebuilding its workspace as a shell when the tree lost it, and
     /// returns the workspace it went to. A companion follows a parent that moved since, or regrouping would detach
-    /// it; a top-level session lands outside a group that grew into its slot.
-    fn restore_pending_session(&mut self, close: PendingSessionClose) -> Uuid {
+    /// it, and joins that parent's own parent once a conversion made it a companion; a top-level session lands outside a group that grew into its slot.
+    fn restore_pending_session(&mut self, mut close: PendingSessionClose) -> Uuid {
+        close.session.companion.parent = close.session.parent_id().map(|parent| self.group_root(parent));
         let parent = close.session.parent_id().and_then(|parent| self.location(parent));
         let workspace_index = match parent {
             Some(at) => at.workspace,

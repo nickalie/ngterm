@@ -282,6 +282,7 @@ fn confirmations_use_upstreams_words() {
             tint: None,
             content: ngterm_core::model::SessionContent::Terminal,
             remote_host: None,
+            parent: None,
         },
     );
     assert_eq!(
@@ -339,6 +340,7 @@ fn a_parents_close_confirmation_names_the_companions_not_chosen_with_it() {
         tint: None,
         content: ngterm_core::model::SessionContent::Terminal,
         remote_host: None,
+        parent: None,
     };
     context.menu.sessions.insert(parent, facts("api", vec![logs, tests]));
     context.menu.sessions.insert(logs, facts("logs", Vec::new()));
@@ -1043,10 +1045,10 @@ fn the_row_menu_and_the_footers_add_session_menu_run_their_items(cx: &mut TestAp
         },
         "Mark for Attention ran on the clicked row"
     );
-    // Clear Status, Rename, Copy Name, Duplicate Session, New Companion, Duplicate as Companion, Move to, Flag: the
-    // eighth item
+    // Clear Status, Rename, Copy Name, Duplicate Session, New Companion, Duplicate as Companion, Convert to Companion,
+    // Move to, Flag: the ninth item
     right_click(cx, "row:srv");
-    cx.simulate_keystrokes("down down down down down down down down enter");
+    cx.simulate_keystrokes("down down down down down down down down down enter");
     h.settle(cx);
     assert!(h.store().session(srv).unwrap().flagged, "Flag ran on the clicked row");
 
@@ -1325,6 +1327,7 @@ fn ending_a_remote_session_says_what_stops_where() {
         tint: None,
         content: ngterm_core::model::SessionContent::Terminal,
         remote_host: host.map(str::to_owned),
+        parent: None,
     };
     context
         .menu
@@ -1690,6 +1693,11 @@ fn the_session_menus_items_run_on_their_rows(cx: &mut TestAppContext) {
 
     perform(&mut h, cx, MenuAction::Rename(srv));
     assert_eq!(h.view.read_with(cx, |sidebar, _| sidebar.editing()), Some(srv));
+
+    perform(&mut h, cx, MenuAction::ConvertToCompanion(srv));
+    let fresh = h.store().session(srv).unwrap().parent_id().expect("a fresh parent");
+    assert_eq!(h.store().session(fresh).unwrap().parent_id(), None);
+    assert_eq!(h.store().selected_session_id(), Some(srv));
 }
 
 /// The workspace menu's items: a session in it, the focus set, flag all, and Delete Workspace confirmed while it holds

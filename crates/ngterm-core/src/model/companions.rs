@@ -8,6 +8,10 @@
 //! placement rule here keeps a companion inside its parent's run and a top-level session outside any run. Companions
 //! have no companions of their own: a companion target means its parent.
 //!
+//! Convert to Companion ([`AppStore::convert_to_companion`]) is the one path that changes a parent link after
+//! creation, so a recorded parent can be a companion by the time its child comes back: both reopen paths resolve it
+//! through [`AppStore::group_root`].
+//!
 //! A local parent whose last pane exits while it has companions restarts a plain login shell in its last cwd instead
 //! of closing ([`AppStore::close_primary_pane_at`], `panes.rs`), unless its previous restart is under
 //! [`RESPAWN_MINIMUM_UPTIME`] old. The pane keeps its identity, and [`Session::primary_respawns`] counts the restarts
@@ -35,8 +39,9 @@ pub enum SessionContent {
 /// A session's place in a companion group (upstream's `Session.parentID` and `isExpanded`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompanionState {
-    /// The session this one is a companion of; set at creation and never changed, except that a rebuilt workspace
-    /// drops a link naming no top-level session in it. Persisted.
+    /// The session this one is a companion of: set at creation, moved by Convert to Companion and by a reopen under
+    /// a converted group's root, and dropped by a rebuilt workspace when it names no top-level session in it.
+    /// Persisted.
     pub(crate) parent: Option<Uuid>,
     /// Whether a parent row shows its companions in the sidebar tree. Persisted only when folded.
     pub expanded: bool,
@@ -100,6 +105,27 @@ pub enum CompanionRefusal {
     RemoteParent,
     /// A page companion's page could not take its row's slot; the row was not kept.
     PageNotOpened(HtmlOverlayOpenFailure),
+}
+
+/// Why Convert to Companion changed nothing (upstream's `ConvertRefusal`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvertRefusal {
+    NoSuchSession,
+    AlreadyCompanion,
+    /// The session is attached from another machine: its origin converts it, never this window.
+    RemoteSession,
+}
+
+impl ConvertRefusal {
+    /// The text every surface shows for the refusal.
+    #[must_use]
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::NoSuchSession => "no such session",
+            Self::AlreadyCompanion => "already a companion",
+            Self::RemoteSession => "convert it on the Mac it runs on",
+        }
+    }
 }
 
 /// How a page companion's row starts (upstream's `addPageCompanion` arguments beside the page).
@@ -183,6 +209,52 @@ impl AppStore {
         session
             .remote_peer()
             .or_else(|| self.parent_of(session).and_then(Session::remote_peer))
+    }
+
+    /// The parent a session reopened under `recorded` joins: `recorded`, or its own parent once Convert to Companion
+    /// made it a companion. Nesting is one level, so one hop is enough.
+    pub(crate) fn group_root(&self, recorded: Uuid) -> Uuid {
+        self.session(recorded).and_then(Session::parent_id).unwrap_or(recorded)
+    }
+
+    /// Nests local top-level session `id` and its companions, still running, under a fresh login-shell session opened
+    /// in its slot and focused cwd, then selects `id` (upstream's `convertToCompanion`). Returns the fresh parent.
+    ///
+    /// # Errors
+    ///
+    /// The [`ConvertRefusal`] naming why nothing changed.
+    pub fn convert_to_companion(&mut self, id: Uuid) -> Result<Uuid, ConvertRefusal> {
+        let at = self.location(id).ok_or(ConvertRefusal::NoSuchSession)?;
+        let session = &self.workspaces[at.workspace].sessions[at.session];
+        if session.companion.parent.is_some() {
+            return Err(ConvertRefusal::AlreadyCompanion);
+        }
+        if session.remote_host().is_some() {
+            return Err(ConvertRefusal::RemoteSession);
+        }
+        let cwd = session.focused_cwd().to_owned();
+        let workspace = self.workspaces[at.workspace].id();
+        // read before the regroup: a companion has no companions of its own
+        let group: Vec<Uuid> = std::iter::once(id)
+            .chain(self.companions(id).into_iter().map(Session::id))
+            .collect();
+        let spec = NewSession {
+            at: Some(at.session),
+            select: false,
+            ..NewSession::at_cwd(cwd)
+        };
+        let parent = self.add_session(workspace, spec).ok_or(ConvertRefusal::NoSuchSession)?;
+        for member in group {
+            if let Some(session) = self.session_mut(member) {
+                session.companion.parent = Some(parent);
+            }
+        }
+        if self.selected_session_id != Some(id) {
+            self.select_session(Some(id));
+        }
+        self.schedule_tree_changed();
+        self.save();
+        Ok(parent)
     }
 
     /// Creates a companion after the parent's last one and returns its id; a companion target means its parent.

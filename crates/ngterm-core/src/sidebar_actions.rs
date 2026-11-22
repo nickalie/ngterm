@@ -51,6 +51,9 @@ pub enum SidebarAction {
     /// Row menu and Duplicate as Companion: a companion copying the row's session, each pane's program started
     /// again (upstream's `duplicateAsCompanion`).
     DuplicateAsCompanion(Uuid),
+    /// Row menu and Convert to Companion: the row's session, still running, nested with its companions under a fresh
+    /// session in its slot (upstream's `AppActions.convertToCompanion`).
+    ConvertToCompanion(Uuid),
     /// A remote row's menu: a new session on the machine the row came from, attached here in the row's workspace.
     NewRemoteSession(Uuid),
     /// A remote row's menu, confirmed by the frontend: its session ended on the machine it came from.
@@ -205,6 +208,7 @@ impl Core {
             }
             SidebarAction::NewCompanion(session) => self.new_companion(window, session),
             SidebarAction::DuplicateAsCompanion(session) => self.duplicate_as_companion(window, session),
+            SidebarAction::ConvertToCompanion(session) => self.convert_to_companion(window, session),
             SidebarAction::NewRemoteSession(session) => self.begin_new_remote_session(window, session),
             SidebarAction::EndRemoteSession(session) => self.begin_end_remote_session(window, session),
             other => {
@@ -352,6 +356,22 @@ impl Core {
         }
     }
 
+    /// Convert to Companion of `session`: the converted session stays selected and takes the keyboard; a refusal shows
+    /// in a timed HUD over the session, as Duplicate as Companion's does.
+    fn convert_to_companion(&mut self, window: Uuid, session: Uuid) -> bool {
+        let Some(store) = self.library_mut().store_mut(window) else {
+            return false;
+        };
+        match store.convert_to_companion(session) {
+            Ok(_) => self.created_by_user(session),
+            Err(refusal) => {
+                let over = store.session(session).map(crate::model::Session::id);
+                self.action_failed("Convert to Companion", window, over, refusal.message());
+                true
+            }
+        }
+    }
+
     /// Sessions at each directory in `workspace`, appended (Open Directory… and a folder drop).
     fn open_directories(&mut self, window: Uuid, workspace: Uuid, directories: &[String]) -> bool {
         let Some(store) = self.library_mut().store_mut(window) else {
@@ -453,6 +473,7 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool, tint_s
         | SidebarAction::Duplicate(_)
         | SidebarAction::NewCompanion(_)
         | SidebarAction::DuplicateAsCompanion(_)
+        | SidebarAction::ConvertToCompanion(_)
         | SidebarAction::NewRemoteSession(_)
         | SidebarAction::EndRemoteSession(_)
         | SidebarAction::FocusActiveTerminal => return false,

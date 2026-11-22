@@ -76,6 +76,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::CompanionNew
         | SessionCmd::CompanionPage
         | SessionCmd::CompanionDuplicate
+        | SessionCmd::CompanionConvert
         | SessionCmd::CompanionPageAttach
         | SessionCmd::Collapse
         | SessionCmd::Expand => super::companions::dispatch(core, cmd, request),

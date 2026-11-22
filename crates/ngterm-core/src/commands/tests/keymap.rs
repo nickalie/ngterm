@@ -115,7 +115,7 @@ fn list_without_a_file_reports_the_linux_builtins_alone() {
     assert_eq!(listing["diagnostics"], json!([]));
     assert!(listing.get("menu").is_none());
     let actions = listing["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 55);
+    assert_eq!(actions.len(), 56);
     let search = actions
         .iter()
         .find(|action| action["action"] == "focus_sidebar_search")

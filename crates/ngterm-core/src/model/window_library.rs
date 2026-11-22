@@ -762,12 +762,8 @@ impl WindowLibrary {
         if let Some(parent) = companion_parent(&entry)
             && self.window_with_session_in_tree(parent).is_none()
         {
-            let holder = self
-                .recent_closed
-                .items()
-                .into_iter()
-                .find(|candidate| holds_top_level_session(candidate, parent))?;
-            self.reopen_recent_closed_outcome(holder.id, into)?;
+            let holder = self.parent_holder(parent)?;
+            self.reopen_recent_closed_outcome(holder, into)?;
         }
         let item = self.recent_closed.item(item)?;
         let window = self.restore_destination(&item, into)?;
@@ -796,12 +792,32 @@ impl WindowLibrary {
         let Some(parent) = self.recent_closed.item(item).as_ref().and_then(companion_parent) else {
             return false;
         };
-        self.window_with_session_in_tree(parent).is_none()
-            && !self
-                .recent_closed
-                .items()
-                .iter()
-                .any(|candidate| holds_top_level_session(candidate, parent))
+        self.window_with_session_in_tree(parent).is_none() && self.parent_holder(parent).is_none()
+    }
+
+    /// The entry whose reopen brings `parent` back: one holding it top-level or in its group
+    /// ([`restores_session`]), else `parent`'s own lone-companion entry once a conversion nested it, when its own
+    /// parent is open or held that way. Nesting is one level, so that one hop is enough and a loop of entries naming
+    /// each other their parent holds nothing.
+    fn parent_holder(&self, parent: Uuid) -> Option<Uuid> {
+        let items = self.recent_closed.items();
+        let held = |session: Uuid| items.iter().find(|candidate| restores_session(candidate, session));
+        if let Some(holder) = held(parent) {
+            return Some(holder.id);
+        }
+        items
+            .iter()
+            .find(|candidate| {
+                companion_parent(candidate).is_some_and(|root| {
+                    root != parent
+                        && candidate
+                            .session
+                            .as_ref()
+                            .is_some_and(|recent| recent.snapshot.id == parent)
+                        && (self.window_with_session_in_tree(root).is_some() || held(root).is_some())
+                })
+            })
+            .map(|holder| holder.id)
     }
 
     /// The open window whose tree holds `session`.
@@ -874,23 +890,26 @@ fn companion_parent(item: &RecentClosedItem) -> Option<Uuid> {
     item.session.as_ref().and_then(|recent| recent.snapshot.parent_id)
 }
 
-/// Whether `item` would reopen `session` as a top-level session: a session entry of it, or a workspace entry holding
-/// it outside any group. Either way the snapshot must name no parent, so an entry claiming to be its own or another
-/// companion's parent (a hand-edited `recent-closed.json`) holds nothing and a reopen cannot loop through it.
-/// Upstream's `holdsTopLevelSession` checks this for the workspace entry only.
-fn holds_top_level_session(item: &RecentClosedItem, session: Uuid) -> bool {
+/// Whether `item` would reopen `session` without needing a parent of its own: a top-level session entry holding it as
+/// its root or one of its companions, or a workspace entry holding it. Convert to Companion can nest a recorded parent
+/// after the record, so it may come back as a companion (upstream's `restoresSession`). A session entry's root must
+/// name no parent, so an entry claiming to be its own or another companion's parent (a hand-edited
+/// `recent-closed.json`) holds nothing and a reopen cannot loop through it.
+fn restores_session(item: &RecentClosedItem, session: Uuid) -> bool {
     match item.kind {
-        RecentClosedKind::Session => item
-            .session
-            .as_ref()
-            .is_some_and(|recent| recent.snapshot.id == session && recent.snapshot.parent_id.is_none()),
-        RecentClosedKind::Workspace => item.workspace.as_ref().is_some_and(|recent| {
-            recent
-                .snapshot
-                .sessions
-                .iter()
-                .any(|snapshot| snapshot.id == session && snapshot.parent_id.is_none())
+        RecentClosedKind::Session => item.session.as_ref().is_some_and(|recent| {
+            recent.snapshot.parent_id.is_none()
+                && (recent.snapshot.id == session
+                    || recent
+                        .companions
+                        .iter()
+                        .flatten()
+                        .any(|companion| companion.id == session))
         }),
+        RecentClosedKind::Workspace => item
+            .workspace
+            .as_ref()
+            .is_some_and(|recent| recent.snapshot.sessions.iter().any(|snapshot| snapshot.id == session)),
     }
 }
 

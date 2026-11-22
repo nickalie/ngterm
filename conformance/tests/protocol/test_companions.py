@@ -8,6 +8,7 @@ import shlex
 
 import pytest
 from agterm_conformance.match import (
+    active_session_id,
     assert_absent,
     assert_error,
     assert_ok,
@@ -701,3 +702,32 @@ def test_convert_nests_a_session_with_its_companions_under_a_fresh_session_in_it
 @pytest.mark.covers("session.companion.convert")
 def test_convert_resolves_its_target(ctl):
     assert_error(ctl.request("session.companion.convert", UNKNOWN), f"no such session: {UNKNOWN}")
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.companion.convert")
+def test_convert_refuses_a_companion_and_changes_nothing(ctl):
+    wid, (parent,) = _workspace(ctl)
+    companion = _companion(ctl, parent)
+    assert_error(ctl.request("session.companion.convert", companion), "already a companion")
+    tree = ctl.tree()
+    assert session_ids(tree, wid) == [parent, companion]
+    assert find_session(tree, companion)["parent"] == parent
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("session.companion.convert", "field:result.parent")
+def test_a_converted_session_keeps_its_name_and_flag_and_ends_selected(ctl):
+    wid, (task, other) = _workspace(ctl, sessions=2)
+    assert_ok(ctl.request("session.rename", task, name="task"))
+    assert_ok(ctl.request("session.flag", task, mode="on"))
+    assert_ok(ctl.request("session.select", other))
+    fresh = assert_ok(ctl.request("session.companion.convert", task))["parent"]
+    tree = ctl.tree()
+    converted = find_session(tree, task)
+    assert (converted["name"], converted.get("flagged"), converted["parent"]) == ("task", True, fresh)
+    assert find_session(tree, fresh).get("flagged") is not True
+    assert active_session_id(tree) == task
+    assert_ok(ctl.request("session.flag", task, mode="off"))
+    assert_ok(ctl.request("workspace.delete", wid))

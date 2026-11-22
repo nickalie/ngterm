@@ -33,6 +33,8 @@ pub struct SessionFacts {
     pub content: SessionContent,
     /// The machine a remote row was attached from.
     pub remote_host: Option<String>,
+    /// The parent of a companion row, which cannot be converted into a companion; `None` for a top-level row.
+    pub parent: Option<Uuid>,
 }
 
 /// What a workspace row's menu reads of its workspace.
@@ -97,6 +99,8 @@ pub enum MenuAction {
     NewCompanion(Uuid),
     /// Duplicate as Companion of a row's session.
     DuplicateAsCompanion(Uuid),
+    /// Convert to Companion of a row's session.
+    ConvertToCompanion(Uuid),
     /// A new session on the machine a remote row came from.
     NewRemoteSession(Uuid),
     /// End a remote row's session on the machine it came from, confirmed first.
@@ -237,28 +241,37 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
     menu
 }
 
-/// What only one target offers: Copy Name and the session creators, the remote row's among them.
+/// What only one target offers: Copy Name and the session creators, the remote row's among them, then the companion
+/// items in their own section. Convert to Companion is omitted on a companion row and disabled on a remote one.
 fn single_target_items(context: &MenuContext, facts: &[&SessionFacts], clicked: Uuid) -> Vec<MenuEntry> {
     let name = context.sessions.get(&clicked).map(|facts| facts.name.clone());
     let mut items = vec![
         MenuItem::new("Copy Name", MenuAction::CopyName(name)),
         MenuItem::new("Duplicate Session", MenuAction::Duplicate(clicked)),
-        MenuItem::new("New Companion", MenuAction::NewCompanion(clicked)),
     ];
-    if facts
-        .first()
-        .is_some_and(|facts| facts.content == SessionContent::Terminal)
-    {
-        items.push(MenuItem::new(
-            "Duplicate as Companion",
-            MenuAction::DuplicateAsCompanion(clicked),
-        ));
-    }
     items.extend(
         remote_host(facts)
             .map(|host| MenuItem::new(format!("New Session on {host}"), MenuAction::NewRemoteSession(clicked))),
     );
-    items.into_iter().map(MenuEntry::Item).collect()
+    let mut section = vec![MenuItem::new("New Companion", MenuAction::NewCompanion(clicked))];
+    let row = facts.first();
+    if row.is_some_and(|facts| facts.content == SessionContent::Terminal) {
+        section.push(MenuItem::new(
+            "Duplicate as Companion",
+            MenuAction::DuplicateAsCompanion(clicked),
+        ));
+    }
+    if let Some(row) = row.filter(|facts| facts.parent.is_none()) {
+        section.push(MenuItem {
+            enabled: row.remote_host.is_none(),
+            ..MenuItem::new("Convert to Companion", MenuAction::ConvertToCompanion(clicked))
+        });
+    }
+    let mut entries: Vec<MenuEntry> = items.into_iter().map(MenuEntry::Item).collect();
+    entries.push(MenuEntry::Separator);
+    entries.extend(section.into_iter().map(MenuEntry::Item));
+    entries.push(MenuEntry::Separator);
+    entries
 }
 
 /// The machine the only target's row came from.
@@ -517,6 +530,7 @@ mod tests {
             tint: None,
             content: SessionContent::Terminal,
             remote_host: None,
+            parent: None,
         };
         let workspace = |id, name: &str, count| WorkspaceFacts {
             id,
@@ -607,8 +621,11 @@ mod tests {
                 "Rename",
                 "Copy Name",
                 "Duplicate Session",
+                "-",
                 "New Companion",
                 "Duplicate as Companion",
+                "Convert to Companion",
+                "-",
                 "Move to [1]",
                 "Flag",
                 "Tint [18]",
@@ -634,7 +651,31 @@ mod tests {
                 }
             ))],
         }));
-        assert_eq!(labels(&session_menu(&context, a, |_| false))[10], "(Reveal in Files)");
+        assert!(menu.contains(&MenuEntry::Item(MenuItem::new(
+            "Convert to Companion",
+            MenuAction::ConvertToCompanion(a)
+        ))));
+        assert_eq!(labels(&session_menu(&context, a, |_| false))[13], "(Reveal in Files)");
+    }
+
+    /// Upstream's `testConvertIsOmittedOnACompanionRowAndDisabledOnARemoteRow` and
+    /// `testCompanionItemsSitInTheirOwnSectionOnParentAndCompanionRows`.
+    #[test]
+    fn convert_is_omitted_on_a_companion_row_and_disabled_on_a_remote_row() {
+        let (mut context, _, [a, b, ..]) = context();
+        context.sessions.get_mut(&a).unwrap().parent = Some(b);
+        context.sessions.get_mut(&b).unwrap().remote_host = Some("far".to_owned());
+        let companion = labels(&session_menu(&context, a, |_| true));
+        assert!(
+            !companion.iter().any(|label| label.contains("Convert")),
+            "{companion:?}"
+        );
+        let first = companion.iter().position(|label| label == "New Companion").unwrap();
+        assert_eq!(companion[first - 1], "-", "{companion:?}");
+        assert_eq!(companion[first + 1], "Duplicate as Companion", "{companion:?}");
+        assert_eq!(companion[first + 2], "-", "{companion:?}");
+        let remote = labels(&session_menu(&context, b, |_| true));
+        assert!(remote.contains(&"(Convert to Companion)".to_owned()), "{remote:?}");
     }
 
     /// Upstream's `testMoveToIsOfferedForAParentAndNotForACompanion`: b becomes a's companion.

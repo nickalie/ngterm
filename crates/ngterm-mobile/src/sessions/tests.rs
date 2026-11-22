@@ -365,6 +365,38 @@ async fn the_list_drops_page_companions_and_puts_parents_first() {
     assert_eq!(transport.execs()[0].pty, None);
 }
 
+/// Convert to Companion on the machine: the fresh session it opened lists first as the parent, the converted session
+/// and its old companion under it.
+#[tokio::test]
+async fn a_converted_group_lists_its_fresh_parent_first_with_both_under_it() {
+    const FRESH: &str = "00000000-0000-0000-0000-0000000000A4";
+    let transport = FakeTransport::new();
+    transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        listing(&[
+            session(PARENT, "converted", Some(FRESH), None),
+            session(COMPANION, "companion", Some(FRESH), None),
+            session(FRESH, "fresh", None, None),
+        ]),
+    );
+    let connection = connected(&transport).await;
+
+    let tree = list(&connection, HOST).await.expect("a listing");
+
+    let listed: Vec<(String, Option<String>)> = listed_sessions(&tree)
+        .into_iter()
+        .map(|session| (session.name, session.parent))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("fresh".to_owned(), None),
+            ("converted".to_owned(), Some(FRESH.to_owned())),
+            ("companion".to_owned(), Some(FRESH.to_owned())),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn a_list_the_far_side_refuses_says_why() {
     let transport = FakeTransport::new();

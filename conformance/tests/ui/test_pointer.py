@@ -213,6 +213,25 @@ def test_a_session_row_context_menu_flags_the_row(ctl, ui):
         ctl.request("workspace.delete", wid)
 
 
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("ui:session-row", "session.companion.convert", "behavior:sidebar.row-context-menu")
+def test_a_session_row_context_menu_converts_the_row_into_a_companion(ctl, ui):
+    """Convert to Companion nests the row's session under a fresh one in its slot and keeps it selected
+    (`WorkspaceSidebarCompanionsTests.testRowMenuConvertToCompanionNestsTheRowUnderAFreshParent`)."""
+    wid = _workspace(ctl, "ui-menu-convert")
+    try:
+        sid = _named_sessions(ctl, wid, ["ui-convert-row"])["ui-convert-row"]
+        ui.mouse_click(_row(ui, "session-row", "ui-convert-row"), button="right")
+        ui.click(ui.menu_item("Convert to Companion"))
+        tree = ctl.wait_tree(lambda tree: find_session(tree, sid).get("parent"))
+        fresh = find_session(tree, sid)["parent"]
+        assert [session["id"] for session in sessions(tree, wid)] == [fresh, sid]
+        assert "parent" not in find_session(tree, fresh)
+        assert find_session(tree, sid).get("active") is True
+    finally:
+        ctl.request("workspace.delete", wid)
+
+
 @pytest.mark.covers("ui:workspace-row", "session.new", "behavior:sidebar.row-context-menu")
 def test_a_workspace_row_context_menu_opens_a_session_in_it(ctl, ui):
     """New Session in a workspace row's menu opens a session in that workspace (`SidebarUITests`)."""

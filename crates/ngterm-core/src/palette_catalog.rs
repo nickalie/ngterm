@@ -58,6 +58,10 @@ bitflags! {
         const HAS_SESSIONS = 1 << 22;
         /// The active session is a page companion, which has no terminal (upstream's `activeSessionIsPage`).
         const ACTIVE_SESSION_IS_PAGE = 1 << 23;
+        /// The active session already sits under a parent (upstream's `activeSessionIsCompanion`).
+        const ACTIVE_SESSION_IS_COMPANION = 1 << 24;
+        /// The active session is attached from another machine (upstream's `activeSessionIsRemote`).
+        const ACTIVE_SESSION_IS_REMOTE = 1 << 25;
     }
 }
 
@@ -125,6 +129,7 @@ pub enum PaletteCommand {
     DuplicateSession,
     NewCompanion,
     DuplicateCompanion,
+    ConvertCompanion,
     RenameWorkspace,
     CloseSession,
     ReopenRecent,
@@ -221,6 +226,7 @@ impl PaletteCommand {
                 | Self::FocusLeftPane
                 | Self::FocusRightPane
                 | Self::DuplicateCompanion
+                | Self::ConvertCompanion
         )
     }
 
@@ -252,6 +258,12 @@ impl PaletteCommand {
             Self::PreviousAttentionSession | Self::NextAttentionSession => context
                 .facts
                 .intersects(PaletteFacts::HAS_ACTIVE_SESSION.union(PaletteFacts::ATTENTION_ACROSS_WINDOWS)),
+            Self::ConvertCompanion => {
+                context.has(PaletteFacts::HAS_ACTIVE_SESSION)
+                    && !context
+                        .facts
+                        .intersects(PaletteFacts::ACTIVE_SESSION_IS_COMPANION | PaletteFacts::ACTIVE_SESSION_IS_REMOTE)
+            }
             Self::SwapPanes => context.has(PaletteFacts::HAS_ACTIVE_SESSION | PaletteFacts::ACTIVE_SESSION_HAS_SPLIT),
             Self::ToggleOverlay => {
                 context.has(PaletteFacts::HAS_ACTIVE_SESSION | PaletteFacts::ACTIVE_SESSION_HAS_OVERLAY)
@@ -348,6 +360,7 @@ impl PaletteCommand {
             Self::DuplicateSession => "Duplicate Session",
             Self::NewCompanion => "New Companion",
             Self::DuplicateCompanion => "Duplicate as Companion",
+            Self::ConvertCompanion => "Convert to Companion",
             Self::RenameWorkspace => "Rename Workspace",
             Self::CloseSession => "Close Session",
             Self::ReopenRecent => "Reopen Last Closed Item",
@@ -417,6 +430,7 @@ impl PaletteCommand {
             Self::DuplicateSession => BuiltinAction::DuplicateSession,
             Self::NewCompanion => BuiltinAction::NewCompanion,
             Self::DuplicateCompanion => BuiltinAction::DuplicateCompanion,
+            Self::ConvertCompanion => BuiltinAction::ConvertCompanion,
             Self::RenameWorkspace => BuiltinAction::RenameWorkspace,
             Self::CloseSession => BuiltinAction::CloseSession,
             Self::ReopenRecent => BuiltinAction::ReopenRecent,
@@ -519,11 +533,12 @@ mod tests {
         PaletteCommand::ToggleTerminalZoom,
     ];
 
-    const NEED_SESSION: [PaletteCommand; 18] = [
+    const NEED_SESSION: [PaletteCommand; 19] = [
         PaletteCommand::RenameSession,
         PaletteCommand::DuplicateSession,
         PaletteCommand::NewCompanion,
         PaletteCommand::DuplicateCompanion,
+        PaletteCommand::ConvertCompanion,
         PaletteCommand::ClearStatus,
         PaletteCommand::ToggleFlag,
         PaletteCommand::ToggleSplit,
@@ -559,6 +574,7 @@ mod tests {
                 "Duplicate Session",
                 "New Companion",
                 "Duplicate as Companion",
+                "Convert to Companion",
                 "Rename Workspace",
                 "Close Session",
                 "Reopen Last Closed Item",
@@ -623,7 +639,7 @@ mod tests {
 
     #[test]
     fn catalog_has_the_expected_static_command_count() {
-        assert_eq!(PaletteCommand::all().count(), 62);
+        assert_eq!(PaletteCommand::all().count(), 63);
     }
 
     #[test]
@@ -882,6 +898,31 @@ mod tests {
             Some(command)
         );
         assert_eq!(command.title_default(), "Duplicate as Companion");
+    }
+
+    /// Upstream's `convertToCompanionNeedsALocalTopLevelTerminal`.
+    #[test]
+    fn convert_to_companion_needs_a_local_top_level_terminal() {
+        let command = PaletteCommand::ConvertCompanion;
+        assert!(command.is_enabled(&ctx(F::HAS_ACTIVE_SESSION)));
+        assert!(!command.is_enabled(&ctx(F::empty())));
+        for refusing in [
+            F::ACTIVE_SESSION_IS_COMPANION,
+            F::ACTIVE_SESSION_IS_REMOTE,
+            F::ACTIVE_SESSION_IS_PAGE,
+        ] {
+            assert!(
+                !command.is_enabled(&ctx(F::HAS_ACTIVE_SESSION | refusing)),
+                "{refusing:?}"
+            );
+        }
+        assert!(command.is_visible(&ctx(F::empty())), "stays listed, inert");
+        assert_eq!(command.builtin_action(), Some(BuiltinAction::ConvertCompanion));
+        assert_eq!(
+            PaletteCommand::for_builtin(BuiltinAction::ConvertCompanion),
+            Some(command)
+        );
+        assert_eq!(command.title_default(), "Convert to Companion");
     }
 
     /// Upstream's `aPageCompanionDisablesTerminalOnlyCommands`.

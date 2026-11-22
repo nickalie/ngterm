@@ -22,6 +22,7 @@ pub enum BuiltinAction {
     DuplicateSession,
     NewCompanion,
     DuplicateCompanion,
+    ConvertCompanion,
     CloseSession,
     ReopenRecent,
     UndoClose,
@@ -90,17 +91,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upstreams_fifty_four_actions_then_this_builds_own() {
+    fn upstreams_fifty_five_actions_then_this_builds_own() {
         let names: Vec<&str> = BuiltinAction::all().map(BuiltinAction::name).collect();
-        assert_eq!(names.len(), 55);
+        assert_eq!(names.len(), 56);
         assert_eq!(names[0], "new_window");
         assert_eq!(
-            names[11..14],
-            ["duplicate_session", "new_companion", "duplicate_companion"]
+            names[11..15],
+            [
+                "duplicate_session",
+                "new_companion",
+                "duplicate_companion",
+                "convert_companion"
+            ]
         );
-        assert_eq!(names[51], "attach_remote");
+        assert_eq!(names[52], "attach_remote");
         assert_eq!(
-            names[52..],
+            names[53..],
             [
                 "edit_flagged_sessions",
                 "edit_focused_workspaces",
@@ -109,7 +115,7 @@ mod tests {
         );
         assert_eq!(BuiltinAction::ToggleOverlay.name(), "toggle_overlay");
         assert_eq!(
-            names[25], "toggle_overlay",
+            names[26], "toggle_overlay",
             "after toggle_terminal_zoom, as upstream declares it"
         );
         assert!(names.contains(&"toggle_horizontal_split"));

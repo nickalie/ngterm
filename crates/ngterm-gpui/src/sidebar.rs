@@ -620,6 +620,7 @@ impl Sidebar {
             MenuAction::Duplicate(id) => self.act(SidebarAction::Duplicate(id)),
             MenuAction::NewCompanion(id) => self.act(SidebarAction::NewCompanion(id)),
             MenuAction::DuplicateAsCompanion(id) => self.act(SidebarAction::DuplicateAsCompanion(id)),
+            MenuAction::ConvertToCompanion(id) => self.act(SidebarAction::ConvertToCompanion(id)),
             MenuAction::NewRemoteSession(id) => self.act(SidebarAction::NewRemoteSession(id)),
             MenuAction::EndRemoteSession(id) => self.end_remote_session(id, window, cx),
             MenuAction::MoveTo { sessions, workspace } => self.act(SidebarAction::MoveSessions { sessions, workspace }),

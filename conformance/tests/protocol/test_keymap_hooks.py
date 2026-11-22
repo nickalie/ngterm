@@ -233,6 +233,17 @@ def test_duplicate_companion_is_a_keyless_builtin(ctl, keymap):
     assert _action(listing, "duplicate_companion") == {"action": "duplicate_companion"}, "keyless"
 
 
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("keymap.list", "field:result.keymap")
+def test_convert_companion_is_a_keyless_builtin(ctl, keymap):
+    """Convert to Companion (#926) is a built-in that ships with no chord, listed right after `duplicate_companion`."""
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    listing = _listed(ctl)
+    names = [action["action"] for action in listing["actions"]]
+    assert names[names.index("duplicate_companion") + 1] == "convert_companion"
+    assert _action(listing, "convert_companion") == {"action": "convert_companion"}, "keyless"
+
+
 @pytest.mark.covers("keymap.run", "field:result.id", "behavior:protocol.target-resolution")
 def test_run_starts_the_command_for_the_addressed_session(ctl, keymap, adapter):
     lines = CommandLines.of(adapter)

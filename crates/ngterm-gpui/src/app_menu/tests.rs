@@ -152,7 +152,7 @@ fn file_carries_the_live_lists_and_help_the_docs_installers_and_about() {
     assert!(position("Open Recent") < position("No Recent Items"));
     assert_eq!(position("New Companion"), position("Duplicate Session") + 1);
     assert_eq!(position("Duplicate as Companion"), position("New Companion") + 1);
-    assert_eq!(position("Reveal in Files"), position("Duplicate as Companion") + 1);
+    assert_eq!(position("Reveal in Files"), position("Convert to Companion") + 1);
     assert!(position("Help") < position("Developer Documentation…"));
     assert!(position("Developer Documentation…") < position("Install Command Line Tool…"));
     assert!(position("Install Agent Status Hooks…") < position("Install Agent Skill…"));
@@ -408,4 +408,23 @@ fn an_items_title_is_the_label_its_menu_item_is_named_after() {
     title.write_a11y_info(&mut node);
     // a label's text is its value (AccessKit's `label_comes_from_value`)
     assert_eq!(node.value(), Some("Find…"));
+}
+
+/// Upstream's companion section of the Session menu: New Companion through Convert to Companion between separators.
+#[test]
+fn the_companion_items_sit_in_their_own_file_menu_section() {
+    let (core, window) = seeded();
+    let menu = AppMenu::of(&core, window);
+    let file = &menu.menus.iter().find(|(title, _)| title == "File").unwrap().1;
+    let position = |label: &str| {
+        file.iter()
+            .position(|entry| matches!(entry, Entry::Item(item) if item.title == label))
+            .unwrap_or_else(|| panic!("{label} missing"))
+    };
+    let (first, last) = (position("New Companion"), position("Convert to Companion"));
+    assert!(matches!(file[first - 1], Entry::Separator));
+    assert_eq!(last, first + 2);
+    assert!(matches!(file[last + 1], Entry::Separator));
+    // Reveal in Files opens the next section, before Close Session
+    assert_eq!(position("Close Session"), position("Reveal in Files") + 1);
 }

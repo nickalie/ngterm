@@ -53,8 +53,8 @@ pub use background::{
     BackdropWashRegion, BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition,
 };
 pub use companions::{
-    CompanionOptions, CompanionRefusal, CompanionState, PageCompanionOptions, PrimaryPaneExit, RESPAWN_MINIMUM_UPTIME,
-    SessionContent,
+    CompanionOptions, CompanionRefusal, CompanionState, ConvertRefusal, PageCompanionOptions, PrimaryPaneExit,
+    RESPAWN_MINIMUM_UPTIME, SessionContent,
 };
 pub use duplicate::{CompanionCopy, PaneCopy};
 pub use flagged_order::FlaggedOrderPlacement;

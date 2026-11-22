@@ -1,5 +1,5 @@
-//! `session.companion.new`, `session.collapse` and `session.expand`: a companion session under a parent, and folding
-//! a parent's companions. Validation and its messages follow upstream's `ControlDispatcher+Companions.swift`; the
+//! `session.companion.new`, `session.companion.convert`, `session.collapse` and `session.expand`: a companion session
+//! under a parent, a running session nested under a fresh one, and folding a parent's companions. Validation and its messages follow upstream's `ControlDispatcher+Companions.swift`; the
 //! effects follow `createCompanion`, `createLocalCompanion` and `setSessionExpansion` in
 //! `agterm/Control/ControlServer+Companions.swift`.
 //!
@@ -36,6 +36,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::CompanionPage => super::companion_page::page(core, target, args),
         SessionCmd::CompanionPageAttach => super::companion_page::attach(core, target, args.window.as_deref()),
         SessionCmd::CompanionDuplicate => super::companion_duplicate::duplicate(core, request),
+        SessionCmd::CompanionConvert => convert(core, target, args),
         other => Err(ControlError::NotSupported(Command::Session(other))),
     }
 }
@@ -123,6 +124,23 @@ fn new(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         .session(companion)
         .and_then(crate::model::Session::parent_id)
         .map(uuid_string);
+    Ok(result)
+}
+
+/// `session.companion.convert` (upstream's `ControlServer.convertToCompanion`): `{id, parent}`, the converted session
+/// and its fresh parent. A row attached from another machine is refused, never forwarded to its origin; the converted
+/// session takes the keyboard when its window is the active one.
+fn convert(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
+    let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
+    let (store, id) = session_store(core, target, args.window.as_deref())?;
+    let parent = store
+        .convert_to_companion(id)
+        .map_err(|refusal| ControlError::rejected(refusal.message()))?;
+    if core.library().active_window_id() == Some(resolved.window) {
+        core.request_pane_focus(id);
+    }
+    let mut result = with_id(id);
+    result.parent = Some(uuid_string(parent));
     Ok(result)
 }
 

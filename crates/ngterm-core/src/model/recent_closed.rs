@@ -243,7 +243,8 @@ impl AppStore {
         if occupied_elsewhere.contains(&recent.snapshot.id) {
             return RecentClosedRestore::FAILED;
         }
-        let index = match recent.snapshot.parent_id {
+        let parent = recent.snapshot.parent_id.map(|parent| self.group_root(parent));
+        let index = match parent {
             // a lone companion goes under its parent wherever the parent lives now, never on its own
             Some(parent) => match self.location(parent) {
                 Some(at) => at.workspace,
@@ -251,7 +252,8 @@ impl AppStore {
             },
             None => self.workspace_index_or_shell(recent.workspace_id, recent.workspace_index, &recent.workspace_name),
         };
-        let session = session_from_snapshot(&recent.snapshot, false, &self.home);
+        let mut session = session_from_snapshot(&recent.snapshot, false, &self.home);
+        session.companion.parent = parent;
         let id = session.id();
         let workspace_id = self.workspaces[index].id();
         let sessions = &mut self.workspaces[index].sessions;

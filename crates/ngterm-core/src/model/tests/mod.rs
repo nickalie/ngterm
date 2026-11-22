@@ -3,6 +3,7 @@
 
 mod ask_draft;
 mod companion_close;
+mod companion_convert;
 mod companion_duplicate;
 mod companion_naming;
 mod companion_pages;

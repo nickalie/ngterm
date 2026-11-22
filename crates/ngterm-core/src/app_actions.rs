@@ -565,6 +565,7 @@ impl Core {
             BuiltinAction::DuplicateSession => self.sidebar_act(window, SidebarAction::Duplicate(session)),
             BuiltinAction::NewCompanion => self.sidebar_act(window, SidebarAction::NewCompanion(session)),
             BuiltinAction::DuplicateCompanion => self.sidebar_act(window, SidebarAction::DuplicateAsCompanion(session)),
+            BuiltinAction::ConvertCompanion => self.sidebar_act(window, SidebarAction::ConvertToCompanion(session)),
             BuiltinAction::ClearStatus => self.sidebar_act(window, SidebarAction::ClearStatus(vec![session])),
             BuiltinAction::ToggleFlag => self.sidebar_act(window, SidebarAction::ToggleFlags(vec![session])),
             BuiltinAction::ToggleSplit | BuiltinAction::ToggleHorizontalSplit => {
@@ -883,6 +884,14 @@ fn store_facts(store: &AppStore, layout: FlaggedViewLayout) -> PaletteFacts {
     facts.set(
         PaletteFacts::ACTIVE_SESSION_IS_PAGE,
         active.is_some_and(|session| session.content() == crate::model::SessionContent::Page),
+    );
+    facts.set(
+        PaletteFacts::ACTIVE_SESSION_IS_COMPANION,
+        active.is_some_and(|session| session.parent_id().is_some()),
+    );
+    facts.set(
+        PaletteFacts::ACTIVE_SESSION_IS_REMOTE,
+        active.is_some_and(|session| session.remote_host().is_some()),
     );
     facts.set(
         PaletteFacts::HAS_CURRENT_WORKSPACE,

@@ -133,6 +133,7 @@ fn menu_context(store: &AppStore, tint_placement: TintParts) -> MenuContext {
                     tint: session.tint,
                     content: session.content(),
                     remote_host: session.remote_host().map(str::to_owned),
+                    parent: session.parent_id(),
                 },
             );
         }

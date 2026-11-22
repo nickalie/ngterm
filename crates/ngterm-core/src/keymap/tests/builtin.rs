@@ -42,6 +42,7 @@ fn names_are_the_kitty_style_names() {
         (A::DuplicateSession, "duplicate_session"),
         (A::NewCompanion, "new_companion"),
         (A::DuplicateCompanion, "duplicate_companion"),
+        (A::ConvertCompanion, "convert_companion"),
         (A::PreviousWorkspace, "previous_workspace"),
         (A::NextWorkspace, "next_workspace"),
         (A::ToggleWorkspaceCollapse, "toggle_workspace_collapse"),
@@ -55,7 +56,7 @@ fn names_are_the_kitty_style_names() {
     ] {
         assert_eq!(action.name(), name);
     }
-    assert_eq!(BuiltinAction::all().count(), 55);
+    assert_eq!(BuiltinAction::all().count(), 56);
 }
 
 #[test]
@@ -112,6 +113,7 @@ fn the_default_chord_matches_the_shipped_table() {
         (A::DuplicateSession, None),
         (A::NewCompanion, None),
         (A::DuplicateCompanion, None),
+        (A::ConvertCompanion, None),
         (A::CloseSession, Some(chord(CMD, "w"))),
         (A::ReopenRecent, Some(chord(CMD | SHIFT, "t"))),
         (A::UndoClose, Some(chord(CMD, "z"))),
@@ -153,7 +155,7 @@ fn the_default_chord_matches_the_shipped_table() {
         (A::EditFlaggedSessions, None),
         (A::EditFocusedWorkspaces, None),
     ];
-    assert_eq!(expected.len(), 54);
+    assert_eq!(expected.len(), 55);
     for (action, chord) in expected {
         assert_eq!(default_chord(action), chord, "{}", action.name());
     }
@@ -211,6 +213,7 @@ fn keyless_actions_have_no_default() {
         A::DuplicateSession,
         A::NewCompanion,
         A::DuplicateCompanion,
+        A::ConvertCompanion,
         A::ClearStatus,
         A::FirstSession,
         A::LastSession,

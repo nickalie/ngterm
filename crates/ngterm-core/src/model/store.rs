@@ -1017,7 +1017,9 @@ impl AppStore {
             .collect();
         closed.reverse();
         let removed = self.close_one_session(id, Some(&closed));
-        self.finalize_parked_companions(&[id]);
+        // a converted companion can still own a companion parked under it before the conversion
+        let parents: Vec<Uuid> = std::iter::once(id).chain(companions).collect();
+        self.finalize_parked_companions(&parents);
         removed
     }
 
