@@ -740,6 +740,10 @@ fn run_cleared(result: Result<(), String>) {
 /// when it cannot be used, since an in-memory one would hold a login the user asked to keep; every other page an
 /// in-memory one of its own.
 fn storage(overlay: &HtmlOverlay) -> Storage {
+    // an unreadable saved page loads nothing, so it fails with its own reason and never waits for a web view
+    if let HtmlSource::Unreadable { reason } = &overlay.source {
+        return Storage::Unavailable(reason.clone());
+    }
     if !(overlay.flags.persistent && matches!(overlay.source, HtmlSource::Url(_))) {
         return Storage::Ephemeral;
     }

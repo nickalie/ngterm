@@ -533,6 +533,7 @@ pub(crate) fn navigate(
             HtmlSource::Markdown { .. } => return Err(ControlError::rejected(errors::MARKDOWN_IN_OVERLAY)),
             HtmlSource::Text { .. } => return Err(ControlError::rejected(errors::TEXT_IN_OVERLAY)),
             HtmlSource::Document { .. } => return Err(ControlError::rejected(errors::DOCUMENT_IN_OVERLAY)),
+            HtmlSource::Unreadable { .. } => return Err(ControlError::rejected(errors::UNREADABLE_PAGE)),
             _ => {}
         }
     }
@@ -615,7 +616,8 @@ impl Core {
     }
 
     /// Settles the pages that left every slot: each is dismissed (a no-op for one already answered) and queued for
-    /// the frontend to release its web view. Then follows the pages a snapshot writes ([`Core::sync_persisted_pages`]).
+    /// the frontend to release its web view. Then follows the pages a snapshot writes ([`Core::sync_persisted_pages`]),
+    /// and the restored unreadable pages, which no snapshot writes.
     /// Runs at every commit and before an outcome is read. A presenter-only origin first parks what a restore opened
     /// in its own slots, as it renders no page itself.
     pub(crate) fn sync_pages(&mut self) {
@@ -624,7 +626,16 @@ impl Core {
                 self.pages.known.remove(&page);
             }
         }
-        let live: HashSet<Uuid> = self.library().live_html_overlays().into_iter().collect();
+        let (live, unreadable) = {
+            let pages = self.library().live_html_pages();
+            let live: HashSet<Uuid> = pages.iter().map(|(_, page)| page.id).collect();
+            let unreadable: Vec<Uuid> = pages
+                .iter()
+                .filter(|(_, page)| matches!(page.source, HtmlSource::Unreadable { .. }))
+                .map(|(_, page)| page.id)
+                .collect();
+            (live, unreadable)
+        };
         let gone: Vec<Uuid> = self.pages.known.difference(&live).copied().collect();
         for page in gone {
             self.pages.known.remove(&page);
@@ -639,6 +650,8 @@ impl Core {
         }
         let persisted = self.library().live_persisted_pages();
         self.sync_persisted_pages(persisted);
+        // a snapshot never writes an unreadable page, yet a web view may show it and needs its release
+        self.pages.known.extend(unreadable);
     }
 
     /// Follows the pages a window's snapshot writes, `pages` being each as (window, page, what the snapshot writes for

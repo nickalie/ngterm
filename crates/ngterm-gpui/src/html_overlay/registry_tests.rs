@@ -518,6 +518,64 @@ fn assert_unreadable_profile(model: &Model) {
     );
 }
 
+/// Upstream's registry fails an `.unreadable` source at once: with no engine, an unavailable one or a retry, the page
+/// keeps its own reason and never waits for the engine.
+#[gpui_kit::test]
+fn an_unreadable_page_fails_with_its_reason_and_never_waits_for_the_engine(cx: &mut TestAppContext) {
+    use ngterm_core::html::{HtmlLoadState, HtmlReloadTarget};
+    reset();
+    let reason = "the saved page names nothing";
+    let source = HtmlOverlay::new(
+        HtmlSource::Unreadable {
+            reason: reason.to_owned(),
+        },
+        HtmlPageFlags::default(),
+    );
+    assert_eq!(storage(&source), Storage::Unavailable(reason.to_owned()));
+    let mut model = Model::new(&source);
+    let page = Page::new(
+        &source,
+        None,
+        PanelColors::resolve(&TerminalColors::default(), None),
+        storage(&source),
+        &model.poster(),
+    );
+    with(|registry| registry.pages.insert(page.id(), page.clone()));
+    let failed = |model: &Model| {
+        assert_eq!(
+            (model.overlay().load_state, model.overlay().load_error.as_deref()),
+            (HtmlLoadState::Failed, Some(reason))
+        );
+    };
+    realize_waiting();
+    model.drain();
+    failed(&model);
+    assert!(
+        state_is(|state| matches!(state, EngineState::Idle)),
+        "no engine starts for it"
+    );
+    assert!(!page.waits_for_engine());
+
+    with(|registry| registry.engine = EngineState::Unavailable(Unavailable::not_installed(None)));
+    realize_waiting();
+    model.drain();
+    failed(&model);
+    assert!(
+        model
+            .state
+            .core
+            .reload_html_overlay(page.id(), HtmlReloadTarget::Original)
+    );
+    let reloaded = model.overlay().clone();
+    cx.update(|cx| page.apply(&reloaded, true, cx));
+    model.drain();
+    failed(&model);
+    assert!(
+        state_is(|state| matches!(state, EngineState::Unavailable(_))),
+        "a reload is no retry of the engine"
+    );
+}
+
 #[gpui_kit::test]
 fn a_store_failure_is_reported_before_the_engine_and_survives_its_failure_and_retry(cx: &mut TestAppContext) {
     use ngterm_core::html::HtmlReloadTarget;

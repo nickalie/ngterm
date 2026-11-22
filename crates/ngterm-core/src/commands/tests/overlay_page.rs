@@ -949,3 +949,50 @@ fn the_page_runtime_debug_view_says_whether_web_views_are_installed() {
         "{shown}"
     );
 }
+
+/// Puts a restored unreadable row page on session `id`, as a restore opens it: no open registers it.
+fn install_unreadable_page(fixture: &mut Fixture, id: Uuid) -> Uuid {
+    let page = crate::html::HtmlOverlay {
+        row: true,
+        load_state: HtmlLoadState::Failed,
+        ..crate::html::HtmlOverlay::new(
+            crate::html::HtmlSource::Unreadable {
+                reason: "unreadable".to_owned(),
+            },
+            crate::html::HtmlPageFlags::default(),
+        )
+    };
+    let page_id = page.id;
+    let session = fixture.store_mut().unwrap().session_mut(id).unwrap();
+    session.install_html_overlay(None, page, crate::model::OverlaySize::default(), None);
+    page_id
+}
+
+/// Upstream's `unreadablePage`: a saved page that could not be read has no address to hand a browser, so the host is
+/// never asked.
+#[test]
+fn an_unreadable_page_refuses_the_browser() {
+    let (mut fixture, log) = fixture_with_host(1);
+    let id = fixture.sessions[0];
+    install_unreadable_page(&mut fixture, id);
+    assert_eq!(
+        overlay(&mut fixture, SessionCmd::OverlayNavigate, id, |a| a.to =
+            Some("browser".into())),
+        failure("the saved page could not be read")
+    );
+    assert!(log.borrow().navigations.is_empty());
+}
+
+/// A restored unreadable page is never written to a snapshot, yet its web view is released when it goes.
+#[test]
+fn a_restored_unreadable_page_is_released_when_it_goes() {
+    let (mut fixture, _) = fixture_with_host(1);
+    let id = fixture.sessions[0];
+    let page = install_unreadable_page(&mut fixture, id);
+    let _ = fixture.core.commit();
+    assert!(fixture.core.take_released_pages().is_empty());
+    let window = fixture.window;
+    fixture.core.library_mut().close_window(window);
+    let _ = fixture.core.commit();
+    assert_eq!(fixture.core.take_released_pages(), vec![page]);
+}

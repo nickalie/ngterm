@@ -604,7 +604,8 @@ fn only_a_page_companion_is_handed_out_and_a_loopback_page_is_not() {
 
 /// Upstream's `attachCompanionPage` refusal of a page the other machine would build (#891, #917): a page companion
 /// whose page is Markdown, text or a clicked document is not handed out; an image, which travels only with its probed
-/// size, is not a page companion's at all.
+/// size, is not a page companion's at all; nor is a saved page that could not be read (upstream's
+/// `testAnUnreadableSavedPageIsNotHandedOut`).
 #[test]
 fn a_content_page_companion_is_not_handed_out() {
     use crate::html::HtmlSource;
@@ -628,6 +629,12 @@ fn a_content_page_companion_is_not_handed_out() {
             "a markdown, text or document page companion cannot be shown on another Mac",
         ),
         (HtmlSource::Image { path: path.clone() }, "not a page session"),
+        (
+            HtmlSource::Unreadable {
+                reason: "unreadable".into(),
+            },
+            "an unreadable saved page cannot be shown on another Mac",
+        ),
     ] {
         let row = fixture.store_mut().unwrap().session_mut(page).unwrap();
         row.overlay.html.as_mut().unwrap().source = source;

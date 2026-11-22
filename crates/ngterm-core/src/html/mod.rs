@@ -960,6 +960,8 @@ pub mod errors {
     /// The page has not been shown yet, so there is no web view to drive.
     pub const NOT_REALIZED: &str = "html overlay not realized";
     pub const NO_BROWSER: &str = "no default web browser to open the page in";
+    /// A saved page this build could not read has no file or address to hand a browser (upstream's `unreadablePage`).
+    pub const UNREADABLE_PAGE: &str = "the saved page could not be read";
     pub const MARKDOWN_IN_OVERLAY: &str = "a markdown page opens only in its overlay";
     /// A text page is built by the app, so a browser would get the raw file instead (upstream's `textInOverlay`).
     pub const TEXT_IN_OVERLAY: &str = "a text page opens only in its overlay";

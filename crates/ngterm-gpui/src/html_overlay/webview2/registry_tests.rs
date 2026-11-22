@@ -197,6 +197,23 @@ fn the_saved_store_is_never_replaced_by_a_temporary_one() {
     assert_eq!(storage(&source), Storage::Ephemeral);
 }
 
+/// An unreadable saved page has no store, so it fails with its own reason and never asks for a web view.
+#[test]
+fn an_unreadable_page_fails_with_its_reason_and_gets_no_web_view() {
+    fake_native::install();
+    let reason = "the saved page names nothing";
+    let source = HtmlOverlay::new(
+        HtmlSource::Unreadable {
+            reason: reason.to_owned(),
+        },
+        ngterm_core::html::HtmlPageFlags::default(),
+    );
+    assert_eq!(storage(&source), Storage::Unavailable(reason.to_owned()));
+    let model = Model::new(&source);
+    let page = page_of(&source, storage(&source), &model);
+    assert!(!page.wants_native());
+}
+
 #[test]
 fn a_corrupt_saved_profile_reports_its_path_without_overwriting_it() {
     fake_native::install();

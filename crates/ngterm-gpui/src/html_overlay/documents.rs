@@ -65,12 +65,13 @@ pub(super) fn renderer(source: &HtmlSource) -> Option<String> {
 }
 
 /// Why a page `source` shows refuses the browser hand-off: the app built its document, so a browser would get the raw
-/// file instead.
+/// file instead, or the saved page could not be read and names nothing to hand over.
 pub(super) fn browser_refusal(source: &HtmlSource) -> Option<&'static str> {
     match source {
         HtmlSource::Markdown { .. } => Some(errors::MARKDOWN_IN_OVERLAY),
         HtmlSource::Text { .. } => Some(errors::TEXT_IN_OVERLAY),
         HtmlSource::Document { .. } => Some(errors::DOCUMENT_IN_OVERLAY),
+        HtmlSource::Unreadable { .. } => Some(errors::UNREADABLE_PAGE),
         _ => None,
     }
 }
@@ -223,6 +224,10 @@ mod tests {
             line: Some(2),
         };
         assert_eq!(browser_refusal(&source), Some(errors::TEXT_IN_OVERLAY));
+        let unreadable = HtmlSource::Unreadable {
+            reason: "unreadable".to_owned(),
+        };
+        assert_eq!(browser_refusal(&unreadable), Some(errors::UNREADABLE_PAGE));
         assert_eq!(renderer(&source), Some(text_script()));
         let script = text_script();
         let repaint = script.find(TEXT_REPAINT).expect("the repaint fix");
