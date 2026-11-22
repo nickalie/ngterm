@@ -496,6 +496,31 @@ fn a_macos_keymap_file_overrides_and_frees_the_cmd_defaults() {
     assert_eq!(chord(BuiltinAction::CloseSession).as_deref(), Some("cmd+w"));
 }
 
+/// A keymap.conf written while macOS shipped the Ctrl+Shift table keeps its bindings on the ⌘ chords that table left
+/// free: the defaults that took those chords give way, as a new default does.
+#[test]
+fn an_old_macos_keymap_file_keeps_its_bindings_on_the_new_cmd_chords() {
+    let mut host = Host::new(0);
+    host.fixture.core.set_keymap_os(KeymapOs::MacOs);
+    host.write(
+        "keymap.conf",
+        "command \"Open in Zed\" cmd+o zed .\nmap cmd+d new_session\n",
+    );
+    host.fixture.core.load_keymap_at_launch();
+    assert!(
+        host.fixture.core.keymap_diagnostics().is_empty(),
+        "{:?}",
+        host.fixture.core.keymap_diagnostics()
+    );
+    let keymap = host.fixture.core.keymap();
+    let chord = |action| keymap.equivalent(action).map(crate::keymap::Chord::display_string);
+    assert_eq!(keymap.commands()[0].shortcut, "cmd+o");
+    assert_eq!(chord(BuiltinAction::OpenDirectory), None);
+    assert_eq!(chord(BuiltinAction::NewSession).as_deref(), Some("cmd+d"));
+    assert_eq!(chord(BuiltinAction::ToggleSplit), None);
+    assert_eq!(chord(BuiltinAction::CloseSession).as_deref(), Some("cmd+w"));
+}
+
 /// Upstream's `testALocalSessionWhoseDirectoryIsNotThereRunsTheCommandInHome` (#740): a session whose reported
 /// directory is not a directory here (removed, or a plain file) runs its command in HOME, and `$AGT_SESSION_PWD`
 /// keeps the reported path.

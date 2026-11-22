@@ -61,9 +61,26 @@ impl ShippedDefaults {
     #[must_use]
     pub fn for_os(os: KeymapOs) -> Self {
         match os {
-            KeymapOs::MacOs => Self::upstream(),
+            KeymapOs::MacOs => Self::macos(),
             KeymapOs::Linux | KeymapOs::Windows => linux_defaults(),
         }
+    }
+
+    /// Upstream's table, where also each default that differs from the Ctrl+Shift table macOS shipped before gives way
+    /// to an existing binding of its chord, as a new default does.
+    fn macos() -> Self {
+        let mut table = Self::upstream();
+        let earlier = linux_defaults();
+        let moved: Vec<BuiltinAction> = table
+            .chords
+            .iter()
+            .filter(|(action, chord)| {
+                earlier.chord(**action) != Some(*chord) && !table.vacate_when_used.contains(action)
+            })
+            .map(|(action, _)| *action)
+            .collect();
+        table.vacate_when_used.extend(moved);
+        table
     }
 
     /// The table this build ships.

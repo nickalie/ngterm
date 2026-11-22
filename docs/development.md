@@ -78,7 +78,7 @@ Linux build unless it names another OS.
   workspaces. The search narrows what the focus filter and the flagged view keep. It never moves the selection, and
   navigation does not follow it (the session steps, `session go`, Ctrl-Tab): text typed in the GUI does not change what
   a script reaches. The field's Up and Down move its cursor among the matches instead. `focus_sidebar_search`
-  (Ctrl+Alt+Shift+F, Search Sessions… in the palette and the View menu) gives the field the keyboard and shows a
+  (Ctrl+Alt+Shift+F on Linux and Windows, no default key on macOS; Search Sessions… in the palette and the View menu) gives the field the keyboard and shows a
   hidden sidebar. Return opens the cursor's match and gives its terminal the keyboard, the text kept. Escape empties
   the field and gives the terminal the keyboard back. The text survives a hidden sidebar but not a restart. The tree
   reads it back as `sidebarSearch`, Rust-only capability `sidebar-search` (`crates/ngterm-core/src/model/sidebar_search.rs`).
@@ -251,7 +251,9 @@ and how this build does it where the OS matters:
   session's row menu, agent status in the session pickers and in `pick` items.
 - Default keys: macOS ships upstream's ⌘ table, in the menus too. Linux and Windows ship a Ctrl+Shift table, because
   desktop shells take Super there (`ngterm-core` `keymap::ShippedDefaults::for_os`). A `keymap.conf` line overrides
-  either table.
+  either table. On macOS, a ⌘ default whose chord the earlier Ctrl+Shift table left free gives way to an existing
+  binding of that chord, as a new default does. A menu chord on a shifted symbol fires as `AppKit` matches it: ⌘+ also
+  from Shift+⌘= on a US layout.
 - `version` reports the installed build beside the running one (`result.installed`, an `installed:` line when they
   differ): the staged `share/ngterm/app-BUILD`, or the `Info.plist` inside a macOS app bundle.
 - Events: `app.launched` once the control server is up, `tree.changed` when an overlay, page, HUD or remote slot opens

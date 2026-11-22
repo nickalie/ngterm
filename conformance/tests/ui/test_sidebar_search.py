@@ -29,11 +29,39 @@ def _searched(ctl, text):
     ctl.wait_tree(lambda tree: _search_of(tree) == text)
 
 
-def _chord(ctl):
-    """Search Sessions…'s chord as the keymap ships it on this OS."""
+def _listed_chord(ctl):
     listing = assert_ok(ctl.request("keymap.list"))["keymap"]
     (action,) = [action for action in listing["actions"] if action["action"] == "focus_sidebar_search"]
-    return action["chord"]
+    return action.get("chord")
+
+
+@pytest.fixture(autouse=True)
+def _search_chord_bound(ctl):
+    """On an OS whose table ships no chord for Search Sessions… (macOS, as upstream's table has no such action), binds
+    it to the chord Linux and Windows ship, and puts the instance's `keymap.conf` back afterwards."""
+    if _listed_chord(ctl) is not None:
+        yield
+        return
+    path = ctl.instance.state_dir / "config" / "keymap.conf"
+    before = path.read_text() if path.exists() else None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text((before or "") + "\nmap ctrl+alt+shift+f focus_sidebar_search\n")
+    assert_ok(ctl.request("keymap.reload"))
+    try:
+        yield
+    finally:
+        if before is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(before)
+        assert_ok(ctl.request("keymap.reload"))
+
+
+def _chord(ctl):
+    """Search Sessions…'s chord: the one this OS ships, else the one `_search_chord_bound` binds."""
+    chord = _listed_chord(ctl)
+    assert chord, "focus_sidebar_search has no chord"
+    return chord
 
 
 @pytest.mark.requires("sidebar-search", reason="upstream's sidebar has no search")

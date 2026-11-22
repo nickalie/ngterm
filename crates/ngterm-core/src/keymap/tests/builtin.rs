@@ -252,7 +252,24 @@ fn a_custom_table_replaces_the_defaults_and_its_own_vacate_list() {
 
 #[test]
 fn macos_ships_upstreams_table_and_linux_and_windows_the_ctrl_shift_table() {
-    assert_eq!(ShippedDefaults::for_os(KeymapOs::MacOs), ShippedDefaults::upstream());
+    let macos = ShippedDefaults::for_os(KeymapOs::MacOs);
+    let upstream = ShippedDefaults::upstream();
+    for action in BuiltinAction::all() {
+        assert_eq!(macos.chord(action), upstream.chord(action), "{}", action.name());
+    }
+    // the chords macOS took over from the Ctrl+Shift table give way to an old file's binding; the rest stay
+    let linux = linux_defaults();
+    for action in BuiltinAction::all() {
+        let moved = upstream.chord(action).is_some() && upstream.chord(action) != linux.chord(action);
+        let vacated = macos.vacate_when_used().contains(&action);
+        assert_eq!(
+            vacated,
+            moved || upstream.vacate_when_used().contains(&action),
+            "{}",
+            action.name()
+        );
+    }
+    assert!(!macos.vacate_when_used().contains(&A::SessionPalette));
     assert_eq!(ShippedDefaults::for_os(KeymapOs::Linux), linux_defaults());
     assert_eq!(ShippedDefaults::for_os(KeymapOs::Windows), linux_defaults());
 }

@@ -94,7 +94,8 @@ impl Core {
         ShippedDefaults::for_os(self.keymap.os)
     }
 
-    /// Resolves the keymap against `os`'s default table from now on, so a test on any OS reaches each table.
+    /// Resolves the keymap against `os`'s default table from now on, so a test on any OS reaches each table. The keymap
+    /// becomes that table's empty keymap: call [`Self::reload_keymap`] or a launch load to apply `keymap.conf` again.
     pub fn set_keymap_os(&mut self, os: KeymapOs) {
         self.keymap.os = os;
         self.keymap.keymap = Keymap::empty(&self.keymap_defaults());

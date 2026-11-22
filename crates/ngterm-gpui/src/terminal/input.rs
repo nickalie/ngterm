@@ -808,6 +808,21 @@ pub fn chord(stroke: &KeyStroke) -> Option<Chord> {
     Some(Chord::new(keymap_modifiers(stroke.mods), key))
 }
 
+/// The chord a press with Shift spells by the symbol Shift types on its key (`cmd+shift+=` as `cmd++` on a US
+/// layout), as `AppKit` matches a menu key equivalent; `None` for a letter, or where Shift types the base key itself.
+#[must_use]
+pub fn shifted_symbol_chord(stroke: &KeyStroke, chord: &Chord) -> Option<Chord> {
+    if !chord.mods.contains(Modifiers::SHIFT) || chord.mods.contains(Modifiers::OPTION) {
+        return None;
+    }
+    let mut chars = stroke.text.chars();
+    let symbol = chars.next().filter(|symbol| {
+        chars.next().is_none() && !symbol.is_alphanumeric() && !symbol.is_whitespace() && !symbol.is_control()
+    })?;
+    let key = symbol.to_string();
+    (key != chord.key).then(|| Chord::new(chord.mods - Modifiers::SHIFT, key))
+}
+
 /// The character a chord resolves its base key from (upstream's `CustomCommandRunner.chord(from:)`): what the key
 /// types with no modifier, or, for a chord holding Command, what it types with only Command applied where the record
 /// carries that (module docs).

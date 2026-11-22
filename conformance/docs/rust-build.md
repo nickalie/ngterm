@@ -320,7 +320,7 @@ macOS' pages run in the app's own WebView2 and WKWebView, with no worker, so the
 the sidebar's column while the toolbar is hidden), that narrows the rows to the sessions whose name holds its text,
 case-insensitive, within what the focus filter and the flagged view keep; a matching companion brings its parent as
 context, and a workspace name never matches (docs/development.md > Names, paths and differences from upstream). The
-keymap's `focus_sidebar_search` (Ctrl+Alt+Shift+F, the palette's and the View menu's Search Sessions…) gives the field
+keymap's `focus_sidebar_search` (Ctrl+Alt+Shift+F on Linux and Windows, no default key on macOS; the palette's and the View menu's Search Sessions…) gives the field
 the keyboard; Return opens the first match, Escape empties the field and gives the terminal the keyboard back. The tree
 reads its text back as `sidebarSearch`, after upstream's fields and omitted while empty. Its test is in
 `tests/ui/test_sidebar_search.py`, on the ids under `rust:` in `ui-ids.yaml`. The build claims it on every OS

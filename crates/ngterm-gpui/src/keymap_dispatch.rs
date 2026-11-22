@@ -267,7 +267,7 @@ pub fn holds_keyboard(active: Option<AnyWindowHandle>) -> bool {
 #[must_use]
 pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
     let chord = input::chord(stroke)?;
-    ROUTER.with_borrow(|router| router.menu.get(&chord).copied())
+    ROUTER.with_borrow(|router| router.menu_entry(stroke, &chord))
 }
 
 /// Whether the keymap or the window's own keys take `stroke`, after the reports still queued have acted. A key pressed
@@ -822,7 +822,7 @@ impl Router {
             if is_switcher(&chord) {
                 return true;
             }
-            self.page_press_taken(&chord)
+            self.page_press_taken(stroke, &chord)
         };
         if !taken {
             self.interrupt();
@@ -888,20 +888,19 @@ impl Router {
     /// Whether a fresh press spelled `chord`, in a page's web view, is the keymap's: `press` decides the same way, the
     /// page holding the keyboard.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
-    fn page_press_taken(&self, chord: &Chord) -> bool {
-        self.matcher_takes(self.matcher_after_queue(), chord)
+    fn page_press_taken(&self, stroke: &KeyStroke, chord: &Chord) -> bool {
+        self.matcher_takes(self.matcher_after_queue(), stroke, chord)
     }
 
     /// Whether `engine` or the menu takes a fresh press spelled `chord`, a page holding the keyboard.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
-    fn matcher_takes(&self, engine: Option<CustomCommandEngine>, chord: &Chord) -> bool {
+    fn matcher_takes(&self, engine: Option<CustomCommandEngine>, stroke: &KeyStroke, chord: &Chord) -> bool {
         let Some(mut engine) = engine else {
             return false;
         };
         let armed = engine.is_armed();
-        self.menu
-            .get(chord)
-            .is_some_and(|action| menu_takes(*action, armed, true))
+        self.menu_entry(stroke, chord)
+            .is_some_and(|action| menu_takes(action, armed, true))
             || !matches!(engine.advance(chord), EngineOutcome::Unmatched)
     }
 
@@ -942,7 +941,7 @@ impl Router {
         self.consumed.remove(&stroke.identity);
         let taken = input::chord(stroke)
             .filter(|chord| !is_switcher(chord))
-            .is_some_and(|chord| self.matcher_takes(self.matcher_now(), &chord));
+            .is_some_and(|chord| self.matcher_takes(self.matcher_now(), stroke, &chord));
         if taken {
             self.released.insert(stroke.identity);
         } else {
@@ -1093,14 +1092,15 @@ impl Router {
         let Some(chord) = chord else {
             return Press::Passed;
         };
-        let outcome = self.advance(stroke.identity, &chord, now, page_keys);
+        let outcome = self.advance(stroke, &chord, now, page_keys);
         if outcome != Press::Passed {
             self.consumed.insert(stroke.identity);
         }
         outcome
     }
 
-    fn advance(&mut self, identity: u32, chord: &Chord, now: Instant, page_keys: bool) -> Press {
+    fn advance(&mut self, stroke: &KeyStroke, chord: &Chord, now: Instant, page_keys: bool) -> Press {
+        let identity = stroke.identity;
         let Some(engine) = self.engine.as_mut() else {
             return Press::Passed;
         };
@@ -1125,7 +1125,7 @@ impl Router {
                     self.interrupted_matcher = self.ending_matcher.take();
                 }
                 // the menu's key equivalents: consumed even when the item is disabled, as a menu consumes its own
-                let Some(action) = self.menu.get(chord).copied() else {
+                let Some(action) = self.menu_entry(stroke, chord) else {
                     return Press::Passed;
                 };
                 if !menu_takes(action, was_armed, page_keys) {
@@ -1134,6 +1134,15 @@ impl Router {
                 Press::Fired(Fired::Builtin(action))
             }
         }
+    }
+
+    /// The built-in whose menu chord `chord` is, or, as a menu key equivalent matches, the chord of the symbol Shift
+    /// types on the key ([`input::shifted_symbol_chord`]).
+    fn menu_entry(&self, stroke: &KeyStroke, chord: &Chord) -> Option<BuiltinAction> {
+        self.menu
+            .get(chord)
+            .copied()
+            .or_else(|| input::shifted_symbol_chord(stroke, chord).and_then(|symbol| self.menu.get(&symbol).copied()))
     }
 
     /// A press taken outside the keymap (the window's own keys): its autorepeats and release stay off the terminal.

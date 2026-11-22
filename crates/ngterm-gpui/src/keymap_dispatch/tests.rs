@@ -8,7 +8,7 @@ use gpui_kit::Keystroke;
 use ngterm_core::keymap::{CustomCommandEngine, linux_defaults, parse_keymap};
 
 use super::{Fired, Press, Router};
-use crate::terminal::input::{KeyStroke, NativeKey, Source};
+use crate::terminal::input::{self, KeyStroke, NativeKey, Source};
 
 fn stroke(text: &str) -> KeyStroke {
     let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
@@ -52,6 +52,51 @@ fn names(router: &Router) -> Vec<String> {
             Fired::Builtin(action) => action.name().to_owned(),
         })
         .collect()
+}
+
+/// Shift+Cmd+= on a US layout spells `cmd+shift+=`, and fires the macOS `cmd++` default as `AppKit`'s key equivalent
+/// does; a chord bound as typed still wins, and a letter never falls back to its unshifted chord.
+#[test]
+fn a_shifted_symbol_press_fires_the_menu_chord_of_the_symbol() {
+    use ngterm_core::keymap::{BuiltinAction, KeymapOs, ShippedDefaults};
+    let shifted = |text: &str, typed: &str| {
+        let mut stroke = stroke(text);
+        typed.clone_into(&mut stroke.text);
+        stroke
+    };
+    let load = |text: &str| {
+        let (keymap, _) = parse_keymap(text, &ShippedDefaults::for_os(KeymapOs::MacOs));
+        let mut router = Router::default();
+        router.load(&keymap);
+        router
+    };
+    let now = Instant::now();
+    let plus = shifted("cmd-shift-=", "+");
+    assert_eq!(
+        input::chord(&plus).map(|chord| chord.display_string()).as_deref(),
+        Some("cmd+shift+=")
+    );
+    let mut router = load("");
+    assert_eq!(
+        router.press(&plus, now, false),
+        Press::Fired(Fired::Builtin(BuiltinAction::IncreaseFontSize))
+    );
+    assert_eq!(
+        router.menu_entry(&plus, &input::chord(&plus).unwrap()),
+        Some(BuiltinAction::IncreaseFontSize)
+    );
+
+    let mut router = load("map cmd+shift+= toggle_sidebar\n");
+    assert_eq!(
+        router.press(&plus, now, false),
+        Press::Fired(Fired::Builtin(BuiltinAction::ToggleSidebar))
+    );
+
+    let mut router = load("");
+    let letter = shifted("cmd-shift-w", "W");
+    assert_eq!(router.press(&letter, now, false), Press::Passed, "not cmd+w");
+    let with_option = shifted("cmd-alt-shift-=", "+");
+    assert_eq!(router.press(&with_option, now, false), Press::Passed);
 }
 
 #[test]
