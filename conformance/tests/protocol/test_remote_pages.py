@@ -188,3 +188,53 @@ def test_a_top_level_page_session_attaches_from_another_machine_as_a_top_level_r
             assert_ok(remote_viewer.request("session.close", local))
         for sid in (root, target):
             assert_ok(origin.request("session.close", sid))
+
+
+def _rows_under(tree, parent):
+    return [sid for sid in session_ids(tree) if find_session(tree, sid).get("parent") == parent]
+
+
+@pytest.mark.since("0.42.0")
+@POSIX_SSHD
+@pytest.mark.requires(
+    "live-sessions", reason="the origin lists its sessions only in Live mode, and its terminal companion must be Live"
+)
+@pytest.mark.covers("live.attach", "live.tree", "session.page", "field:tree.session.parent")
+def test_a_top_level_page_session_attaches_alone_and_its_companions_attach_under_its_row_later(remote_origin, launch):
+    # a viewer in Live mode lists its own sessions, so its listing shows what it leaves out
+    remote_viewer = launch(path_prefix=remote_origin.viewer_path, settings={"restoreMode": "live"})
+    origin = Ctl(remote_origin.instance)
+    host = remote_origin.host
+    target = _origin_session(origin)
+    root = assert_ok(origin.request("session.page", target, html=str(_page_file(origin, "alone"))))["id"]
+    terminal = assert_ok(origin.request("session.companion.new", root, noSelect=True))["id"]
+    origin.wait_mounted(terminal, "left")
+    held = assert_ok(origin.request("session.companion.page", root, html=str(_page_file(origin, "later"))))["id"]
+    local = None
+    try:
+        local = assert_ok(remote_viewer.request("live.attach", root, host=host))["id"]
+        tree = _page_loaded(remote_viewer, local, "alone")
+        assert_subset(find_session(tree, local), {"content": "page", "remoteHost": host})
+        assert_absent(find_session(tree, local), "parent")
+        assert _rows_under(tree, local) == []
+
+        attached = [assert_ok(remote_viewer.request("live.attach", sid, host=host))["id"] for sid in (terminal, held)]
+        tree = _page_loaded(remote_viewer, attached[1], "later")
+        tree = remote_viewer.wait_tree(lambda tree: find_session(tree, attached[0]).get("realized"))
+        assert _rows_under(tree, local) == attached
+        assert [find_session(tree, row).get("content") for row in attached] == [None, "page"]
+
+        # this machine's own listing leaves out every row it attached from another machine
+        own = [sid for sid in session_ids(tree) if find_session(tree, sid).get("remoteHost") is None]
+        listing = remote_viewer.wait_response(
+            remote_viewer.vocabulary.command("live.tree"),
+            None,
+            lambda response: set(own) <= {row["id"] for row in assert_ok(response)["remote"]["sessions"]},
+        )
+        listed = {row["id"] for row in assert_ok(listing)["remote"]["sessions"]}
+        assert own and not listed & {local, *attached, root, terminal, held}, listed
+    finally:
+        if local is not None:
+            assert_ok(remote_viewer.request("session.close", local))
+        for sid in (root, target):
+            assert_ok(origin.request("session.close", sid))
