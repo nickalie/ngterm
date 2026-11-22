@@ -61,10 +61,27 @@ class UpdateScreensTest {
     }
 
     @Test
+    fun theNotificationsSectionTurnsTheUpdateNotificationOff() {
+        settings(updates)
+        val switch = compose.onNode(isToggleable() and hasText("App updates"))
+        switch.performScrollTo().assertIsOn().performClick()
+        compose.waitForIdle()
+        switch.assertIsOff()
+        compose
+            .onNode(
+                isToggleable() and hasText("Check automatically", substring = true),
+            ).performScrollTo()
+            .assertIsOn()
+        assertEquals(listOf("notify:false"), updates.calls)
+    }
+
+    @Test
     fun googlePlaysBuildHasNoUpdatesSection() {
         settings(null)
         compose.onNodeWithText("Updates").assertDoesNotExist()
         compose.onNodeWithText("Check automatically").assertDoesNotExist()
+        compose.onNodeWithText("App updates").assertDoesNotExist()
+        compose.onNodeWithText("Questions").performScrollTo()
     }
 
     @Test

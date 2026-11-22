@@ -49,15 +49,16 @@ private val AlertRows =
     )
 
 /**
- * The notification kinds' switches ([on] are on), the note that the attached sessions keep one quiet notification
- * whatever they say, and while the system lets the app post none ([allowed] false) a
- * banner whose Turn on opens the system's settings for the app.
+ * The notification kinds' switches ([on] are on), in the GitHub build ([updates]) the update notification's switch
+ * too, the note that the attached sessions keep one quiet notification whatever they say, and while the system lets
+ * the app post none ([allowed] false) a banner whose Turn on opens the system's settings for the app.
  */
 @Composable
 internal fun NotificationsSection(
     on: Set<AlertKind>,
     allowed: Boolean,
     actions: SettingsActions,
+    updates: UpdatesUi? = null,
 ) {
     SettingsSection(stringResource(R.string.settings_notifications)) {
         if (!allowed) {
@@ -78,6 +79,14 @@ internal fun NotificationsSection(
                 note = stringResource(row.note),
                 checked = row.kind in on,
                 onCheckedChange = { actions.onAlert(row.kind, it) },
+            )
+        }
+        updates?.let {
+            SwitchRow(
+                label = stringResource(R.string.settings_alert_updates),
+                note = stringResource(R.string.settings_alert_updates_note),
+                checked = it.notify,
+                onCheckedChange = it.onNotify,
             )
         }
         SettingsNote(stringResource(R.string.settings_alert_attached))

@@ -153,11 +153,27 @@ class SettingsScreenshotTest(
                 notificationsOn = true,
                 keyWork = KeyWork(),
                 actions = NoSettingsActions,
-                updates = UpdatesUi("0.2.3", UpdateState.Available(SampleOffer), true, NoUpdateActions) {},
+                updates = SampleUpdatesUi,
             )
         }
         compose.onNodeWithText("Check automatically").performScrollTo()
         compose.onRoot().captureRoboImage(golden("updates"))
+    }
+
+    @Test
+    fun notifications() {
+        show {
+            SettingsScreen(
+                state = SampleSettings,
+                coreVersion = "0.1.0",
+                notificationsOn = true,
+                keyWork = KeyWork(),
+                actions = NoSettingsActions,
+                updates = SampleUpdatesUi.copy(notify = false),
+            )
+        }
+        compose.onNodeWithText("While sessions are attached", substring = true).performScrollTo()
+        compose.onRoot().captureRoboImage(golden("notifications"))
     }
 
     @Test
@@ -172,3 +188,14 @@ class SettingsScreenshotTest(
         fun windows() = ScreensScreenshotTest.windows()
     }
 }
+
+private val SampleUpdatesUi =
+    UpdatesUi(
+        installed = "0.2.3",
+        state = UpdateState.Available(SampleOffer),
+        automatic = true,
+        actions = NoUpdateActions,
+        onAutomatic = {},
+        notify = true,
+        onNotify = {},
+    )

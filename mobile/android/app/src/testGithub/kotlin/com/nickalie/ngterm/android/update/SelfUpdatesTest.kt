@@ -85,6 +85,30 @@ class SelfUpdatesTest {
     }
 
     @Test
+    fun withTheUpdateNotificationOffAChecksFindsTheVersionButPostsNothing() {
+        released("0.3.0")
+        val updates = rig.updates()
+        updates.appStarted()
+        available(updates)
+        settle { rig.announced == listOf("0.3.0") }
+
+        updates.setNotify(false)
+        settle { rig.cleared == 1 }
+        assertFalse(runBlocking { updates.notify.first() })
+        released("0.3.1")
+        assertTrue(runBlocking { updates.checkInBackground() })
+        assertEquals("0.3.1", available(updates).offer.version)
+        assertEquals(listOf("0.3.0"), rig.announced)
+        assertEquals(listOf(true), rig.schedule)
+
+        // turned on again, the next automatic check announces the version it did not announce
+        updates.setNotify(true)
+        settle { runBlocking { updates.notify.first() } }
+        assertTrue(runBlocking { updates.checkInBackground() })
+        assertEquals(listOf("0.3.0", "0.3.1"), rig.announced)
+    }
+
+    @Test
     fun aManualCheckFindsTheNewestOrNothingWithoutAnnouncing() {
         released("0.2.3")
         val updates = rig.updates()

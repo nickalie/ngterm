@@ -12,6 +12,7 @@ class FakeUpdates(
 ) : AppUpdates {
     override val state = MutableStateFlow(initial)
     override val automatic = MutableStateFlow(true)
+    override val notify = MutableStateFlow(true)
     override val prompt = MutableStateFlow(false)
 
     /** The calls, oldest first: `check`, `install`, `opened:<action>`... */
@@ -24,6 +25,11 @@ class FakeUpdates(
     override fun setAutomatic(on: Boolean) {
         calls += "automatic:$on"
         automatic.value = on
+    }
+
+    override fun setNotify(on: Boolean) {
+        calls += "notify:$on"
+        notify.value = on
     }
 
     override fun check() {

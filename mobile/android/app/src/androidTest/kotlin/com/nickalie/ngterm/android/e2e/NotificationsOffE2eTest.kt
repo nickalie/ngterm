@@ -49,8 +49,9 @@ import java.util.Collections
  * the session is on screen), the app goes to the background, and there the agent sets its status to waiting, sends a
  * notification and sets its status to finished. The test sees both statuses reach the app with the session out of
  * sight, and the notification reach it, and then that none of them posts: the attached session's quiet notification,
- * which Android needs to keep the connection, is the only one of the agents' and machines' up. Then Questions is
- * turned on again, and the question that still waits posts.
+ * which Android needs to keep the connection, is the only one up. The update notice that the start's check may have
+ * posted (this build is older than GitHub's newest release) goes down with App updates and does not come back. Then
+ * Questions is turned on again, and the question that still waits posts.
  *
  * The machine is the private `ngterm-headless` behind the private `sshd` that `scripts/test-android-e2e.sh` starts;
  * without the script's arguments the test is skipped. No live ngterm.
@@ -219,7 +220,7 @@ class NotificationsOffE2eTest {
 
     private fun NotificationManager.activeIds() = activeNotifications.map { it.id }
 
-    // the tags of the agents' and machines' notifications up (the GitHub build's update notice has its own switch)
+    // the tags of the notifications up that a switch controls: the agents', the machines' and the update notice
     private fun alertsUp(): List<String> =
         manager().activeNotifications.mapNotNull { it.tag }.filter { tag -> ALERT_TAGS.any { tag.startsWith(it) } }
 
@@ -292,13 +293,14 @@ class NotificationsOffE2eTest {
                 R.string.settings_alert_done,
                 R.string.settings_alert_notices,
                 R.string.settings_alert_errors,
+                R.string.settings_alert_updates,
             )
 
         val TOGGLE = SemanticsProperties.ToggleableState
 
         const val ON_SCREEN = "status on screen"
 
-        val ALERT_TAGS = listOf("ask:", "status:", "notice:", "lost:")
+        val ALERT_TAGS = listOf("ask:", "status:", "notice:", "lost:", "update")
 
         const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
         const val CONNECT_WAIT_MS = 60_000L

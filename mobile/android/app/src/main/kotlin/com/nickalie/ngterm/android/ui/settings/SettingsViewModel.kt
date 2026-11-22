@@ -80,13 +80,18 @@ data class SettingsActions(
     val onShowLogs: () -> Unit,
 )
 
-/** Settings' Updates section: the [installed] version, where updating stands, and the automatic checks' switch. */
+/**
+ * The GitHub build's updates in Settings: the [installed] version, where updating stands and the automatic checks'
+ * switch (the Updates section), and the update notification's switch (the Notifications section).
+ */
 data class UpdatesUi(
     val installed: String,
     val state: UpdateState,
     val automatic: Boolean,
     val actions: UpdateActions,
     val onAutomatic: (Boolean) -> Unit,
+    val notify: Boolean,
+    val onNotify: (Boolean) -> Unit,
 )
 
 /** Where making or bringing a key stands. */

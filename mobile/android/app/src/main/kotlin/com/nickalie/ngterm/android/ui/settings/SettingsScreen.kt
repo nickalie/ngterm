@@ -86,7 +86,7 @@ fun SettingsScreen(
                         state.settings.extraKeys,
                     ) { keys -> actions.onChange { it.copy(extraKeys = keys) } }
                     AgentsSection(state.settings.agentChat) { on -> actions.onChange { it.copy(agentChat = on) } }
-                    NotificationsSection(state.alerts, notificationsOn, actions)
+                    NotificationsSection(state.alerts, notificationsOn, actions, updates)
                     ClipboardSection(state.clipboard, actions.onRevokeClipboard)
                     KeysSection(state.keys, keyWork, actions)
                     updates?.let { UpdatesSection(it) }

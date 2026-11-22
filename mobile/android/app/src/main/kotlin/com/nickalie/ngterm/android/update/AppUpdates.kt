@@ -110,6 +110,9 @@ interface AppUpdates {
     /** Whether the app checks on its own: at start, and twice a day in the background. */
     val automatic: Flow<Boolean>
 
+    /** Whether a new version posts a notification (Settings > Notifications); the checks run either way. */
+    val notify: Flow<Boolean>
+
     /** Whether the update sheet should be up. */
     val prompt: StateFlow<Boolean>
 
@@ -118,6 +121,9 @@ interface AppUpdates {
 
     /** Turns the automatic checks on or off. */
     fun setAutomatic(on: Boolean)
+
+    /** Turns the update notification on or off; off takes down the one that is up. */
+    fun setNotify(on: Boolean)
 
     /** Checks now. */
     fun check()

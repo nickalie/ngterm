@@ -256,14 +256,16 @@ private fun rememberSettingsActions(
     }
 }
 
-// the Updates section over [updates]: until its store answers, the automatic checks show as on, their default
+// the updates' controls over [updates]: until its store answers, both switches show as on, their default
 @Composable
 private fun rememberUpdatesUi(updates: AppUpdates): UpdatesUi {
     val state by updates.state.collectAsStateWithLifecycle()
     val automaticFlow = remember(updates) { updates.automatic.catch { emit(true) } }
     val automatic by automaticFlow.collectAsStateWithLifecycle(initialValue = true)
+    val notifyFlow = remember(updates) { updates.notify.catch { emit(true) } }
+    val notify by notifyFlow.collectAsStateWithLifecycle(initialValue = true)
     val actions = rememberUpdateActions(updates)
-    return UpdatesUi(updates.installed, state, automatic, actions, updates::setAutomatic)
+    return UpdatesUi(updates.installed, state, automatic, actions, updates::setAutomatic, notify, updates::setNotify)
 }
 
 // whether the system lets the app post notifications, read again on every resume

@@ -35,10 +35,11 @@ class UpdateParts(
 /**
  * [AppUpdates] from GitHub's releases: a check reads the release list for the newest complete Android release above
  * the installed version ([newestRelease]); the automatic one (at start, and [UpdateCheckWorker]'s) announces each
- * new version once, unless skipped. Install downloads the release's signed checksums and its APK, verifies them
- * ([UpdateVerifier]) and hands the APK to Android's installer, whose answers come back through [installResult].
- * State changes on [scope]; the network and the files are worked on [io]. A download moves the state on only from
- * what it set last, so once cancel took the state back it can't change it again.
+ * new version once, unless skipped or the update notification is off. Install downloads the release's signed
+ * checksums and its APK, verifies them ([UpdateVerifier]) and hands the APK to Android's installer, whose answers
+ * come back through [installResult]. State changes on [scope]; the network and the files are worked on [io]. A
+ * download moves the state on only from what it set last, so once cancel took the state back it can't change it
+ * again.
  */
 class SelfUpdates(
     private val scope: CoroutineScope,
@@ -62,6 +63,7 @@ class SelfUpdates(
 
     override val state: StateFlow<UpdateState> = current.asStateFlow()
     override val automatic: Flow<Boolean> = parts.prefs.automatic
+    override val notify: Flow<Boolean> = parts.prefs.notify
     override val prompt: StateFlow<Boolean> = showing.asStateFlow()
 
     private val busy: Boolean
@@ -87,6 +89,14 @@ class SelfUpdates(
         scope.launch {
             if (!parts.prefs.setAutomatic(on)) return@launch
             if (on) parts.schedule.start() else parts.schedule.stop()
+        }
+    }
+
+    override fun setNotify(on: Boolean) {
+        scope.launch {
+            parts.prefs.setNotify(on)
+            // after the store: a check that read the old value may have posted meanwhile
+            if (!on) parts.notices.clear()
         }
     }
 
@@ -221,12 +231,15 @@ class SelfUpdates(
         val offer = found.offer
         skipped = parts.prefs.skipped() ?: skipped
         current.value = UpdateState.Available(offer, offer.version == skipped)
-        if (announce && offer.version != skipped && parts.prefs.announced() != offer.version) {
+        if (announce && announces(offer.version)) {
             parts.notices.available(offer)
             parts.prefs.announce(offer.version)
         }
         return true
     }
+
+    private suspend fun announces(version: String): Boolean =
+        version != skipped && parts.prefs.announced() != version && parts.prefs.notify.first()
 
     private suspend fun download(target: ReleaseDownload) {
         val offer = target.offer

@@ -14,8 +14,8 @@ import kotlinx.coroutines.flow.map
 import java.io.IOException
 
 /**
- * The update choices, kept in [store] (Preferences DataStore): whether the app checks on its own (on until turned
- * off), the version the user said Not now to, and the last version a notification announced, so each is announced
+ * The update choices, kept in [store] (Preferences DataStore): whether the app checks on its own and whether a new
+ * version posts a notification (each on until turned off), the version the user said Not now to, and the last version a notification announced, so each is announced
  * once. A store that can't be read reads as the defaults, and an edit that can't be written is dropped.
  */
 class UpdatePrefs(
@@ -27,6 +27,9 @@ class UpdatePrefs(
     /** Whether the app checks on its own. */
     val automatic: Flow<Boolean> = data.map { it[AUTOMATIC] ?: true }
 
+    /** Whether a new version posts a notification. */
+    val notify: Flow<Boolean> = data.map { it[NOTIFY] ?: true }
+
     /** The version the user skipped. */
     suspend fun skipped(): String? = data.first()[SKIPPED]
 
@@ -35,6 +38,9 @@ class UpdatePrefs(
 
     /** False when the choice couldn't be stored. */
     suspend fun setAutomatic(on: Boolean): Boolean = edit { it[AUTOMATIC] = on }
+
+    /** False when the choice couldn't be stored. */
+    suspend fun setNotify(on: Boolean): Boolean = edit { it[NOTIFY] = on }
 
     suspend fun skip(version: String) {
         edit { it[SKIPPED] = version }
@@ -54,6 +60,7 @@ class UpdatePrefs(
 
     private companion object {
         val AUTOMATIC = booleanPreferencesKey("automatic")
+        val NOTIFY = booleanPreferencesKey("notify")
         val SKIPPED = stringPreferencesKey("skipped")
         val ANNOUNCED = stringPreferencesKey("announced")
     }

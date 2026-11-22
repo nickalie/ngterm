@@ -1030,9 +1030,10 @@ chat view off, its terminal picked, or an origin with no chat) opens as its term
   button (its placeholder as the hint; a one-line field's line breaks become spaces) and its cancel button as a plain
   action; a choice ask, or one with more than three buttons, says "Tap to answer in ngterm." (as its text, or under
   its message) and opens the session, where the ask is then its sheet. An ask says it once (`onlyAlertOnce`) and isn't cleared by a tap.
-- Questions, Waiting, Done, agents' notifications and lost machines can each be turned off (Settings). A kind turned
-  off takes its notifications down; turned on again, it brings back the open asks, each session's last waiting or
-  done status and each machine that is still lost (an agent's notification is a message, and does not come back).
+- Questions, Waiting, Done, agents' notifications, lost machines and (the GitHub build) app updates can each be
+  turned off (Settings). A kind turned off takes its notifications down; turned on again, it brings back the open
+  asks, each session's last waiting or done status and each machine that is still lost (an agent's notification is a
+  message, and does not come back; an update not announced yet posts at the next automatic check).
   With Questions off, an ask shows only as its sheet while its session is on screen. A status change of the session
   on screen posts nothing: the user is looking at it.
 
@@ -1103,9 +1104,11 @@ The plan, reviewed against the brief:
   terminal one tap away in the session's bar (The view switch, above). Off, a session's panes show their terminal and
   its bar has no switch. It is the default: a session's More menu sets its own either way (Chat view, above).
 - **Notifications:** a switch per kind (Questions, Waiting for you, Finished, Agent notifications, Lost machines;
-  with Questions off, a question shows only as its sheet while its session is on screen), and the note that the
-  attached sessions keep one quiet notification, which Android needs to keep them connected. While the system lets the app post none (the permission refused, Not now, or turned
-  off), a `Banner` with the attention diamond says so, and Turn on opens the system's notification settings for the
+  with Questions off, a question shows only as its sheet while its session is on screen), in the GitHub build App
+  updates last (off, the checks still run and a new version shows only under Updates; turned off, it takes the update
+  notification down), and the note that the attached sessions keep one quiet notification, which Android needs to keep
+  them connected. Every other notification the app posts has its switch here. While the system lets the app post none
+  (the permission refused, Not now, or turned off), a `Banner` with the attention diamond says so, and Turn on opens the system's notification settings for the
   app; it is read again when the app resumes.
 - **Clipboard:** the machines whose programs read the clipboard unasked (Always allow), each with its mono address
   and Ask again; or that every machine asks.

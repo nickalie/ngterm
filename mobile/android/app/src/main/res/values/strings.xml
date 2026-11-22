@@ -364,6 +364,8 @@
   <string name="settings_alert_done_note">An agent finished its work</string>
   <string name="settings_alert_errors">Lost machines</string>
   <string name="settings_alert_errors_note">A machine with attached sessions can\'t be reached</string>
+  <string name="settings_alert_updates">App updates</string>
+  <string name="settings_alert_updates_note">A new version of ngterm is available. Off, you see it only under Updates</string>
   <string name="settings_alert_attached">While sessions are attached, Android keeps one quiet notification for them, which keeps them connected. It goes when you detach the last one.</string>
   <string name="settings_clipboard">Clipboard</string>
   <string name="settings_clipboard_note">Machines whose programs read your clipboard without asking</string>
@@ -581,7 +583,7 @@
   <!-- the app's own updates (the GitHub build's): Settings' Updates section and the update sheet -->
   <string name="settings_updates">Updates</string>
   <string name="settings_update_automatic">Check automatically</string>
-  <string name="settings_update_automatic_note">When ngterm starts, and twice a day on a network connection, it looks for a new release on GitHub and notifies you.</string>
+  <string name="settings_update_automatic_note">When ngterm starts, and twice a day on a network connection, it looks for a new release on GitHub. It notifies you when Notifications > App updates is on.</string>
   <string name="update_version">Version %1$s</string>
   <string name="update_idle_note">Not checked since ngterm started.</string>
   <string name="update_checking">Checking for updates</string>
