@@ -69,8 +69,8 @@ def test_text_typed_as_unicode_key_events_reaches_the_pane_as_typed(ctl, ui):
         ctl.wait_text(sid, r"cat-reads[\s\S]*cat-reads", all=True)
         ui.type_text(UNICODE_TEXT)
         ui.press("return")
-        # MSYS2's echo writes byte by byte and breaks a split 4-byte character: Windows shows only cat's copy whole
-        ctl.wait_text(sid, rf"(?m)^{re.escape(UNICODE_TEXT)}$")
+        # MSYS2's echo writes byte by byte and breaks a split 4-byte character: only cat's copy, after it, is whole
+        ctl.wait_text(sid, rf"(?m)^{re.escape(UNICODE_TEXT[:-1])}.*\n{re.escape(UNICODE_TEXT)}$")
     finally:
         ctl.request("session.close", sid)
 
