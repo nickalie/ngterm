@@ -18,7 +18,7 @@ from agterm_conformance.match import (
     session_ids,
 )
 from agterm_conformance.command_line import CommandLines
-from agterm_conformance.plugin import Ctl
+from agterm_conformance.plugin import Cli, Ctl
 from agterm_conformance.wait import wait_until
 
 UNKNOWN = "zzz"
@@ -731,3 +731,39 @@ def test_a_converted_session_keeps_its_name_and_flag_and_ends_selected(ctl):
     assert active_session_id(tree) == task
     assert_ok(ctl.request("session.flag", task, mode="off"))
     assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.requires("posix-command-line", reason="the private sshd uses a POSIX shell")
+@pytest.mark.requires("live-sessions", reason="the origin session must be Live")
+@pytest.mark.covers("session.companion.convert", "cli:session convert", "live.attach")
+def test_convert_refuses_a_row_attached_from_another_machine_and_forwards_nothing(
+    remote_origin, remote_viewer, adapter
+):
+    origin = Ctl(remote_origin.instance)
+    sid = assert_ok(origin.request("session.new", name="origin-row"))["id"]
+    local = None
+    try:
+        origin.wait_mounted(sid, "left")
+        origin.wait_response(
+            origin.vocabulary.command("live.tree"), None,
+            lambda response: any(row["id"] == sid for row in assert_ok(response)["remote"]["sessions"]),
+        )
+        local = assert_ok(
+            remote_viewer.request(remote_viewer.vocabulary.command("live.attach"), sid, host=remote_origin.host)
+        )["id"]
+        viewer_before, origin_before = session_ids(remote_viewer.tree()), session_ids(origin.tree())
+        refusal = "convert it on the Mac it runs on"
+        assert_error(remote_viewer.request("session.companion.convert", local), refusal)
+        result = Cli(adapter.ctl_path, remote_viewer.instance, adapter.ctl_name)(
+            "session", "convert", "--companion", "--target", local
+        )
+        assert (result.returncode, result.stdout, result.stderr) == (1, "", f"error: {refusal}\n"), result.argv
+        viewer, origin_tree = remote_viewer.tree(), origin.tree()
+        assert session_ids(viewer) == viewer_before and session_ids(origin_tree) == origin_before
+        assert find_session(viewer, local).get("parent") is None
+        assert find_session(origin_tree, sid).get("parent") is None
+    finally:
+        if local is not None:
+            assert_ok(remote_viewer.request("session.close", local))
+        assert_ok(origin.request("session.close", sid))
