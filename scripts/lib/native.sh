@@ -74,21 +74,43 @@ simctl_bounded() {
   bounded "$limit" "$simctl" "$@"
 }
 
-# Gives the keyboard of the booted simulator $1 the state of a new simulator's, before a UI test run:
-# - the slide-to-type introduction marked as shown. A new simulator shows it the first time a keyboard that can slide
-#   to type comes up, over the soft keyboard's lower half and the extra keys, and it stays until its Continue is
-#   tapped: the taps the UI tests make there land on it, and the keys type nothing (KeyboardTests). The system writes
-#   the same preference once it has shown the introduction;
-# - no hardware keyboard last seen. A hardware key event (XCUITest's typeKey) makes the system write
-#   HardwareKeyboardLastSeen, and from the next boot on it keeps each app's soft keyboard below the screen, as for an
-#   attached hardware keyboard, until a hardware keyboard comes and goes: a soft keyboard test that ran first after
-#   that boot found no key on the screen (task 706). A new simulator has no such preference.
-# The simulator is booted (setup-ios.sh --simulator boots it right before), so its preferences daemon takes them.
-ios_sim_keyboard_as_new() {
+# Takes from the simulator named $1 (on the pinned iOS runtime) what its keyboard kept of a hardware keyboard, before
+# its boot. A hardware key event (XCUITest's typeKey) makes the system write AutomaticMinimizationEnabled and
+# HardwareKeyboardLastSeen. From the next boot on, AutomaticMinimizationEnabled keeps each app's soft keyboard below
+# the screen, as for an attached hardware keyboard, so a soft keyboard test that ran first after that boot found no key
+# on the screen (task 706). The system reads it as it boots: a write after the boot comes too late. So both keys are
+# removed from the shut-down simulator's file, as a new simulator has neither, and a booted simulator is shut down
+# first. A simulator that doesn't exist yet, or never booted, has no such file.
+ios_sim_forget_hardware_keyboard() {
+  local devices udid state data prefs key
+  devices="$(simctl_bounded "$SIMCTL_SECONDS" list -j devices)" || return 1
+  IFS=$'\t' read -r udid state data < <(python3 -I -c '
+import json, sys
+runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + sys.argv[2].replace(".", "-")
+for device in json.load(sys.stdin).get("devices", {}).get(runtime, []):
+    if device.get("name") == sys.argv[1]:
+        print(device["udid"] + "\t" + device.get("state", "") + "\t" + device.get("dataPath", ""))
+        break' "$1" "$IOS_SIMULATOR_RUNTIME" <<<"$devices") || true
+  [[ -n "${udid:-}" ]] || return 0
+  if [[ "$state" != Shutdown ]]; then
+    simctl_bounded "$SIMCTL_SECONDS" shutdown "$udid" || return 1
+  fi
+  prefs="$data/Library/Preferences/com.apple.keyboard.preferences.plist"
+  [[ -f "$prefs" ]] || return 0
+  for key in AutomaticMinimizationEnabled HardwareKeyboardLastSeen; do
+    if plutil -extract "$key" raw "$prefs" >/dev/null 2>&1; then
+      plutil -remove "$key" "$prefs" || return 1
+    fi
+  done
+}
+
+# Tells the keyboard of the booted simulator $1 that its slide-to-type introduction was shown. A new simulator shows
+# it the first time a keyboard that can slide to type comes up, over the soft keyboard's lower half and the extra
+# keys, and it stays until its Continue is tapped: the taps the UI tests make there land on it, and the keys type
+# nothing (KeyboardTests). The system writes the same preference once it has shown the introduction.
+ios_sim_quiet_keyboard_introduction() {
   simctl_bounded "$SIMCTL_SECONDS" spawn "$1" defaults write com.apple.keyboard.preferences \
-    DidShowContinuousPathIntroduction -bool true &&
-    simctl_bounded "$SIMCTL_SECONDS" spawn "$1" defaults write com.apple.keyboard.preferences \
-      HardwareKeyboardLastSeen -bool false
+    DidShowContinuousPathIntroduction -bool true
 }
 
 # The iOS build lock: a per-user flock(2) file, so one xcodebuild at a time runs on a Mac (build-ios.sh's header says

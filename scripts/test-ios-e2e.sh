@@ -319,8 +319,9 @@ MACHINE=(TEST_RUNNER_IOS_E2E_HOST=127.0.0.1 "TEST_RUNNER_IOS_E2E_PORT=$PORT" "TE
 status=0
 for test in "${TESTS[@]}"; do
   echo "→ $test on $NAME" >&2
-  # a fresh install: booted first, so the removal and the keychain reset reach the device; the keyboard in a new
-  # simulator's state (lib/native.sh)
+  # a fresh install: booted first, so the removal and the keychain reset reach the device; the keyboard as on a new
+  # simulator (lib/native.sh): nothing kept of a hardware keyboard before the boot, the slide-to-type introduction shown
+  ios_sim_forget_hardware_keyboard "$NAME" || die "couldn't clear simulator $NAME's hardware keyboard state"
   UDID="$("$NATIVE_ROOT/scripts/setup-ios.sh" --simulator "$NAME")" ||
     die "the $NAME simulator on iOS $IOS_SIMULATOR_RUNTIME is not ready (see above)"
   TCC_DB="$(simctl_bounded "$SIMCTL_SECONDS" list devices -j | python3 -I -c '
@@ -329,7 +330,7 @@ for device in (d for ds in json.load(sys.stdin)["devices"].values() for d in ds)
     if device["udid"] == sys.argv[1]:
         print(device["dataPath"] + "/Library/TCC/TCC.db")' "$UDID")"
   [[ -n "$TCC_DB" ]] || die "simctl names no data directory for $NAME ($UDID)"
-  ios_sim_keyboard_as_new "$UDID"
+  ios_sim_quiet_keyboard_introduction "$UDID"
   simctl_bounded "$SIMCTL_SECONDS" uninstall "$UDID" com.nickalie.ngterm.ios 2>/dev/null || true
   simctl_bounded "$SIMCTL_SECONDS" keychain "$UDID" reset
   pasteboard_allow

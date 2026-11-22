@@ -13,6 +13,7 @@ internal final class KeyboardTests: XCTestCase {
     private static let readinessKey = "c"
     // how far a frame's edge may lie past the screen's, in points, from rounding
     private static let onScreenSlack: CGFloat = 1
+    private static let springboardIdentifier = "com.apple.springboard"
     // how far apart a wait reads a line of the bench, which draws its lines again five times a second
     private static let readBeat: TimeInterval = 0.2
     // a touch held a moment: longer than an arrow's hold (100 ms), shorter than its first repeat (400 ms)
@@ -57,7 +58,9 @@ internal final class KeyboardTests: XCTestCase {
     @MainActor
     private static func softKeyboard(in app: XCUIApplication) throws -> XCUIElement? {
         let keyboard = app.keyboards.firstMatch
-        let screen = app.windows.firstMatch.frame.insetBy(dx: -onScreenSlack, dy: -onScreenSlack)
+        // SpringBoard's frame is the screen's: the app's is only its window's, smaller than the screen on an iPad
+        let screen = XCUIApplication(bundleIdentifier: springboardIdentifier).frame
+            .insetBy(dx: -onScreenSlack, dy: -onScreenSlack)
         var seen: CGRect?
         let shown = ScreenRead.Wait(reads: 1, lasting: wait).poll {
             ScreenRead.shows(keyboard.keys[readinessKey]) { key in
@@ -79,7 +82,8 @@ internal final class KeyboardTests: XCTestCase {
         FakeApp.attachScreen("the soft keyboard below the screen")
         XCTFail(
             "the soft keyboard's '\(readinessKey)' stays at \(seen), off the screen \(screen): the simulator takes a "
-                + "hardware keyboard as attached (HardwareKeyboardLastSeen, which build-ios.sh clears before a run)"
+                + "hardware keyboard as attached (AutomaticMinimizationEnabled, which build-ios.sh clears before a "
+                + "boot)"
         )
         return nil
     }

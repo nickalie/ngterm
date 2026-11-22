@@ -29,10 +29,10 @@
 #    - build: the app, its tests and its packages for the simulator (Debug);
 #    - test: the Unit and then the UI test plan on the pinned phone and tablet simulators (IOS_SIM_PHONE_NAME and
 #      IOS_SIM_TABLET_NAME, made by setup-ios.sh), one at a time (each plan is built once before any boots; each
-#      simulator boots right before its run, and shuts down before the next one boots), each with its keyboard in a
-#      new simulator's state (lib/native.sh's ios_sim_keyboard_as_new: no slide-to-type introduction over the keys
-#      the UI tests tap, no hardware keyboard that keeps the soft keyboard below the screen) and, while it is shut
-#      down before its boot, its wallpaper cache kept to BUILD_IOS_SIM_CACHE_MB MiB (default 1024,
+#      simulator boots right before its run, and shuts down before the next one boots), each with its keyboard's
+#      slide-to-type introduction marked as shown (it would cover the keys the UI tests tap) and, while it is shut
+#      down before its boot, nothing kept of a hardware keyboard (it keeps the soft keyboard below the screen,
+#      lib/native.sh) and its wallpaper cache kept to BUILD_IOS_SIM_CACHE_MB MiB (default 1024,
 #      lib/ios-sim-cache.sh); result bundles in
 #      mobile/ios/build/, and a failed snapshot's image in mobile/ios/build/snapshot-failures/ (its diff is in the
 #      result bundle). The Unit plan measures line coverage of the app's own code (Unit.xctestplan names the
@@ -449,12 +449,13 @@ run_test_plan() {
       simctl_bounded "$SIMCTL_SECONDS" shutdown "$booted" ||
         die "couldn't shut down simulator $booted before the next one boots"
     fi
+    ios_sim_forget_hardware_keyboard "$name" || die "couldn't clear simulator $name's hardware keyboard state"
     bound_wallpaper_cache "$name"
     # found, made again when it is gone, and booted right before the run: a CI Mac's simulators can still come and go
     udid="$("$NATIVE_ROOT/scripts/setup-ios.sh" --simulator "$name")" ||
       die "the $name simulator on iOS $IOS_SIMULATOR_RUNTIME is not ready (see above)"
     booted="$udid"
-    ios_sim_keyboard_as_new "$udid" || die "couldn't set simulator $udid's keyboard preferences"
+    ios_sim_quiet_keyboard_introduction "$udid" || die "couldn't set simulator $udid's keyboard preferences"
     bundle="$BUILD_DIR/$plan-$name.xcresult"
     start=$SECONDS
     project_xcodebuild test-without-building -scheme NgTerm -configuration Debug -testPlan "$plan" \
