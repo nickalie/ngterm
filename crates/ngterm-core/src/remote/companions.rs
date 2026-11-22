@@ -621,11 +621,10 @@ impl Core {
         origin: Option<RemoteOrigin>,
         select: bool,
     ) -> Result<PageAttach, String> {
-        let peer = match (spot, &origin) {
-            (PageSpot::Companion(parent), _) => self.remote_row_peer(parent, host),
-            (PageSpot::Root { .. }, Some(origin)) => origin.endpoint.peer(),
-            (PageSpot::Root { .. }, None) => super::peer::peer_of(host),
-        };
+        // a companion's origin is its parent's own, so the parent's peer and the origin's are one
+        let peer = origin
+            .as_ref()
+            .map_or_else(|| super::peer::peer_of(host), |origin| origin.endpoint.peer());
         let argv = control_command(
             host,
             peer,

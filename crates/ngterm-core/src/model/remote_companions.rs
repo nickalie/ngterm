@@ -291,5 +291,11 @@ mod tests {
             Some("the workspace here is gone")
         );
         assert_eq!(store.sessions().count(), before);
+        assert_eq!(
+            ReplicaPageRefusal::ParentGone.message(),
+            Some("the parent row here is gone")
+        );
+        let refused = ReplicaPageRefusal::NotOpened(HtmlOverlayOpenFailure::AlreadyOpen);
+        assert_eq!(refused.message(), None, "the caller words a slot's refusal");
     }
 }
