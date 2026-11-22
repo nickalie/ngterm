@@ -1185,8 +1185,12 @@ mod tests {
     }
 
     fn model_page(overlay: &HtmlOverlay) -> (Rc<Page>, Rc<Recorded>, Model) {
+        page_in(overlay, Model::new(overlay))
+    }
+
+    /// `overlay`'s realized page, its reports posted to `model`.
+    fn page_in(overlay: &HtmlOverlay, model: Model) -> (Rc<Page>, Rc<Recorded>, Model) {
         let web = replies();
-        let model = Model::new(overlay);
         let page = Page::new(
             overlay,
             None,
@@ -1735,6 +1739,44 @@ mod tests {
         page.focused();
         assert!(web.recorder.take().is_empty());
         assert_eq!(model.pending(), 0, "a released page reports nothing to the model");
+    }
+
+    #[gpui_kit::test]
+    fn a_page_sessions_close_asks_again_only_at_a_new_window_close(cx: &mut TestAppContext) {
+        let source = url_overlay();
+        let (page, _web, mut model) = page_in(&source, Model::page_row(&source));
+        model
+            .state
+            .core
+            .update_settings(|s| s.confirm_close_session = Some(true));
+        let view = page.view_id().unwrap();
+        let asks = |model: &mut Model| {
+            model.drain();
+            let work = model.state.take_frontend_work();
+            work.actions
+                .iter()
+                .filter(|(action, _)| {
+                    matches!(
+                        action,
+                        ngterm_core::app_actions::FrontendAction::ConfirmCloseSession { .. }
+                    )
+                })
+                .count()
+        };
+        cx.update(|cx| page.event(&Event::CloseRequested { view }, cx));
+        assert_eq!(asks(&mut model), 1);
+        cx.update(|cx| page.apply(&page.overlay(), true, cx));
+        assert_eq!(
+            asks(&mut model),
+            0,
+            "an apply after a cancelled alert does not ask again"
+        );
+        cx.update(|cx| page.event(&Event::CloseRequested { view }, cx));
+        assert_eq!(asks(&mut model), 1, "a new window.close() asks again");
+        assert!(
+            model.state.core.html_overlay_slot(page.id()).is_some(),
+            "nothing closes before the answer"
+        );
     }
 
     #[test]

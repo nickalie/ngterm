@@ -34,8 +34,12 @@ fn driven(overlay: &HtmlOverlay) -> Driven {
 
 /// `overlay`'s page with a web view.
 fn realized(overlay: &HtmlOverlay) -> Driven {
+    realized_in(overlay, Model::new(overlay))
+}
+
+/// `overlay`'s page with a web view, its reports posted to `model`.
+fn realized_in(overlay: &HtmlOverlay, model: Model) -> Driven {
     let engine = fake_native::install();
-    let model = Model::new(overlay);
     let page = Page::new(overlay, None, colors(), Storage::Ephemeral, &model.poster());
     let (web_view, view) = FakeView::made();
     page.realized(web_view);
@@ -1063,6 +1067,45 @@ fn window_close_asks_the_core_and_stays_asked_while_the_session_is_held(cx: &mut
     assert_eq!(driven.model.pending(), 2, "still asked at the model's next value");
     driven.model.drain();
     assert!(driven.model.state.core.html_overlay_slot(driven.page.id()).is_none());
+}
+
+#[gpui_kit::test]
+fn a_page_sessions_close_asks_again_only_at_a_new_window_close(cx: &mut TestAppContext) {
+    let source = url_overlay();
+    let mut driven = realized_in(&source, Model::page_row(&source));
+    driven.view.take();
+    driven
+        .model
+        .state
+        .core
+        .update_settings(|s| s.confirm_close_session = Some(true));
+    let asks = |model: &mut Model| {
+        model.drain();
+        let work = model.state.take_frontend_work();
+        work.actions
+            .iter()
+            .filter(|(action, _)| {
+                matches!(
+                    action,
+                    ngterm_core::app_actions::FrontendAction::ConfirmCloseSession { .. }
+                )
+            })
+            .count()
+    };
+    driven.report(Report::CloseRequested, cx);
+    assert_eq!(asks(&mut driven.model), 1);
+    cx.update(|cx| driven.show(cx));
+    assert_eq!(
+        asks(&mut driven.model),
+        0,
+        "an apply after a cancelled alert does not ask again"
+    );
+    driven.report(Report::CloseRequested, cx);
+    assert_eq!(asks(&mut driven.model), 1, "a new window.close() asks again");
+    assert!(
+        driven.model.state.core.html_overlay_slot(driven.page.id()).is_some(),
+        "nothing closes before the answer"
+    );
 }
 
 #[gpui_kit::test]

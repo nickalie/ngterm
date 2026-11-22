@@ -833,10 +833,28 @@ pub(crate) struct Model {
 
 impl Model {
     pub(crate) fn new(overlay: &HtmlOverlay) -> Self {
+        Self::showing(overlay, false)
+    }
+
+    /// A core showing `overlay` as the page of a page session.
+    pub(crate) fn page_row(overlay: &HtmlOverlay) -> Self {
+        Self::showing(overlay, true)
+    }
+
+    fn showing(overlay: &HtmlOverlay, page_row: bool) -> Self {
         let mut library = ngterm_core::model::WindowLibrary::seeded("/tmp");
         let window = library.active_window_id().unwrap();
         let store = library.store_mut(window).unwrap();
-        let session = store.sessions().next().unwrap().id();
+        let session = if page_row {
+            let workspace = store.workspaces()[0].id();
+            let spec = ngterm_core::model::NewSession {
+                content: ngterm_core::model::SessionContent::Page,
+                ..ngterm_core::model::NewSession::at_cwd("/tmp")
+            };
+            store.add_session(workspace, spec).unwrap()
+        } else {
+            store.sessions().next().unwrap().id()
+        };
         store
             .open_html_overlay(session, None, overlay.clone(), None, None)
             .unwrap();
