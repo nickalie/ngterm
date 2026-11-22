@@ -234,9 +234,6 @@ pub struct Session {
     /// The primary pane's restarts while it has companions.
     pub(crate) respawn: RespawnState,
     content: SessionContent,
-    /// Why a restored page session's saved page could not open (upstream's unreadable page): the row stays a page
-    /// session with its companions, shows this in place of its page, and saves back with no page. `None` otherwise.
-    pub unreadable_page: Option<String>,
     /// What the session is FOR, shown in the title bar. Persisted for a local session.
     pub context: Option<String>,
     /// The context mirrored from a remote origin; a local one wins over it. Ephemeral.
@@ -357,7 +354,6 @@ impl Session {
             },
             respawn: RespawnState::default(),
             content: seed.content,
-            unreadable_page: None,
             context: None,
             mirrored_context: None,
             info: None,
@@ -479,7 +475,8 @@ impl Session {
 
     /// Whether the session is written into the snapshot's tree: a remote one never is (the snapshot lists it apart, for
     /// the next launch to attach again); a page session is when its page is this machine's own file or web page, or
-    /// its saved page could not be read, and never when it shows a page another machine serves.
+    /// its saved page could not be read (written back with no page), and never when it shows a page another machine
+    /// serves.
     #[must_use]
     pub fn is_persistable(&self) -> bool {
         if self.remote_host.is_some() {
@@ -487,10 +484,9 @@ impl Session {
         }
         match self.content {
             SessionContent::Terminal => true,
-            SessionContent::Page => {
-                self.unreadable_page.is_some()
-                    || self.overlay.page().is_some_and(crate::html::HtmlOverlay::saved_as_row)
-            }
+            SessionContent::Page => self.overlay.page().is_some_and(|page| {
+                page.saved_as_row() || matches!(page.source, crate::html::HtmlSource::Unreadable { .. })
+            }),
         }
     }
 

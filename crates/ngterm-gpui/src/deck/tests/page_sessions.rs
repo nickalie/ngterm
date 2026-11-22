@@ -1,10 +1,10 @@
 //! Page sessions on a real deck (upstream's `HtmlOverlayViewTests` and `HtmlOverlayRegistryTests` page-row cases): a
-//! failed page's own Reload, a saved page that could not be read shown in place of its page, and the page's own
+//! failed page's own Reload, a saved page that could not be read shown as its failed page, and the page's own
 //! `window.close()` taking the session close.
 
 use ngterm_core::app_actions::FrontendAction;
-use ngterm_core::html::HtmlLoadState;
-use ngterm_core::model::{NewSession, SessionContent};
+use ngterm_core::html::{HtmlLoadState, HtmlOverlay, HtmlPageFlags, HtmlSource};
+use ngterm_core::model::PageCompanionOptions;
 use ngterm_proto::Request;
 use ngterm_proto::command::SessionCmd;
 
@@ -73,21 +73,51 @@ fn a_failed_page_without_a_strip_reloads_from_its_failure(cx: &mut TestAppContex
     );
 }
 
-/// A page session whose saved page could not be read shows the failure and its reason where its page would be.
+/// A page session whose saved page could not be read shows its failed page with the reason, and a reload fails again
+/// with the same reason, as nothing can load (upstream's registry fails an `.unreadable` source).
 #[gpui_kit::test]
-fn an_unreadable_page_session_shows_why_in_place_of_its_page(cx: &mut TestAppContext) {
+fn an_unreadable_page_session_shows_why_and_a_reload_fails_again(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
-    let (mut h, _, _) = overlay_harness(cx);
-    let workspace = h.store().workspaces()[0].id();
-    let spec = NewSession {
-        content: SessionContent::Page,
-        ..NewSession::at_cwd("/tmp")
+    let (mut h, session, _) = overlay_harness(cx);
+    page_host(&mut h);
+    let reason = "the saved page names nothing";
+    let failed = HtmlOverlay {
+        load_state: HtmlLoadState::Failed,
+        load_error: Some(reason.to_owned()),
+        ..HtmlOverlay::new(
+            HtmlSource::Unreadable {
+                reason: reason.to_owned(),
+            },
+            HtmlPageFlags::default(),
+        )
     };
-    let id = h.store().add_session(workspace, spec).unwrap();
-    h.store().session_mut(id).unwrap().unreadable_page = Some("the saved page names nothing".to_owned());
+    let options = PageCompanionOptions {
+        select: true,
+        ..PageCompanionOptions::default()
+    };
+    let id = h.store().add_page_session(session, failed, options, "/tmp").unwrap();
     h.state.settle();
     h.turn();
     assert!(h.cx.debug_bounds("htmlOverlay.error").is_some(), "the failure is drawn");
+
+    let reload =
+        h.cx.debug_bounds("htmlOverlay.failureReload")
+            .expect("the failure offers its Reload");
+    h.cx.simulate_click(reload.center(), gpui_kit::Modifiers::default());
+    h.turn();
+    h.state.settle();
+    h.turn();
+
+    let shown = h.session(id).overlay.page().unwrap().clone();
+    assert_eq!(shown.reload_revision, 1);
+    assert_eq!(
+        (shown.load_state, shown.load_error.as_deref()),
+        (HtmlLoadState::Failed, Some(reason))
+    );
+    assert!(
+        h.cx.debug_bounds("htmlOverlay.error").is_some(),
+        "the failure is drawn again"
+    );
 }
 
 /// The page's own `window.close()` closes its page session as Close Session does, confirmed first when asked.

@@ -124,7 +124,8 @@ fn page_arguments(page: &RemotePage, origin: &str) -> Vec<String> {
         | HtmlSource::Image { .. }
         | HtmlSource::Markdown { .. }
         | HtmlSource::Text { .. }
-        | HtmlSource::Document { .. } => {}
+        | HtmlSource::Document { .. }
+        | HtmlSource::Unreadable { .. } => {}
     }
     let flags = &page.flags;
     let set = [

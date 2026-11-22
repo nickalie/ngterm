@@ -110,6 +110,7 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
     match &overlay.source {
         HtmlSource::Image { .. }
         | HtmlSource::Text { .. }
+        | HtmlSource::Unreadable { .. }
         | HtmlSource::Replica {
             content: ReplicaContent::Image { .. } | ReplicaContent::Text { .. },
             ..

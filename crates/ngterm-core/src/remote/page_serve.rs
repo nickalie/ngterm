@@ -301,7 +301,9 @@ pub fn content(requested: &str, source: &HtmlSource) -> Option<ContentResource> 
         HtmlSource::Text { path, .. } => (path, html::text_page::MAX_BYTES, false),
         HtmlSource::Document { path } => (path, html::document_page::MAX_BYTES, false),
         HtmlSource::Markdown { path } => (path, html::markdown_page::MAX_BYTES, false),
-        HtmlSource::File { .. } | HtmlSource::Url(_) | HtmlSource::Replica { .. } => return None,
+        HtmlSource::File { .. } | HtmlSource::Url(_) | HtmlSource::Replica { .. } | HtmlSource::Unreadable { .. } => {
+            return None;
+        }
     };
     let own = Path::new(own);
     if !requested.is_absolute() || !same_volume(requested, own) {

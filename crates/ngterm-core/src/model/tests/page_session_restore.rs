@@ -7,11 +7,12 @@ use uuid::Uuid;
 
 use super::overlay_visibility::page;
 use super::support::{add, ids};
-use crate::html::{HtmlOverlay, HtmlPageFlags, HtmlSource, os_path};
+use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageFlags, HtmlSource, os_path};
 use crate::model::page_snapshot::UNREADABLE_PAGE;
 use crate::model::snapshot::session_from_snapshot;
 use crate::model::{AppStore, CompanionOptions, PageCompanionOptions, SessionContent};
 use crate::persist::{SessionContentSnapshot, SessionSnapshot, Snapshot};
+use crate::projection::session_node;
 
 const HOME: &str = "/home/u";
 
@@ -139,7 +140,6 @@ fn assert_restored_root(back: &AppStore, root: Uuid, before: Uuid) {
     assert_ne!(shown.id, before, "under a fresh id");
     assert!(matches!(&shown.source, HtmlSource::File { path, .. } if *path == os_path("/tmp/root.html")));
     assert_eq!(row.overlay.background_color.as_deref(), Some("#112233"));
-    assert_eq!(row.unreadable_page, None);
 }
 
 /// A missing file never drops the row: its page opens and fails as a load, with its reload.
@@ -158,8 +158,8 @@ fn a_page_whose_file_is_gone_still_comes_back_as_its_page() {
 }
 
 /// Upstream's unreadable page: a saved page this build cannot open (another kind of page, a source it does not know,
-/// none at all, a file grant outside the home) keeps the row a page session with its companions, owning no pane, and
-/// it saves back as one.
+/// none at all, a file grant outside the home) keeps the row a page session with its companions, owning no pane. The
+/// row shows a failed page with the reason, as the tree reports it, and it saves back as a page session with no page.
 #[test]
 fn a_saved_page_that_does_not_check_out_restores_as_an_unreadable_page_session() {
     let parent = Uuid::new_v4();
@@ -186,8 +186,15 @@ fn a_saved_page_that_does_not_check_out_restores_as_an_unreadable_page_session()
 
         let row = store.session(parent).unwrap();
         assert_eq!(row.content(), SessionContent::Page, "{pages}");
-        assert_eq!(row.unreadable_page.as_deref(), Some(UNREADABLE_PAGE), "{pages}");
-        assert!(row.overlay.page().is_none(), "{pages}");
+        let shown = row.overlay.page().expect("the row shows its failed page");
+        assert!(shown.row, "{pages}");
+        assert_eq!(shown.load_state, HtmlLoadState::Failed, "{pages}");
+        assert_eq!(shown.load_error.as_deref(), Some(UNREADABLE_PAGE), "{pages}");
+        let node = serde_json::to_value(session_node(row, false)).unwrap();
+        assert_eq!(node["overlay"], json!(true), "{pages}");
+        assert_eq!(node["htmlOverlays"].as_array().map(Vec::len), Some(1), "{pages}");
+        assert_eq!(node["htmlOverlays"][0]["state"], json!("failed"), "{pages}");
+        assert_eq!(node["htmlOverlays"][0]["error"], json!(UNREADABLE_PAGE), "{pages}");
         assert!(row.locally_managed_pane_identities().is_empty());
         assert_eq!(store.session(companion).unwrap().parent_id(), Some(parent));
         let again = store.snapshot();

@@ -404,6 +404,7 @@ fn source_url(source: &HtmlSource) -> Option<Url> {
         | HtmlSource::Text { path, .. }
         | HtmlSource::Document { path } => file_url(path),
         HtmlSource::Url(url) => Some(url.clone()),
+        HtmlSource::Unreadable { .. } => None,
     }
 }
 
@@ -470,7 +471,8 @@ pub fn browser_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>
         HtmlSource::Replica { .. }
         | HtmlSource::Markdown { .. }
         | HtmlSource::Text { .. }
-        | HtmlSource::Document { .. } => None,
+        | HtmlSource::Document { .. }
+        | HtmlSource::Unreadable { .. } => None,
         HtmlSource::Url(original) => {
             let current = if overlay.flags.browse { shown } else { web };
             Some(
@@ -557,7 +559,8 @@ pub fn strip_items(overlay: &HtmlOverlay, hide_shown: bool) -> Option<Vec<StripI
         | HtmlSource::Image { .. }
         | HtmlSource::Markdown { .. }
         | HtmlSource::Text { .. }
-        | HtmlSource::Document { .. } => None,
+        | HtmlSource::Document { .. }
+        | HtmlSource::Unreadable { .. } => None,
     };
     if overlay.flags.navigation
         && let Some(sharing) = sharing

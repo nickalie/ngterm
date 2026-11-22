@@ -78,7 +78,7 @@ fn source_snapshot(page: &HtmlOverlay) -> Option<PageSourceSnapshot> {
             follow: page.text_log.is_some_and(|log| log.follow),
         },
         HtmlSource::Document { path } => PageSourceSnapshot::Document { path: path.clone() },
-        HtmlSource::Replica { .. } => return None,
+        HtmlSource::Replica { .. } | HtmlSource::Unreadable { .. } => return None,
     })
 }
 
@@ -433,8 +433,9 @@ pub const UNREADABLE_PAGE: &str = "the saved page names no file or http(s) URL t
 
 /// Opens a restored page session's own page, its session-wide entry of `pages`, as its row page under a fresh id (upstream's
 /// `openRestoredPages`). Nothing checks that its file is there: a missing file or a failed load leaves the page failed,
-/// with its reload. An entry that is absent, names another kind of page or no longer checks out leaves the session
-/// [`Session::unreadable_page`], never a terminal. `home` is what a file page's grant is checked against.
+/// with its reload. An entry that is absent, names another kind of page or no longer checks out opens as a failed
+/// [`HtmlSource::Unreadable`] page that shows [`UNREADABLE_PAGE`] (upstream's `makeOverlay`), never a terminal. `home`
+/// is what a file page's grant is checked against.
 pub(super) fn restore_row_page(session: &mut Session, pages: &[PageSnapshot], home: &str) {
     let entry = pages
         .iter()
@@ -449,13 +450,26 @@ pub(super) fn restore_row_page(session: &mut Session, pages: &[PageSnapshot], ho
         };
         web_page_source(&entry.source, flags, home).map(|source| (entry, HtmlOverlay::new(source, flags)))
     });
-    let Some((entry, overlay)) = restored else {
-        session.unreadable_page = Some(UNREADABLE_PAGE.to_owned());
-        return;
+    let (overlay, background_color) = match restored {
+        Some((entry, overlay)) => (
+            overlay,
+            entry.background_color.clone().filter(|color| is_valid_color_hex(color)),
+        ),
+        None => (unreadable_page(), None),
     };
-    let background_color = entry.background_color.clone().filter(|color| is_valid_color_hex(color));
     let overlay = HtmlOverlay { row: true, ..overlay };
     session.install_html_overlay(None, overlay, OverlaySize::default(), background_color);
+}
+
+fn unreadable_page() -> HtmlOverlay {
+    let source = HtmlSource::Unreadable {
+        reason: UNREADABLE_PAGE.to_owned(),
+    };
+    HtmlOverlay {
+        load_state: html::HtmlLoadState::Failed,
+        load_error: Some(UNREADABLE_PAGE.to_owned()),
+        ..HtmlOverlay::new(source, HtmlPageFlags::default())
+    }
 }
 
 /// Whether `path` is an absolute, existing file of a kind in `extensions`, as the image and Markdown pages show.

@@ -274,9 +274,10 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
             path,
             content: ReplicaContent::Markdown,
         } => (None, None, None, None, Some(path.clone())),
-        HtmlSource::Text { .. } | HtmlSource::Document { .. } | HtmlSource::Replica { .. } => {
-            (None, None, None, None, None)
-        }
+        HtmlSource::Text { .. }
+        | HtmlSource::Document { .. }
+        | HtmlSource::Replica { .. }
+        | HtmlSource::Unreadable { .. } => (None, None, None, None, None),
     };
     let document = match &page.source {
         HtmlSource::Document { path }

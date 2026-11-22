@@ -282,6 +282,9 @@ pub enum HtmlSource {
     /// is. An HTML file loads from `ngterm-page://<page id>/`; a picture, Markdown, text or clicked HTML file is built
     /// here from the fetched bytes. It is never a path on this machine, so nothing reads it from the local disk.
     Replica { path: String, content: ReplicaContent },
+    /// A page session's saved page that this build cannot open (upstream's `.unreadable`): it loads nothing and shows
+    /// `reason` as its failed state, so the row stays a page and does not restore as a terminal.
+    Unreadable { reason: String },
 }
 
 /// The kind of page a replica's origin opened (upstream's `ReplicaContent`): an HTML file it loads as is, or a picture,
@@ -305,6 +308,7 @@ pub enum HtmlPageKind {
     Markdown,
     Text,
     Document,
+    Unreadable,
 }
 
 /// The URL scheme a replica page loads from (upstream's `HtmlSource.replicaScheme`, `agterm-page` there; the build's
@@ -414,6 +418,7 @@ impl HtmlSource {
                 content: ReplicaContent::Document,
                 ..
             } => HtmlPageKind::Document,
+            Self::Unreadable { .. } => HtmlPageKind::Unreadable,
         }
     }
 
@@ -428,6 +433,7 @@ impl HtmlSource {
             | Self::Document { path }
             | Self::Text { path, .. } => path.clone(),
             Self::Url(url) => url.as_str().to_owned(),
+            Self::Unreadable { reason } => reason.clone(),
         }
     }
 }
@@ -707,7 +713,10 @@ impl HtmlOverlay {
             HtmlSource::Url(_) => false,
             // a link page loads its files through the page scheme
             HtmlSource::Markdown { .. } => self.markdown_links.is_none(),
-            HtmlSource::Image { .. } | HtmlSource::Text { .. } | HtmlSource::Document { .. } => true,
+            HtmlSource::Image { .. }
+            | HtmlSource::Text { .. }
+            | HtmlSource::Document { .. }
+            | HtmlSource::Unreadable { .. } => true,
         }
     }
 
@@ -720,6 +729,7 @@ impl HtmlOverlay {
             HtmlSource::Image { path } | HtmlSource::Text { path, .. } | HtmlSource::Document { path } => {
                 last_path_component(path)
             }
+            HtmlSource::Unreadable { .. } => "unreadable page".to_owned(),
             // a replica the app builds sits at about:blank: its file is what it shows
             HtmlSource::Replica { path, content } if *content != ReplicaContent::Html => last_path_component(path),
             // a Markdown page names the file it shows, a linked one once it committed

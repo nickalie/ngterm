@@ -312,8 +312,6 @@ pub struct Page {
     ask: Option<PageAsk>,
     /// The session's primary respawns this page has a terminal for ([`Session::primary_respawns`]).
     primary_respawns: u64,
-    /// Why a page session's saved page could not open ([`Session::unreadable_page`]), shown in place of its page.
-    unreadable: Option<String>,
 }
 
 impl Page {
@@ -329,7 +327,6 @@ impl Page {
             hud: HudLayer::default(),
             overlays: OverlayLayer::default(),
             ask: None,
-            unreadable: None,
         }
     }
 
@@ -892,7 +889,6 @@ impl Deck {
             return;
         };
         page.retain(|token| session.pane_role_for_token(token).is_some());
-        page.unreadable.clone_from(&session.unreadable_page);
         let respawned = remount_respawned_primary(&self.env, page, session, (sync.window, workspace), window, cx);
         let needs = split::needs(session, sync.zoom);
         if needs.split
@@ -1279,7 +1275,7 @@ impl Deck {
         if let Some((regions, opacity)) = page.washes.backdrop.clone() {
             element = element.child(backdrop(regions, opacity, plan, Rc::clone(&page.state)), Place::Full);
         }
-        element = with_unreadable(with_program(element, page), page, &self.look);
+        element = with_program(element, page);
         if let (Some(panel), Some(placement)) = (hud::element(&page.hud), page.hud.placement()) {
             element = element.child(panel, Place::Hud(placement));
         }
@@ -1447,51 +1443,6 @@ fn terminal_wrapper(pane: &PaneTerminal, shown: bool, zoomed: bool) -> AnyElemen
         return crate::inert::hide(wrapper, !shown).into_any_element();
     }
     crate::inert::hide(wrapper, !shown).into_any_element()
-}
-
-/// `element` with what an unreadable page session shows in place of its page, over the whole page.
-fn with_unreadable(element: PageElement, page: &Page, look: &Look) -> PageElement {
-    match page.unreadable.as_deref() {
-        Some(reason) => element.child(unreadable_page(reason, look), Place::Full),
-        None => element,
-    }
-}
-
-/// What a page session whose saved page could not be read shows in place of its page (upstream's failed page view for
-/// an unreadable page): the failure and its reason, with nothing to reload.
-fn unreadable_page(reason: &str, look: &Look) -> impl IntoElement {
-    let ink = mute::color(look.foreground, 1.0);
-    div()
-        .id("htmlOverlay.error")
-        .debug_selector(|| "htmlOverlay.error".to_owned())
-        .accessibility_id("htmlOverlay.error")
-        .role(gpui_kit::Role::Alert)
-        .size_full()
-        .bg(mute::color(look.background, 1.0))
-        .text_color(ink)
-        .p(px(24.))
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(px(8.))
-        .child(
-            gpui_kit::svg()
-                .path("icons/triangle-alert.svg")
-                .size(px(24.))
-                .text_color(ink),
-        )
-        .child(
-            div()
-                .font_weight(gpui_kit::FontWeight::BOLD)
-                .child("The page could not be loaded"),
-        )
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_center()
-                .child(SharedString::from(reason.to_owned())),
-        )
 }
 
 /// A solid wash at `opacity` over the area it is laid out on; it takes nothing.

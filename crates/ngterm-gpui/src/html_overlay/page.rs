@@ -812,6 +812,7 @@ impl Page {
                 registry::read_replica_document(self.id, generation, path, content);
                 return;
             }
+            HtmlSource::Unreadable { reason } => return self.fail(reason),
         };
         if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
             web.load(view, load);

@@ -108,14 +108,14 @@ pub(crate) fn presentation_source(
             line: *line,
         }),
         HtmlSource::Document { path } => Some(PresentationPageSource::Document { path: path.clone() }),
-        HtmlSource::Replica { .. } => None,
+        HtmlSource::Replica { .. } | HtmlSource::Unreadable { .. } => None,
     }
 }
 
-/// Whether a page of `source` can be handed to a presenter at all: every page this machine opened, never a replica (an
-/// image once its size is probed).
+/// Whether a page of `source` can be handed to a presenter at all: every page this machine opened, never a replica or an
+/// unreadable page (an image once its size is probed).
 pub(crate) fn travels(source: &HtmlSource) -> bool {
-    !matches!(source, HtmlSource::Replica { .. })
+    !matches!(source, HtmlSource::Replica { .. } | HtmlSource::Unreadable { .. })
 }
 
 /// Whether `session`'s presenter builds a page of `source`: a content page needs [`PAGE_CONTENT_KIND`] in its hello, a
@@ -905,5 +905,10 @@ mod document_tests {
             assert_eq!(presentation_source(&replica, pixels), None);
             assert!(!travels(&replica));
         }
+        let unreadable = HtmlSource::Unreadable {
+            reason: "unreadable".to_owned(),
+        };
+        assert_eq!(presentation_source(&unreadable, pixels), None);
+        assert!(!travels(&unreadable));
     }
 }

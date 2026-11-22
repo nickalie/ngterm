@@ -5,8 +5,7 @@ import json
 import uuid
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session, session_ids
-from agterm_conformance.plugin import REFERENCE_IMPL
+from agterm_conformance.match import assert_error, assert_ok, assert_subset, find_session, session_ids
 
 COMPANION_WITHOUT_PARENT = "parent session is not open or in Recent Closed"
 UNREADABLE_PAGE = "the saved page names no file or http(s) URL this version can open"
@@ -37,35 +36,30 @@ def test_a_companion_whose_parent_is_nowhere_is_refused_by_name(launch):
     assert snapshot["id"] not in session_ids(ctl.tree())
 
 
-def _saved_page(reference):
-    """A page session's saved page that names an ftp URL, in each build's snapshot format: the reference's one `page`
-    descriptor, the Rust build's `content` and `pages` list."""
-    if reference:
-        return {"page": {"url": UNOPENABLE_URL}}
-    return {"content": "page", "pages": [{"slot": "session", "source": {"kind": "url", "url": UNOPENABLE_URL}}]}
+# the saved page in both builds' snapshot formats, as each ignores the other's keys: upstream's one `page` descriptor, the
+# Rust build's `content` and `pages` list
+SAVED_PAGE = {
+    "page": {"url": UNOPENABLE_URL},
+    "content": "page",
+    "pages": [{"slot": "session", "source": {"kind": "url", "url": UNOPENABLE_URL}}],
+}
 
 
 @pytest.mark.since("0.42.0")
 @pytest.mark.covers("recent.open", "field:tree.session.content")
-def test_a_page_session_whose_saved_page_this_build_cannot_open_reopens_as_a_page_row(launch, impl_options):
-    reference = impl_options.impl == REFERENCE_IMPL
+def test_a_page_session_whose_saved_page_this_build_cannot_open_reopens_as_a_page_row(launch):
     ctl = launch()
     entry, row = _id(), _id()
-    snapshot = {"id": row, "customName": "docs", "cwd": "/tmp", **_saved_page(reference)}
+    snapshot = {"id": row, "customName": "docs", "cwd": "/tmp", **SAVED_PAGE}
     place = {"workspaceID": _id(), "workspaceName": "gone", "workspaceIndex": 0, "sessionIndex": 0}
     item = {"id": entry, "kind": "session", "title": "docs", "closedAt": 0, "session": {**place, "snapshot": snapshot}}
     (ctl.instance.state_dir / "recent-closed.json").write_text(json.dumps({"version": 1, "items": [item]}))
     ctl = launch.relaunch(ctl)
 
     assert_ok(ctl.request("recent.open", entry))
-    node = find_session(ctl.tree(), row)
-    # a page row, never a terminal
-    assert_subset(node, {"name": "docs", "content": "page", "overlay": False, "realized": False})
-    if reference:
-        # upstream shows the reason as its row's failed page
-        tree = ctl.wait_tree(lambda tree: find_session(tree, row).get("htmlOverlays"))
-        (shown,) = find_session(tree, row)["htmlOverlays"]
-        assert_subset(shown, {"state": "failed", "error": UNREADABLE_PAGE})
-    else:
-        # the Rust build opens no page and its row shows the reason in place of one
-        assert_absent(node, "htmlOverlays")
+    # a page row, never a terminal, that shows the reason as its failed page
+    tree = ctl.wait_tree(lambda tree: find_session(tree, row).get("htmlOverlays"))
+    node = find_session(tree, row)
+    assert_subset(node, {"name": "docs", "content": "page", "overlay": True, "realized": False})
+    (shown,) = node["htmlOverlays"]
+    assert_subset(shown, {"state": "failed", "error": UNREADABLE_PAGE})

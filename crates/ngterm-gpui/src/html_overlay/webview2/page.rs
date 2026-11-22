@@ -1216,6 +1216,7 @@ impl Page {
                 registry::read_replica_document(self.id, generation, path, content);
                 return;
             }
+            HtmlSource::Unreadable { reason } => return self.fail(reason),
         };
         native.load_url(&address);
     }
