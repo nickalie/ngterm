@@ -3,6 +3,9 @@ import UserNotifications
 
 /// Stands in as the notification center's delegate, to see the notifications the system presents to the app in the
 /// foreground as they reach the user; ``restore()`` puts the hosted app's own delegate back.
+///
+/// A listed presentation keeps the notification in the system's delivered list, as one that reached the user out of
+/// the app does.
 @MainActor
 internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegate {
     /// A presented notification, as the user sees it.
@@ -28,12 +31,19 @@ internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegat
     private static let presentationLimit = Duration.seconds(limitSeconds)
 
     private let previous: (any UNUserNotificationCenterDelegate)?
+    private let options: UNNotificationPresentationOptions
     private var shown: [String: Shown] = [:]
     private var waiting: [String: AsyncStream<Shown>.Continuation] = [:]
 
     /// Stands in from now on.
-    override internal init() {
+    override internal convenience init() {
+        self.init(listed: false)
+    }
+
+    /// Stands in from now on; with `listed`, each notification presented stays in the delivered list.
+    internal init(listed: Bool) {
         previous = UNUserNotificationCenter.current().delegate
+        options = listed ? [.list] : []
         super.init()
         UNUserNotificationCenter.current().delegate = self
     }
@@ -87,17 +97,17 @@ internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegat
             category: content.categoryIdentifier,
             info: SystemNotices.info(of: notification)
         )
-        await arrived(notification.request.identifier, seen)
-        return []
+        return await arrived(notification.request.identifier, seen)
     }
 
-    private func arrived(_ id: String, _ seen: Shown) {
+    private func arrived(_ id: String, _ seen: Shown) -> UNNotificationPresentationOptions {
         guard let waiter = waiting.removeValue(forKey: id) else {
             shown[id] = seen
-            return
+            return options
         }
         waiter.yield(seen)
         waiter.finish()
+        return options
     }
 
     deinit {

@@ -26,9 +26,28 @@ internal struct SystemNoticesTests {
         }
     }
 
+    /// The ids of the notifications in the system's delivered list.
+    private static func deliveredIds() async -> Set<String> {
+        Set(await UNUserNotificationCenter.current().deliveredNotifications().map(\.request.identifier))
+    }
+
+    /// Waits until the system's delivered list holds `ids`, failing the test when it doesn't in time.
+    private static func listed(_ ids: Set<String>) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(10)
+        while await !ids.isSubset(of: deliveredIds()), clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try #require(await ids.isSubset(of: deliveredIds()), "the delivered list never held \(ids)")
+    }
+
     /// Withdraws the notices and waits for that withdrawal even when the check throws.
-    private static func withPosted(_ posted: [Notice], checking: () async throws -> Void) async rethrows {
-        let notices = SystemNotices()
+    private static func withPosted(
+        _ posted: [Notice],
+        on center: SystemNotices? = nil,
+        checking: () async throws -> Void
+    ) async rethrows {
+        let notices = center ?? SystemNotices()
         for notice in posted {
             notices.post(notice)
         }
@@ -169,23 +188,44 @@ internal struct SystemNoticesTests {
         #expect(await Self.category(offering: action("second")) == nil)
     }
 
-    @Test("a kind turned off leaves another kind's notice and buttons up; the kind rides apart from what a tap carries")
+    @Test("a kind turned off takes its notices and buttons down, another kind's stay; a tap doesn't carry the kind")
     internal func withdrawKinds() async throws {
-        let presented = PresentedNotices()
+        let presented = PresentedNotices(listed: true)
         defer { presented.restore() }
         let notices = SystemNotices()
         var waiting = ask("kind-waiting", actions: [NoticeAction(id: action("kind-waiting"), title: "Allow")])
         waiting.kind = .waiting
-        notices.post(waiting)
-        await notices.delivered()
-        let shown = try await presented.presented(waiting.id)
-        #expect(shown.info == ["machine": "m1", "session": "s1"])
-        notices.withdraw(kinds: [.questions, .done])
-        notices.withdraw(kinds: [])
-        await notices.delivered()
-        #expect(await Self.category(offering: action("kind-waiting")) != nil)
-        notices.withdraw([waiting.id])
-        await notices.delivered()
+        var done = ask("kind-done", actions: [NoticeAction(id: action("kind-done"), title: "Allow")])
+        done.kind = .done
+        try await Self.withPosted([waiting, done], on: notices) {
+            #expect(try await presented.presented(waiting.id).info == ["machine": "m1", "session": "s1"])
+            try await Self.listed([waiting.id, done.id])
+            notices.withdraw(kinds: [.questions, .done])
+            notices.withdraw(kinds: [])
+            await notices.delivered()
+            let left = await Self.deliveredIds()
+            #expect(!left.contains(done.id))
+            #expect(left.contains(waiting.id))
+            #expect(await Self.category(offering: action("kind-done")) == nil)
+            #expect(await Self.category(offering: action("kind-waiting")) != nil)
+        }
+    }
+
+    @Test("a notice posted again right after its kind is turned off keeps its buttons through later changes")
+    internal func repostAfterKindOff() async throws {
+        let presented = PresentedNotices(listed: true)
+        defer { presented.restore() }
+        let notices = SystemNotices()
+        var question = ask("kind-again", actions: [NoticeAction(id: action("kind-again"), title: "Allow")])
+        question.kind = .questions
+        try await Self.withPosted([question], on: notices) {
+            try await Self.listed([question.id])
+            notices.withdraw(kinds: [.questions])
+            notices.post(question)
+            notices.withdraw(["other-\(tag)"])
+            await notices.delivered()
+            #expect(await Self.category(offering: action("kind-again")) != nil)
+        }
     }
 
     @Test("a notice withdrawn just after it was posted doesn't come back")
