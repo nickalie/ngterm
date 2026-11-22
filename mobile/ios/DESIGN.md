@@ -767,10 +767,12 @@ that it still reads, and the app ends ("parentEnvironment != nil").
   session's More menu sets its own either way (Chat view, above).
 - **Extra keys:** Fit to the width, Always two lines, or Hidden (the soft keyboard alone, which on an iPhone has no
   key that closes it; the note says so). A session's bar follows a change at once.
-- **Notifications:** one switch per kind (Waiting for you, Finished, Agent notifications, Lost machines), each with
-  what it tells; the note says questions from agents always notify. While the app may not notify, an attention banner
-  heads the section: **Turn on** raises the system's question when it hasn't been answered, **Open Settings** opens the
-  system's settings for the app once the user said no. The permission is read again as the app comes back.
+- **Notifications:** one switch per kind (Questions, Waiting for you, Finished, Agent notifications, Lost machines),
+  each with what it tells. A kind turned off posts nothing and takes its notifications that are up down; with Questions
+  off, an agent's question shows only as its sheet while its session is on screen. While the app may not notify, an
+  attention banner heads the section: **Turn on** raises the system's question when it hasn't been answered, **Open
+  Settings** opens the system's settings for the app once the user said no. The permission is read again as the app
+  comes back.
 - **Clipboard:** each machine trusted to read it unasked, its name over its mono address, with **Ask again** (read as
   "Ask again before nas reads the clipboard"); with none, that every machine asks.
 - **Keys:** each key ("Created on this device" or "Imported", a heading) with its mono fingerprint, "Used by build-01
@@ -916,7 +918,8 @@ screen.
 | an ask | its title | "api on build-01" | its message | its buttons (at most three); an input ask's answering buttons take a reply; a choice ask, or more buttons, says "Tap to answer in ngterm." |
 
 An ask's action asks for the device to be unlocked first, and a destructive button draws as one. The kinds the user
-turned off (Settings) are not posted; an ask always is.
+turned off (Settings, an ask under Questions) are not posted, and turning one off takes its notifications that are up
+down. Until the app can read the user's choices (before the device's first unlock), it posts nothing.
 
 ## App icon and launch screen
 

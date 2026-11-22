@@ -24,7 +24,8 @@ extension Alert {
             body: body,
             subtitle: subtitle,
             info: info,
-            actions: actions
+            actions: actions,
+            kind: kind
         )
     }
 

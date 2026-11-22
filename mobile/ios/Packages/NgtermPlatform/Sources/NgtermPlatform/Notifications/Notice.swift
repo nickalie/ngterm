@@ -17,9 +17,12 @@ public struct Notice: Hashable, Sendable {
     public var info: [String: String]
     /// Its actions, in order; empty for none.
     public var actions: [NoticeAction]
+    /// The switch it goes with: turning that kind off takes it down (``NoticeCenter/withdraw(kinds:)``); `nil` for
+    /// none.
+    public var kind: NoticeKind?
 
-    /// The notice `id` in the thread `threadId`, saying `title`, `body` and `subtitle`, carrying `info` and offering
-    /// `actions`.
+    /// The notice `id` of `kind` in the thread `threadId`, saying `title`, `body` and `subtitle`, carrying `info` and
+    /// offering `actions`.
     public init(
         id: String,
         threadId: String,
@@ -27,7 +30,8 @@ public struct Notice: Hashable, Sendable {
         body: String,
         subtitle: String = "",
         info: [String: String] = [:],
-        actions: [NoticeAction] = []
+        actions: [NoticeAction] = [],
+        kind: NoticeKind? = nil
     ) {
         self.id = id
         self.threadId = threadId
@@ -36,5 +40,6 @@ public struct Notice: Hashable, Sendable {
         self.body = body
         self.info = info
         self.actions = actions
+        self.kind = kind
     }
 }

@@ -29,6 +29,15 @@ internal final class RecordingNotices: NoticeCenter {
         }
     }
 
+    internal func withdraw(kinds: Set<NoticeKind>) {
+        for (id, notice) in posted.sorted(by: { $0.key < $1.key }) {
+            if let kind = notice.kind, kinds.contains(kind) {
+                log.append("-" + id)
+                posted[id] = nil
+            }
+        }
+    }
+
     internal func delivered() {
         log.append("=")
     }

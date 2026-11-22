@@ -6,7 +6,8 @@ import Observation
 ///
 /// It reads the file as ``SettingsStore`` reads its own: a file that no longer decodes reads as the defaults (every
 /// kind on, the permission not asked) and is kept as `notifications.json.bad`, and one that can't be read is left alone
-/// until a change or ``readIfUnread()`` can read it. A change is written whole before ``prefs`` shows it.
+/// until a change or ``readIfUnread()`` can read it (``isRead`` says which). A change is written whole before ``prefs``
+/// shows it, and then reaches every watcher (``watch(_:)``).
 @preconcurrency
 @MainActor
 @Observable
@@ -19,6 +20,13 @@ public final class NotificationPrefsStore {
     @ObservationIgnored private let file: JSONFile<NotificationPrefs>
     // whether `prefs` is what the file holds: false while the file is there but can't be read
     @ObservationIgnored private var loaded: Bool
+    @ObservationIgnored private var watchers: [@MainActor () -> Void] = []
+
+    /// Whether ``prefs`` is what the file holds: false while the file is there but can't be read (before the device's
+    /// first unlock), when ``prefs`` are only the defaults.
+    public var isRead: Bool {
+        loaded
+    }
 
     /// The store kept in `directory`: the app's Application Support unless a test gives its own.
     public init(directory: URL = .applicationSupportDirectory) {
@@ -32,6 +40,12 @@ public final class NotificationPrefsStore {
         }
     }
 
+    /// Hands `watcher` every change of ``prefs`` or ``isRead`` from now on.
+    @preconcurrency
+    public func watch(_ watcher: @escaping @MainActor () -> Void) {
+        watchers.append(watcher)
+    }
+
     /// Reads the file again if it couldn't be read before, so its choices show once it can be; a store that has read it
     /// keeps what it has.
     public func readIfUnread() {
@@ -43,7 +57,9 @@ public final class NotificationPrefsStore {
             loaded = true
         } catch {
             // still unreadable: the defaults, as before
+            return
         }
+        tell()
     }
 
     /// Turns `kind` on or off.
@@ -75,6 +91,13 @@ public final class NotificationPrefsStore {
         edit(&next)
         try file.write(next)
         prefs = next
+        tell()
+    }
+
+    private func tell() {
+        for watcher in watchers {
+            watcher()
+        }
     }
 
     deinit {

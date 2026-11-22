@@ -9,12 +9,13 @@ import NgtermPlatform
 ///   the next change and taken down by one to anything else, by the session coming on screen or being detached;
 /// - a machine with attached sessions lost for good (``NoticeKind/errors``: unreachable, or its host key changed),
 ///   taken down when it connects again;
-/// - every open ask out of sight (the ask rule: a sheet while its session is on screen, a notification otherwise),
-///   taken down when it is answered, dismissed, taken back, or comes on screen.
+/// - every open ask out of sight (``NoticeKind/questions``; the ask rule: a sheet while its session is on screen, a
+///   notification otherwise), taken down when it is answered, dismissed, taken back, or comes on screen.
 ///
-/// The kinds the user turned off are not posted. Names come from the machines and their listings (an attached session's
-/// under the name its stream last said), and a session's context from its stream once it has said one, its listing's
-/// until then. Each notice groups under its session's thread (a machine's own under
+/// The kinds the user turned off are not posted, and a kind turned off takes its notices up down; while the choices
+/// can't be read yet (before the device's first unlock), nothing is posted. Names come from the machines and their
+/// listings (an attached session's under the name its stream last said), and a session's context from its stream once
+/// it has said one, its listing's until then. Each notice groups under its session's thread (a machine's own under
 /// the machine's). A tap opens its session and pane (``OpenRequests``); an ask's action answers it through the core,
 /// in the grace too (``respond(to:)``).
 @preconcurrency
@@ -36,6 +37,14 @@ public final class Alerts {
     private var lastNotice: UInt64 = 0
     // the attached set as last seen
     private var attached: Set<SessionKey> = []
+    // the kinds on as last seen
+    private var kindsOn: Set<NoticeKind> = []
+
+    // what may be posted: nothing while the choices are only the defaults
+    private var enabled: Set<NoticeKind> {
+        prefs.readIfUnread()
+        return prefs.isRead ? prefs.prefs.enabled : []
+    }
 
     /// The alerts over `connections` and `asks`, taking contexts from `live`, naming machines from `machines`, posting
     /// the kinds `prefs` has on to `center`, and handing a tap's target to `requests`.
@@ -65,12 +74,16 @@ public final class Alerts {
         asks.watch { [weak self] in
             self?.syncAsks()
         }
+        prefs.watch { [weak self] in
+            self?.prefsChanged()
+        }
+        kindsOn = enabled
     }
 
     /// Posts that the agent of `session`, an attached session of `machine`, turned `kind` (a background refresh's
     /// finding), unless the user turned that kind off.
     public func post(turn kind: NoticeKind, of session: RemoteSession, on machine: StoredMachine) {
-        guard prefs.prefs.enabled.contains(kind) else {
+        guard enabled.contains(kind) else {
             return
         }
         let key = SessionKey(machineId: machine.id, sessionId: session.id)
@@ -142,7 +155,7 @@ public final class Alerts {
     }
 
     private func notice(_ key: SessionKey, _ notice: RemoteNotice) {
-        guard prefs.prefs.enabled.contains(.notices) else {
+        guard enabled.contains(.notices) else {
             return
         }
         lastNotice += 1
@@ -153,7 +166,7 @@ public final class Alerts {
 
     private func status(_ key: SessionKey, _ status: RemoteStatus?) {
         let kind = StatusBaseline.kind(of: status?.status)
-        guard let kind, prefs.prefs.enabled.contains(kind), !asks.onScreen.contains(key) else {
+        guard let kind, enabled.contains(kind), !asks.onScreen.contains(key) else {
             takeDown([Alert.statusId(key)])
             return
         }
@@ -164,7 +177,7 @@ public final class Alerts {
 
     // only a machine the user has sessions attached on: one without is lost quietly, as its own screen shows
     private func lost(_ machineId: String, _ reason: LostReason) {
-        guard prefs.prefs.enabled.contains(.errors), connections.attached[machineId]?.isEmpty == false else {
+        guard enabled.contains(.errors), connections.attached[machineId]?.isEmpty == false else {
             return
         }
         center.post(Alert.lost(machineId: machineId, machine: machineName(machineId), reason: reason).notice)
@@ -182,11 +195,25 @@ public final class Alerts {
         takeDown(ids.sorted())
     }
 
+    private func prefsChanged() {
+        let now = enabled
+        let turnedOff = kindsOn.subtracting(now)
+        kindsOn = now
+        if !turnedOff.isEmpty {
+            center.withdraw(kinds: turnedOff)
+        }
+        if turnedOff.contains(.notices) {
+            notices.removeAll()
+        }
+        syncAsks()
+    }
+
     private func syncAsks() {
+        let isAsking = enabled.contains(.questions)
         let shown = asks.onScreen
         takeDown(shown.map(Alert.statusId).sorted())
         var wanted: [String: OpenAsk] = [:]
-        for open in asks.open where !shown.contains(open.key) {
+        for open in asks.open where isAsking && !shown.contains(open.key) {
             wanted[Alert.askId(open.key, askId: open.ask.id)] = open
         }
         takeDown(posted.subtracting(wanted.keys).sorted())

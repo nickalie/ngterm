@@ -28,7 +28,7 @@ internal struct NotificationPrefsStoreTests {
         try store.markPermissionAsked()
         let read = NotificationPrefsStore(directory: directory.url).prefs
         #expect(read == NotificationPrefs(off: [.done], isPermissionAsked: true))
-        #expect(read.enabled == [.errors, .notices, .waiting])
+        #expect(read.enabled == [.errors, .notices, .questions, .waiting])
     }
 
     @Test("a kind this build doesn't know is dropped, and a corrupt file reads as the defaults and is kept aside")
@@ -41,5 +41,41 @@ internal struct NotificationPrefsStoreTests {
         try Data("not json".utf8).write(to: file)
         #expect(NotificationPrefsStore(directory: directory.url).prefs == NotificationPrefs())
         #expect(try directory.names() == [NotificationPrefsStore.fileName + ".bad"])
+    }
+
+    @Test("a watcher hears each change, and the file read at last; an unreadable file reads as not read")
+    internal func watchAndRead() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        try NotificationPrefsStore(directory: directory.url).set(.questions, isOn: false)
+        let file = directory.file(NotificationPrefsStore.fileName)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        let store = NotificationPrefsStore(directory: directory.url)
+        var heard: [Set<NoticeKind>] = []
+        store.watch { heard.append(store.prefs.off) }
+        #expect(!store.isRead)
+        #expect(store.prefs.enabled == Set(NoticeKind.allCases), "the defaults, not the user's choices")
+        store.readIfUnread()
+        #expect(heard.isEmpty, "still unreadable")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        store.readIfUnread()
+        #expect(store.isRead)
+        try store.set(.waiting, isOn: false)
+        store.readIfUnread()
+        #expect(heard == [[.questions], [.questions, .waiting]])
+    }
+
+    @Test("a change once an unreadable file can be read starts from what it holds")
+    internal func changeReadsFirst() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        try NotificationPrefsStore(directory: directory.url).set(.questions, isOn: false)
+        let file = directory.file(NotificationPrefsStore.fileName)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        let store = NotificationPrefsStore(directory: directory.url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        try store.set(.done, isOn: false)
+        #expect(store.isRead)
+        #expect(NotificationPrefsStore(directory: directory.url).prefs.off == [.questions, .done])
     }
 }

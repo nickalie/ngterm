@@ -1,7 +1,8 @@
 import XCTest
 
-/// Settings on the fake core, with the machine `split` signing in with the app's key: a setting changed sticks, a
-/// rotated key's public half offers to switch the machine to it, and Settings and that page are audited.
+/// Settings on the fake core, with the machine `split` signing in with the app's key: a setting changed sticks, every
+/// notification switch turns off and stays off, a rotated key's public half offers to switch the machine to it, and
+/// Settings and that page are audited.
 internal final class SettingsTests: XCTestCase {
     // how many swipes a row far down the form may take to come into view
     private static let swipes = 12
@@ -81,6 +82,27 @@ internal final class SettingsTests: XCTestCase {
         app.buttons["settings"].tap()
         FakeApp.expect(keepOn, "Keep the screen on, again")
         XCTAssertEqual(keepOn.value as? String, "1")
+    }
+
+    @MainActor
+    internal func testEveryNotificationSwitchTurnsOffAndSticks() {
+        let app = openSettings()
+        let kinds = ["questions", "waiting", "done", "notices", "errors"]
+        for kind in kinds {
+            let row = app.switches["notice-\(kind)"]
+            scroll(to: row, in: app)
+            XCTAssertEqual(row.value as? String, "1", "\(kind) is on by default")
+            flip(row, to: "0")
+            XCTAssertEqual(row.value as? String, "0", "\(kind) turned off")
+        }
+
+        app.buttons["settings-done"].tap()
+        app.buttons["settings"].tap()
+        for kind in kinds {
+            let row = app.switches["notice-\(kind)"]
+            scroll(to: row, in: app)
+            XCTAssertEqual(row.value as? String, "0", "\(kind) stays off")
+        }
     }
 
     @MainActor
