@@ -647,7 +647,7 @@ impl Page {
                         state.life = Life::CloseRequested;
                     }
                 }
-                self.close_if_requested();
+                self.close_if_requested(true);
             }
             Report::NewWindow { uri, user } => {
                 let navigation = Navigation {
@@ -1129,7 +1129,7 @@ impl Page {
         if !on_screen {
             self.end_prompt(cx);
         }
-        self.close_if_requested();
+        self.close_if_requested(false);
         match reload {
             Some(HtmlReloadTarget::Current) => self.reload_shown(),
             Some(HtmlReloadTarget::Original) => self.load_original(),
@@ -1410,12 +1410,15 @@ impl Page {
         }
     }
 
-    fn close_if_requested(&self) {
+    /// Asks for the close `window.close()` requested; `fresh` for the request itself, not an apply's repeat.
+    fn close_if_requested(&self, fresh: bool) {
         if self.state.borrow().life != Life::CloseRequested {
             return;
         }
         let id = self.id;
-        post(&self.poster, move |state: &mut AppState| state.page_closed_itself(id));
+        post(&self.poster, move |state: &mut AppState| {
+            state.page_closed_itself(id, fresh);
+        });
     }
 
     // MARK: - release

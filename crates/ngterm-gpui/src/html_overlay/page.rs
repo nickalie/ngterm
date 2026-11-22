@@ -97,7 +97,7 @@ enum Life {
     Active,
     /// The page's `window.close()` asked for its close. It stays asked while the session sits in an undoable close,
     /// where no slot is found to close, so a restored page closes at its next apply; a page session's page asks the core
-    /// at each apply, which hands the close off once.
+    /// at each apply, which hands the close off once per `window.close()`.
     CloseRequested,
     /// Released: the handlers still reached do nothing.
     Released,
@@ -513,7 +513,7 @@ impl Page {
                         state.life = Life::CloseRequested;
                     }
                 }
-                self.close_if_requested();
+                self.close_if_requested(true);
             }
             Event::ViewFailed { message, .. } => {
                 tracing::warn!(page = %self.id, message, "the web engine could not build the page");
@@ -721,7 +721,7 @@ impl Page {
         if !on_screen {
             self.end_prompt(cx);
         }
-        self.close_if_requested();
+        self.close_if_requested(false);
         match reload {
             Some(HtmlReloadTarget::Current) => self.reload_shown(),
             Some(HtmlReloadTarget::Original) => self.load_original(),
@@ -1058,12 +1058,15 @@ impl Page {
         }
     }
 
-    fn close_if_requested(&self) {
+    /// Asks for the close `window.close()` requested; `fresh` for the request itself, not an apply's repeat.
+    fn close_if_requested(&self, fresh: bool) {
         if self.state.borrow().life != Life::CloseRequested {
             return;
         }
         let id = self.id;
-        post(&self.poster, move |state: &mut AppState| state.page_closed_itself(id));
+        post(&self.poster, move |state: &mut AppState| {
+            state.page_closed_itself(id, fresh);
+        });
     }
 
     // MARK: - input

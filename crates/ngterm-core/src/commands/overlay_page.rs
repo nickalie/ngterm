@@ -70,8 +70,8 @@ pub(crate) struct PageRuntime {
     persisted: HashMap<Uuid, (Uuid, PageSnapshot)>,
     /// Pages that left every slot since the frontend last took them.
     released: Vec<Uuid>,
-    /// The page sessions whose page's own `window.close()` was handed to the session close: a later request of the
-    /// same page (an undo's remount, a cancelled confirmation) does nothing.
+    /// The page sessions whose page's own `window.close()` was handed to the session close: an apply's repeat of the
+    /// same request (an undo's remount, a cancelled confirmation) does nothing until the page asks again.
     closes_handed_off: HashSet<Uuid>,
     host: Option<Box<dyn HtmlHost>>,
     /// How an origin with no web views reads a page's file before handing it over.
@@ -771,14 +771,18 @@ impl Core {
     }
 
     /// The page's own `window.close()` (upstream's `HtmlOverlayRegistry.closePageSession`): a page session's page is
-    /// its row, so it takes the session close as the strip's Close does, in the page's own window, once. It waits while
-    /// a picker is pending in that window, the frontend asking again at its next apply, and once handed off a later
-    /// request of the page does nothing, so a cancelled confirmation or an undo never asks again. Any other page leaves
-    /// its slot as [`Core::close_html_overlay`] has it. `None` when nothing changed.
-    pub fn close_html_overlay_from_page(&mut self, id: Uuid) -> Option<ActionEffect> {
+    /// its row, so it takes the session close as the strip's Close does, in the page's own window. It waits while a
+    /// picker is pending in that window, the frontend asking again at its next apply. Once handed off, only a `fresh`
+    /// request (a new `window.close()`) asks again: an apply's repeat does nothing, so a cancelled confirmation or an
+    /// undo never asks again by itself. Any other page leaves its slot as [`Core::close_html_overlay`] has it. `None`
+    /// when nothing changed.
+    pub fn close_html_overlay_from_page(&mut self, id: Uuid, fresh: bool) -> Option<ActionEffect> {
         let Some(slot) = self.page_row_slot(id) else {
             return self.close_html_overlay(id).then_some(ActionEffect::Done);
         };
+        if fresh {
+            self.pages.closes_handed_off.remove(&id);
+        }
         let picking = self
             .modals
             .controller(slot.window)

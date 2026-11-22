@@ -200,8 +200,9 @@ pub fn workspace_snapshot(workspace: &Workspace) -> WorkspaceSnapshot {
     }
 }
 
-/// One session as persisted. The pending restore slots are never written; `isSplit` and `flagged` always are, the
-/// split fields only while a split exists, the hold flags only when set.
+/// One session as persisted. The pending restore slots are never written; for a terminal session `isSplit` and
+/// `flagged` always are, the split fields only while a split exists, the hold flags only when set. A page session
+/// writes its row fields and its page and no pane fields ([`page_session_snapshot`]).
 #[must_use]
 pub fn session_snapshot(session: &Session) -> SessionSnapshot {
     if session.content() == SessionContent::Page {

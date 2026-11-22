@@ -369,8 +369,6 @@ impl AppStore {
             self.close_session(id);
             return Err(CompanionRefusal::PageNotOpened(failure));
         }
-        // the row was saved before its page opened, when it had nothing to write
-        self.save();
         Ok(id)
     }
 

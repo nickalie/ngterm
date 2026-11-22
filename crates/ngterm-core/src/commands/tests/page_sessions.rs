@@ -128,6 +128,12 @@ fn a_page_session_refuses_a_program_anything_but_full_size_and_an_unknown_target
             (Some("https://example.com/".into()), Some(true))),
         failure("session.page: the saved store is locked")
     );
+    assert_eq!(
+        page_session(&mut fixture, unknown, |a| (a.url, a.persistent) =
+            (Some("https://example.com/".into()), Some(true))),
+        failure(&format!("no such session: {}", wire(unknown))),
+        "the target resolves before the store is checked"
+    );
     log.borrow_mut().unavailable = Some("no GPU".to_owned());
     assert_eq!(
         page_session(&mut fixture, target, |a| a.html = Some(html())),
@@ -143,6 +149,12 @@ fn a_build_without_web_views_refuses_a_page_session() {
     assert_eq!(
         page_session(&mut fixture, target, |a| a.html = Some(html())),
         failure("session.page: html overlays are not available in this build")
+    );
+    let unknown = Uuid::new_v4();
+    assert_eq!(
+        page_session(&mut fixture, unknown, |a| a.html = Some(html())),
+        failure(&format!("no such session: {}", wire(unknown))),
+        "the target resolves before the web views are checked"
     );
 }
 
@@ -282,7 +294,7 @@ fn a_page_sessions_own_close_soft_closes_it_once() {
         .unwrap();
 
     assert_eq!(
-        fixture.core.close_html_overlay_from_page(page),
+        fixture.core.close_html_overlay_from_page(page, true),
         Some(ActionEffect::Done)
     );
     let _ = fixture.core.commit();
@@ -298,32 +310,41 @@ fn a_page_sessions_own_close_soft_closes_it_once() {
 
     assert!(fixture.store_mut().unwrap().undo_pending_close(None));
     let _ = fixture.core.commit();
-    assert_eq!(fixture.core.close_html_overlay_from_page(page), None);
+    assert_eq!(fixture.core.close_html_overlay_from_page(page, false), None);
     let _ = fixture.core.commit();
     assert!(fixture.store().session(id).is_some(), "an undo does not close it again");
 }
 
-/// With the confirmation on, the page's own close asks once: a cancelled answer leaves the row and asks no more.
+/// With the confirmation on, the page's own close asks once per `window.close()`: an apply's repeat after a cancelled
+/// answer asks no more, and a new `window.close()` asks again.
 #[test]
-fn a_page_sessions_own_close_asks_for_the_confirmation_once() {
+fn a_page_sessions_own_close_asks_for_the_confirmation_once_per_request() {
     let (mut fixture, _) = fixture_with_host(0);
     let (id, page) = page_row(&mut fixture);
     fixture.core.update_settings(|s| s.confirm_close_session = Some(true));
     let window = fixture.window;
 
     assert_eq!(
-        fixture.core.close_html_overlay_from_page(page),
+        fixture.core.close_html_overlay_from_page(page, true),
         Some(ActionEffect::Frontend(FrontendAction::ConfirmCloseSession {
             window,
             session: id
         }))
     );
     assert_eq!(
-        fixture.core.close_html_overlay_from_page(page),
+        fixture.core.close_html_overlay_from_page(page, false),
         None,
-        "a cancel does not ask again"
+        "an apply's repeat after a cancel does not ask again"
     );
     assert!(fixture.store().session(id).is_some());
+    assert_eq!(
+        fixture.core.close_html_overlay_from_page(page, true),
+        Some(ActionEffect::Frontend(FrontendAction::ConfirmCloseSession {
+            window,
+            session: id
+        })),
+        "a new window.close() asks again"
+    );
 }
 
 /// The page's own close waits while a picker is pending in its window and goes through once the picker ends.
@@ -339,7 +360,7 @@ fn a_page_sessions_own_close_waits_for_a_pending_pick() {
     let opened = fixture.send(Command::Pick(PickCmd::Open), None, args(|a| a.items = Some(vec![item])));
     let pick = opened.result.as_ref().unwrap()["id"].as_str().unwrap().to_owned();
 
-    assert_eq!(fixture.core.close_html_overlay_from_page(page), None);
+    assert_eq!(fixture.core.close_html_overlay_from_page(page, true), None);
     assert!(fixture.store().session(id).is_some(), "it waits for the picker");
 
     assert!(
@@ -348,7 +369,7 @@ fn a_page_sessions_own_close_waits_for_a_pending_pick() {
             .ok
     );
     assert_eq!(
-        fixture.core.close_html_overlay_from_page(page),
+        fixture.core.close_html_overlay_from_page(page, false),
         Some(ActionEffect::Done)
     );
     let _ = fixture.core.commit();
@@ -371,7 +392,7 @@ fn a_page_over_a_terminal_closes_only_itself_and_the_control_close_never_asks() 
         .parse()
         .unwrap();
     assert_eq!(
-        fixture.core.close_html_overlay_from_page(page),
+        fixture.core.close_html_overlay_from_page(page, true),
         Some(ActionEffect::Done)
     );
     assert!(

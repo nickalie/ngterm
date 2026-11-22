@@ -534,6 +534,38 @@ fn a_reopened_closed_session_brings_its_page_back_under_a_fresh_id() {
     assert_ne!(pages[0].1.id, before);
 }
 
+/// A hard close writes no page the viewer holds into the Open Recent entry, for the parent and its companions alike.
+#[test]
+fn a_closed_group_writes_no_viewer_page_into_open_recent() {
+    let files = Files::new();
+    let (mut store, parent) = store_with_split();
+    let companion = store
+        .add_companion(parent, crate::model::CompanionOptions::default(), "/home/u")
+        .unwrap();
+    let source = HtmlSource::File {
+        path: files.path("page.html"),
+        grant_root: None,
+    };
+    for session in [parent, companion] {
+        let handed = RemotePage::new(
+            page(source.clone(), HtmlPageFlags::default()),
+            "u".to_owned(),
+            Instant::now(),
+        );
+        hand_over(&mut store, session, None, handed, OverlaySize::default());
+    }
+    store.close_session(parent);
+    let item = store
+        .recent_closed_items()
+        .into_iter()
+        .find_map(|item| item.session.filter(|recent| recent.snapshot.id == parent))
+        .expect("the closed group's entry");
+    let companions = item.companions.expect("the companion rides the entry");
+    assert_eq!(companions.len(), 1);
+    assert_eq!(item.snapshot.pages, None);
+    assert_eq!(companions[0].pages, None);
+}
+
 #[test]
 fn a_hidden_split_keeps_its_page() {
     let files = Files::new();

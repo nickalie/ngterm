@@ -640,8 +640,9 @@ impl HtmlOverlay {
         self
     }
 
-    /// Whether the session's snapshot writes the page: one this machine opened in an overlay slot. A replica belongs
-    /// to the machine that opened it, and a page companion's row is never persisted.
+    /// Whether the session's snapshot writes the page as an overlay-slot page: one this machine opened in an overlay
+    /// slot. A replica belongs to the machine that opened it, and a row page is not one: a page session writes its own
+    /// row page as its session-wide entry ([`HtmlOverlay::saved_as_row`]).
     #[must_use]
     pub fn persisted(&self) -> bool {
         self.replica_of.is_none() && !self.row && !matches!(self.source, HtmlSource::Replica { .. })

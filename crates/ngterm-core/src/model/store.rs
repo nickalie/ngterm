@@ -1010,6 +1010,10 @@ impl AppStore {
     /// soft close parked can no longer be undone, having no parent to come back under.
     pub fn close_session(&mut self, id: Uuid) -> Option<Session> {
         let companions: Vec<Uuid> = self.companions(id).into_iter().map(Session::id).collect();
+        // released first, so no companion writes a page its viewer holds, as the parent writes none
+        for companion in &companions {
+            self.release_leaving_session(*companion);
+        }
         // written before they close, since closing a page companion drops its page
         let recorded = super::recent_closed::recorded_companions(&self.companions(id));
         for companion in companions.iter().rev() {

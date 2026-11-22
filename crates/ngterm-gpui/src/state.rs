@@ -773,13 +773,11 @@ impl AppState {
         self.settle();
     }
 
-    /// Leaves the frontend half of a built-in action (a palette row's, a chord's) to the landing
-    /// ([`FrontendWork::actions`]), with the soft-close setting a delete confirmation names.
-    /// Page `page` asked for its own close (`window.close()`): a page session's page closes its row as Close Session does,
-    /// its confirmation the sidebar's alert, and any other page leaves its slot
-    /// ([`ngterm_core::Core::close_html_overlay_from_page`]).
-    pub fn page_closed_itself(&mut self, page: Uuid) {
-        let Some(effect) = self.core.close_html_overlay_from_page(page) else {
+    /// Page `page` asked for its own close (`window.close()`, `fresh` for a new request and not an apply's repeat): a
+    /// page session's page closes its row as Close Session does, its confirmation the sidebar's alert, and any other
+    /// page leaves its slot ([`ngterm_core::Core::close_html_overlay_from_page`]).
+    pub fn page_closed_itself(&mut self, page: Uuid, fresh: bool) {
+        let Some(effect) = self.core.close_html_overlay_from_page(page, fresh) else {
             return;
         };
         if let ngterm_core::app_actions::ActionEffect::Frontend(action) = effect {
@@ -788,6 +786,8 @@ impl AppState {
         self.settle();
     }
 
+    /// Leaves the frontend half of a built-in action (a palette row's, a chord's) to the landing
+    /// ([`FrontendWork::actions`]), with the soft-close setting a delete confirmation names.
     pub fn frontend_action(&mut self, action: FrontendAction) {
         let close_grace = self.core.settings().close_grace_undo_enabled.unwrap_or(true);
         self.frontend.actions.push((action, close_grace));

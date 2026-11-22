@@ -97,14 +97,14 @@ fn a_page_sessions_own_close_takes_the_session_close(cx: &mut TestAppContext) {
     let (mut h, session, _) = overlay_harness(cx);
     page_host(&mut h);
     let (id, page) = chromeless_page_session(&mut h, session);
-    h.state.page_closed_itself(page);
+    h.state.page_closed_itself(page, true);
     h.turn();
     assert!(h.store().session(id).is_none(), "the row closed with its page");
 
     let (id, page) = chromeless_page_session(&mut h, session);
     h.state.core.update_settings(|s| s.confirm_close_session = Some(true));
     let _ = h.state.take_frontend_work();
-    h.state.page_closed_itself(page);
+    h.state.page_closed_itself(page, true);
     let window = h.window;
     let asked = h.state.take_frontend_work().actions;
     assert!(
@@ -114,9 +114,18 @@ fn a_page_sessions_own_close_takes_the_session_close(cx: &mut TestAppContext) {
         "{asked:?}"
     );
     assert!(h.store().session(id).is_some(), "nothing closes before the answer");
-    h.state.page_closed_itself(page);
+    h.state.page_closed_itself(page, false);
     assert!(
         h.state.take_frontend_work().actions.is_empty(),
-        "a cancel does not ask again"
+        "an apply's repeat after a cancel does not ask again"
+    );
+    h.state.page_closed_itself(page, true);
+    assert!(
+        h.state
+            .take_frontend_work()
+            .actions
+            .iter()
+            .any(|(action, _)| *action == FrontendAction::ConfirmCloseSession { window, session: id }),
+        "a new window.close() asks again"
     );
 }

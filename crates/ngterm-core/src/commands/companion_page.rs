@@ -108,6 +108,7 @@ pub(crate) fn page_session(core: &mut Core, target: Option<&str>, args: &Args) -
     let args = on_this_drive(args);
     let source = validated_source(args.as_ref(), Some(core.library().home()), SESSION_ROW)?;
     let opening = PageOpening::from_args(source, &args, None, OverlayPointSize::default());
+    session_store(core, target, args.window.as_deref())?;
     shows_pages(core, opening.flags.persistent, SESSION_ROW)?;
     let overlay = HtmlOverlay::new(opening.source, opening.flags);
     let page_id = overlay.id;

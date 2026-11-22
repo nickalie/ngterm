@@ -193,9 +193,9 @@ def test_flagged_order_survives_relaunch(launch):
 
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("behavior:restore.relaunch-keeps-layout", "session.companion.page")
-def test_a_page_group_comes_back_after_relaunch(launch):
-    """A page session and its companions are saved like any session (#930): the page row comes back as a page, its
-    page open again, and its companions stay under it."""
+def test_a_page_companion_comes_back_after_relaunch(launch):
+    """A page companion is saved like any session (#930): its row comes back as a page under its parent, its page open
+    again, and the parent's terminal companion stays under the parent too."""
     ctl = launch()
     parent = _new(ctl)
     page_file = ctl.instance.root / "companion.html"
