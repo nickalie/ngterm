@@ -1095,7 +1095,8 @@ task builds, and `play`, Google Play's, which has only a release build (`assembl
 The GitHub build updates itself from GitHub's releases (`app/src/github/`): at each launch and every twelve hours in
 the background (WorkManager, on a network connection, battery not low) it looks for the newest release above the
 installed version, skipping drafts, and prereleases unless the installed build is one, and notifies once per version
-unless the user said Not now to it. Install downloads the APK with the release's `SHA256SUMS` and
+unless the user said Not now to it or turned Settings > Notifications > App updates off (the checks still run; a
+version not announced yet posts at the next automatic check once the switch is on again). Install downloads the APK with the release's `SHA256SUMS` and
 `SHA256SUMS.minisig`, and hands it to Android's installer (a `PackageInstaller` session) only once the signature
 verifies with the key desktop builds trust (the mobile core's `release_checksum`, over
 `crates/ngterm-update/trust/minisign.pub`), the APK matches its checksum, and it is this app, newer and signed with the
