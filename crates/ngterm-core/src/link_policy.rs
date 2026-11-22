@@ -409,8 +409,8 @@ fn forwards_remotely(raw: &str) -> bool {
         || raw.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
 }
 
-/// Whether `raw` is an absolute path of the other OS only: a POSIX path on Windows, or a drive path elsewhere. This
-/// machine can hold no file by that name.
+/// Whether `raw` is an absolute path of the other OS only: a POSIX path on Windows, or a drive path elsewhere. The
+/// origin does not resolve it to a file here: on Windows a POSIX path is relative to the current drive.
 pub(crate) fn names_foreign_absolute_path(raw: &str) -> bool {
     !is_bare_path(raw) && names_absolute_path_elsewhere(raw)
 }
