@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, args, failure, wire};
-use crate::keymap::{CustomCommand, SurfaceOwner, TypingSurface};
+use crate::keymap::{BuiltinAction, CustomCommand, KeymapOs, SurfaceOwner, TypingSurface};
 use crate::paths::{ConfigLocator, MapEnv};
 use crate::{CoreTask, NotificationEffect, ProcessHost};
 
@@ -104,6 +104,7 @@ fn app_banners(host: &mut Host) -> Vec<(String, String)> {
 #[test]
 fn list_without_a_file_reports_the_linux_builtins_alone() {
     let mut host = Host::new(0);
+    host.fixture.core.set_keymap_os(KeymapOs::Linux);
     assert_eq!(
         result(&host.keymap(KeymapCmd::Reload, None, Args::default())),
         json!({"count": 0})
@@ -379,6 +380,122 @@ fn launch_writes_the_starter_once_and_reads_it_clean() {
     assert_eq!(host.fixture.core.keymap().commands()[0].name, "kept");
 }
 
+/// Upstream v0.42.3's `BuiltinAction.defaultChord`, as `keymap.list` spells each chord.
+const UPSTREAM_MACOS_CHORDS: [(&str, &str); 32] = [
+    ("new_window", "cmd+opt+n"),
+    ("new_workspace", "cmd+shift+n"),
+    ("new_session", "cmd+n"),
+    ("open_directory", "cmd+o"),
+    ("close_session", "cmd+w"),
+    ("reopen_recent", "cmd+shift+t"),
+    ("undo_close", "cmd+z"),
+    ("increase_font_size", "cmd++"),
+    ("decrease_font_size", "cmd+-"),
+    ("reset_font_size", "cmd+0"),
+    ("toggle_split", "cmd+d"),
+    ("toggle_horizontal_split", "cmd+shift+d"),
+    ("toggle_scratch", "cmd+j"),
+    ("toggle_overlay", "cmd+shift+j"),
+    ("toggle_terminal_zoom", "cmd+shift+return"),
+    ("toggle_search", "cmd+f"),
+    ("toggle_sidebar", "ctrl+cmd+s"),
+    ("toggle_fullscreen", "ctrl+cmd+f"),
+    ("toggle_flag", "cmd+shift+f"),
+    ("quick_terminal", "ctrl+`"),
+    ("session_palette", "ctrl+p"),
+    ("command_palette", "ctrl+shift+p"),
+    ("custom_command_palette", "ctrl+shift+o"),
+    ("show_attention", "ctrl+shift+i"),
+    ("dashboard", "cmd+shift+g"),
+    ("attach_remote", "cmd+shift+r"),
+    ("focus_left_pane", "cmd+opt+left"),
+    ("focus_right_pane", "cmd+opt+right"),
+    ("previous_session", "cmd+opt+up"),
+    ("next_session", "cmd+opt+down"),
+    ("previous_attention_session", "ctrl+opt+up"),
+    ("next_attention_session", "ctrl+opt+down"),
+];
+
+fn listed_chords(host: &mut Host) -> std::collections::BTreeMap<String, String> {
+    let listing = &result(&host.keymap(KeymapCmd::List, None, Args::default()))["keymap"];
+    listing["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|action| {
+            Some((
+                action["action"].as_str()?.to_owned(),
+                action["chord"].as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn a_macos_launch_binds_upstreams_cmd_defaults_and_writes_their_starter() {
+    let mut host = Host::new(0);
+    host.fixture.core.set_keymap_os(KeymapOs::MacOs);
+    host.fixture.core.load_keymap_at_launch();
+    assert!(host.fixture.core.keymap_diagnostics().is_empty());
+    let expected: std::collections::BTreeMap<String, String> = UPSTREAM_MACOS_CHORDS
+        .iter()
+        .map(|(action, chord)| ((*action).to_owned(), (*chord).to_owned()))
+        .collect();
+    assert_eq!(listed_chords(&mut host), expected);
+    let starter = std::fs::read_to_string(host.config("keymap.conf")).unwrap();
+    assert!(starter.contains("#   new_session                 cmd+n\n"), "{starter}");
+    assert!(
+        starter.contains("#   toggle_terminal_zoom        cmd+shift+return\n"),
+        "{starter}"
+    );
+}
+
+#[test]
+fn a_linux_or_windows_launch_keeps_the_ctrl_shift_defaults() {
+    for os in [KeymapOs::Linux, KeymapOs::Windows] {
+        let mut host = Host::new(0);
+        host.fixture.core.set_keymap_os(os);
+        host.fixture.core.load_keymap_at_launch();
+        let chords = listed_chords(&mut host);
+        let chord = |name: &str| chords.get(name).map(String::as_str);
+        assert_eq!(chord("new_session"), Some("ctrl+shift+t"), "{os:?}");
+        assert_eq!(chord("toggle_terminal_zoom"), Some("ctrl+shift+return"), "{os:?}");
+        assert!(
+            chords.values().all(|chord| !chord.contains("cmd")),
+            "{os:?}: {chords:?}"
+        );
+        let starter = std::fs::read_to_string(host.config("keymap.conf")).unwrap();
+        assert!(
+            starter.contains("#   new_session                 ctrl+shift+t\n"),
+            "{os:?}"
+        );
+    }
+}
+
+#[test]
+fn a_macos_keymap_file_overrides_and_frees_the_cmd_defaults() {
+    let mut host = Host::new(0);
+    host.fixture.core.set_keymap_os(KeymapOs::MacOs);
+    host.write(
+        "keymap.conf",
+        "map ctrl+shift+t new_session\nmap cmd+shift+z toggle_terminal_zoom\ncommand \"mine\" cmd+shift+g true\n",
+    );
+    host.fixture.core.load_keymap_at_launch();
+    assert!(
+        host.fixture.core.keymap_diagnostics().is_empty(),
+        "{:?}",
+        host.fixture.core.keymap_diagnostics()
+    );
+    let keymap = host.fixture.core.keymap();
+    let chord = |action| keymap.equivalent(action).map(crate::keymap::Chord::display_string);
+    assert_eq!(chord(BuiltinAction::NewSession).as_deref(), Some("ctrl+shift+t"));
+    assert_eq!(chord(BuiltinAction::ToggleTerminalZoom).as_deref(), Some("cmd+shift+z"));
+    // dashboard came after files could bind its chord: the file keeps cmd+shift+g
+    assert_eq!(chord(BuiltinAction::Dashboard), None);
+    assert_eq!(keymap.commands()[0].shortcut, "cmd+shift+g");
+    assert_eq!(chord(BuiltinAction::CloseSession).as_deref(), Some("cmd+w"));
+}
+
 /// Upstream's `testALocalSessionWhoseDirectoryIsNotThereRunsTheCommandInHome` (#740): a session whose reported
 /// directory is not a directory here (removed, or a plain file) runs its command in HOME, and `$AGT_SESSION_PWD`
 /// keeps the reported path.
@@ -480,6 +597,22 @@ fn a_refused_editor_leaves_the_open_editors_reload_alone() {
         host.fixture.core.config_edit_ended(session, generation),
         Some(ConfigFile::Keymap)
     );
+}
+
+#[test]
+fn edit_keymap_writes_the_starter_of_this_os() {
+    use crate::palette_catalog::PaletteCommand;
+    for (os, new_session) in [(KeymapOs::MacOs, "cmd+n"), (KeymapOs::Linux, "ctrl+shift+t")] {
+        let mut host = Host::new(0);
+        host.fixture.core.set_keymap_os(os);
+        let window = host.fixture.window;
+        host.fixture
+            .core
+            .perform_menu_command(window, PaletteCommand::EditKeymap);
+        let starter = std::fs::read_to_string(host.config("keymap.conf")).unwrap();
+        let row = format!("#   new_session                 {new_session}\n");
+        assert!(starter.contains(&row), "{os:?}: {starter}");
+    }
 }
 
 /// What the last launch exported as `key`.

@@ -181,7 +181,7 @@ struct Harness<'a> {
 }
 
 fn core_of(library: WindowLibrary) -> Core {
-    Core::new(
+    let mut core = Core::new(
         CoreConfig {
             app: AppIdentity::from_recorded("1.2.3", None),
             capabilities: Vec::new(),
@@ -190,7 +190,10 @@ fn core_of(library: WindowLibrary) -> Core {
             library,
             ..CoreState::default()
         },
-    )
+    );
+    // the tests type the Linux chords
+    core.set_keymap_os(ngterm_core::keymap::KeymapOs::Linux);
+    core
 }
 
 fn harness(cx: &mut TestAppContext, core: Core, window: Uuid) -> Harness<'_> {

@@ -1,7 +1,7 @@
 //! The app menu's model (titles, chords, enablement, the live parts, Help and the app's items), what its items run
 //! through the core, and the `keymap.list` read-back.
 
-use ngterm_core::keymap::{BuiltinAction, linux_defaults, parse_keymap};
+use ngterm_core::keymap::{BuiltinAction, KeymapOs, parse_keymap};
 use ngterm_core::menu_lists::MenuListAction;
 use ngterm_core::model::WindowLibrary;
 use ngterm_core::palette_catalog::{PaletteCommand, PaletteContext};
@@ -244,7 +244,7 @@ fn the_overlays_row_names_what_it_will_do_and_needs_an_overlay() {
 #[test]
 fn items_carry_their_live_chords_and_reopen_carries_none() {
     let (mut core, window) = seeded();
-    let (keymap, _) = parse_keymap("", &linux_defaults());
+    let (keymap, _) = parse_keymap("", &core.keymap_defaults());
     let expected = keymap.equivalent(BuiltinAction::NewSession).cloned();
     assert!(expected.is_some(), "new session has a default chord");
     let menu = AppMenu::of(&core, window);
@@ -264,6 +264,34 @@ fn items_carry_their_live_chords_and_reopen_carries_none() {
     let menu = AppMenu::of(&core, window);
     let chord = find(&menu, PaletteCommand::NewSession.id()).chord.clone().unwrap();
     assert_eq!(chord.display_string(), "ctrl+shift+f12");
+}
+
+/// Upstream's menu shortcuts on macOS (`BuiltinAction.defaultChord` through `equivalent(for:)`), this build's
+/// Ctrl+Shift chords on Linux and Windows.
+#[test]
+fn the_menu_shows_the_chords_of_the_os_table() {
+    let rows = [
+        (PaletteCommand::NewSession, "cmd+n", "ctrl+shift+t"),
+        (PaletteCommand::NewWorkspace, "cmd+shift+n", "ctrl+shift+w"),
+        (PaletteCommand::CloseSession, "cmd+w", "ctrl+shift+q"),
+        (
+            PaletteCommand::ToggleTerminalZoom,
+            "cmd+shift+return",
+            "ctrl+shift+return",
+        ),
+        (PaletteCommand::ToggleSidebar, "ctrl+cmd+s", "ctrl+shift+s"),
+        (PaletteCommand::PreviousSession, "cmd+opt+up", "ctrl+shift+up"),
+    ];
+    for os in [KeymapOs::MacOs, KeymapOs::Linux, KeymapOs::Windows] {
+        let (mut core, window) = seeded();
+        core.set_keymap_os(os);
+        let menu = AppMenu::of(&core, window);
+        for (command, macos, other) in rows {
+            let want = if os == KeymapOs::MacOs { macos } else { other };
+            let shown = find(&menu, command.id()).chord.as_ref().map(Chord::display_string);
+            assert_eq!(shown.as_deref(), Some(want), "{os:?} {}", command.id());
+        }
+    }
 }
 
 #[test]

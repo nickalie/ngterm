@@ -82,18 +82,19 @@ download, see [release signing](docs/release-signing.md).
 
 ## Get started
 
-1. **Learn a few keys.** These are the defaults on Linux and Windows. On macOS, the menus show each command's key.
+1. **Learn a few keys.** These are the defaults. The menus show the key of each command.
 
-   | | Shortcut |
-   |---|---|
-   | New session | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
-   | New workspace | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> |
-   | Split the session | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> |
-   | Scratch terminal | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>J</kbd> |
-   | Dashboard | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
-   | Jump to a session | <kbd>Ctrl</kbd>+<kbd>P</kbd> |
-   | Search the sessions in the sidebar | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> |
-   | Everything else, in the command palette | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> |
+   | | Linux and Windows | macOS |
+   |---|---|---|
+   | New session | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>⌘</kbd><kbd>N</kbd> |
+   | New workspace | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> |
+   | Split the session | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> | <kbd>⌘</kbd><kbd>D</kbd> |
+   | Scratch terminal | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>J</kbd> | <kbd>⌘</kbd><kbd>J</kbd> |
+   | Zoom the terminal | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>↩</kbd> |
+   | Dashboard | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> |
+   | Jump to a session | <kbd>Ctrl</kbd>+<kbd>P</kbd> | <kbd>⌃</kbd><kbd>P</kbd> |
+   | Search the sessions in the sidebar | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | no default key |
+   | Everything else, in the command palette | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> | <kbd>⌃</kbd><kbd>⇧</kbd><kbd>P</kbd> |
 
 2. **Connect your agents.** On first launch, ngterm offers to install the agent skill and the agent status hooks.
    Accept, then start a new agent, and its status shows up in the sidebar. Both are also in the **Help** menu. With the

@@ -6,6 +6,29 @@ use std::collections::BTreeMap;
 
 use super::BuiltinAction;
 use super::keybind::{Chord, Modifiers};
+use super::linux::linux_defaults;
+
+/// The OS a default table is shipped for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeymapOs {
+    MacOs,
+    Linux,
+    Windows,
+}
+
+impl KeymapOs {
+    /// The OS this build runs on.
+    #[must_use]
+    pub const fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
+}
 
 /// The default chord of each keyed built-in, and the actions that give theirs up for compatibility.
 ///
@@ -31,6 +54,22 @@ impl ShippedDefaults {
                 BuiltinAction::ToggleOverlay,
             ],
         )
+    }
+
+    /// The table `os` ships: upstream's ⌘ table on macOS, this build's Ctrl+Shift table ([`linux_defaults`]) on Linux
+    /// and Windows, where desktop shells claim ⌘ (Super).
+    #[must_use]
+    pub fn for_os(os: KeymapOs) -> Self {
+        match os {
+            KeymapOs::MacOs => Self::upstream(),
+            KeymapOs::Linux | KeymapOs::Windows => linux_defaults(),
+        }
+    }
+
+    /// The table this build ships.
+    #[must_use]
+    pub fn shipped() -> Self {
+        Self::for_os(KeymapOs::current())
     }
 
     /// A table of `(action, default chord)` pairs (a later pair for the same action wins) and the actions to vacate:

@@ -249,3 +249,23 @@ fn a_custom_table_replaces_the_defaults_and_its_own_vacate_list() {
     assert_eq!(shortcuts(&keymap), ["ctrl+shift+e"]);
     assert_eq!(keymap.equivalent(A::NewSession), None);
 }
+
+#[test]
+fn macos_ships_upstreams_table_and_linux_and_windows_the_ctrl_shift_table() {
+    assert_eq!(ShippedDefaults::for_os(KeymapOs::MacOs), ShippedDefaults::upstream());
+    assert_eq!(ShippedDefaults::for_os(KeymapOs::Linux), linux_defaults());
+    assert_eq!(ShippedDefaults::for_os(KeymapOs::Windows), linux_defaults());
+}
+
+#[test]
+fn this_build_ships_the_table_of_its_os() {
+    let os = if cfg!(target_os = "macos") {
+        KeymapOs::MacOs
+    } else if cfg!(windows) {
+        KeymapOs::Windows
+    } else {
+        KeymapOs::Linux
+    };
+    assert_eq!(KeymapOs::current(), os);
+    assert_eq!(ShippedDefaults::shipped(), ShippedDefaults::for_os(os));
+}

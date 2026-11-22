@@ -25,7 +25,7 @@ pub use builtin::BuiltinAction;
 pub use command::{
     CommandContext, CommandPane, CustomCommand, SESSION_SCOPED_TOKEN_BASES, SurfaceOwner, TypingSurface,
 };
-pub use defaults::ShippedDefaults;
+pub use defaults::{KeymapOs, ShippedDefaults};
 pub use engine::{CustomCommandEngine, EngineOutcome};
 pub use keybind::{
     ARROW_KEYS, Chord, ConflictSide, FUNCTION_KEYS, Keybind, KeybindConflict, KeybindTarget, Modifiers,

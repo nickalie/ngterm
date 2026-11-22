@@ -186,16 +186,21 @@ mod sweep {
         Some((key.to_string(), mask))
     }
 
-    /// The menu bar shows a chord on Return, as upstream's View menu does for Toggle Terminal Zoom, and ⌘Q and ⌘, on
-    /// Quit and Settings.
+    /// The menu bar shows upstream's ⌘ chords: ⇧⌘↩ on Toggle Terminal Zoom, ⌘N on New Session, ⌘W on Close Session,
+    /// and ⌘Q and ⌘, on Quit and Settings.
     fn check_key_equivalents(menus: &[(String, Retained<AnyObject>)]) {
-        let zoom = key_equivalent_of(menus, "Toggle Terminal Zoom");
-        assert!(
-            zoom.as_ref().is_some_and(|(key, mask)| key == "\r" && *mask != 0),
-            "Toggle Terminal Zoom's key equivalent is {zoom:?}, not Return with modifiers"
-        );
-        // NSEventModifierFlagCommand
+        // NSEventModifierFlagCommand and NSEventModifierFlagShift
         let command = 1 << 20;
+        let shift = 1 << 17;
+        assert_eq!(
+            key_equivalent_of(menus, "Toggle Terminal Zoom"),
+            Some(("\r".to_owned(), command | shift))
+        );
+        assert_eq!(key_equivalent_of(menus, "New Session"), Some(("n".to_owned(), command)));
+        assert_eq!(
+            key_equivalent_of(menus, "Close Session"),
+            Some(("w".to_owned(), command))
+        );
         assert_eq!(key_equivalent_of(menus, "Quit"), Some(("q".to_owned(), command)));
         assert_eq!(key_equivalent_of(menus, "Settings…"), Some((",".to_owned(), command)));
     }

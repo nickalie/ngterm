@@ -1,6 +1,6 @@
-//! The Linux build's shipped default chords. Upstream ships macOS chords built on ⌘ (Super on Linux), which desktop
-//! shells claim and which collide once ⌘ becomes Ctrl+Shift, so this build ships its own table (settled with Codex,
-//! recorded in the plan's Technical Details):
+//! The shipped default chords on Linux and Windows. Upstream ships macOS chords built on ⌘ (Super on Linux), which
+//! desktop shells claim and which collide once ⌘ becomes Ctrl+Shift, so this build ships its own table (settled with
+//! Codex, recorded in the plan's Technical Details):
 //!
 //! - Ctrl+Shift+<letter> is the base, as Linux terminals and this build's Edit chords (`ctrl+shift+key_c/v/a`) use;
 //!   the chords upstream spells without ⌘ (`` ctrl+` ``, `ctrl+p`, `ctrl+shift+p`, `ctrl+shift+i`) stay;

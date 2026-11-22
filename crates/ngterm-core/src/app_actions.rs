@@ -240,7 +240,7 @@ impl Core {
         let path = match file {
             ConfigFile::Keymap => {
                 let path = self.keymap_path();
-                crate::keymap::ensure_starter_keymap(&path, &crate::keymap::linux_defaults());
+                crate::keymap::ensure_starter_keymap(&path, &self.keymap_defaults());
                 path
             }
             ConfigFile::Hooks => {

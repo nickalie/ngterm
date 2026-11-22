@@ -243,12 +243,15 @@ and how this build does it where the OS matters:
 
 - Commands: `recent list|open|clear` (File ▸ Open Recent: the last 20 closed sessions and workspaces), `session wait
   --until STATUS... [--timeout SEC]` (exit 124 on the timeout), `workspace flag on|off|toggle` (Flag All Sessions /
-  Unflag All Sessions), `session overlay hide|show|toggle` (hidden overlays keep running; bound to Ctrl+Alt+Shift+J on
-  every OS, upstream's ⇧⌘J waiting for per-OS keymap defaults), point-sized floating overlays (`session overlay
+  Unflag All Sessions), `session overlay hide|show|toggle` (hidden overlays keep running; bound to ⇧⌘J on macOS,
+  Ctrl+Alt+Shift+J on Linux and Windows), point-sized floating overlays (`session overlay
   open|resize --width/--height`, read back as `overlayWidth`/`overlayHeight`), `--url --chromeless` for loopback hosts,
   `session scratch --follow` (showing a scratch no longer selects its session unless `--follow` is given), forms in
   `ask` (input fields, choices with an Other answer, hotkeys resolved by keyboard layout), Mark for Attention on a
   session's row menu, agent status in the session pickers and in `pick` items.
+- Default keys: macOS ships upstream's ⌘ table, in the menus too. Linux and Windows ship a Ctrl+Shift table, because
+  desktop shells take Super there (`ngterm-core` `keymap::ShippedDefaults::for_os`). A `keymap.conf` line overrides
+  either table.
 - `version` reports the installed build beside the running one (`result.installed`, an `installed:` line when they
   differ): the staged `share/ngterm/app-BUILD`, or the `Info.plist` inside a macOS app bundle.
 - Events: `app.launched` once the control server is up, `tree.changed` when an overlay, page, HUD or remote slot opens

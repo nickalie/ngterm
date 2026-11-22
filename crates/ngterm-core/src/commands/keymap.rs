@@ -18,8 +18,8 @@ use crate::Core;
 use crate::error::ControlError;
 use crate::keymap::failure;
 use crate::keymap::{
-    CommandContext, CommandPane, CustomCommand, Keymap, KeymapDiagnostic, SurfaceOwner, TypingSurface,
-    ensure_starter_keymap, linux_defaults, load_keymap, project,
+    CommandContext, CommandPane, CustomCommand, Keymap, KeymapDiagnostic, KeymapOs, ShippedDefaults, SurfaceOwner,
+    TypingSurface, ensure_starter_keymap, load_keymap, project,
 };
 use crate::model::{OverlayPane, Session, StatusPane};
 use crate::pane_env::uuid_string;
@@ -38,15 +38,18 @@ pub(crate) struct KeymapRuntime {
     /// Bumped on every load, so the frontend rebuilds its matcher and menu.
     generation: u64,
     menu_reader: Option<MenuReader>,
+    /// The OS whose default table the keymap resolves against.
+    os: KeymapOs,
 }
 
 impl Default for KeymapRuntime {
     fn default() -> Self {
         Self {
-            keymap: Keymap::empty(&linux_defaults()),
+            keymap: Keymap::empty(&ShippedDefaults::shipped()),
             diagnostics: Vec::new(),
             generation: 0,
             menu_reader: None,
+            os: KeymapOs::current(),
         }
     }
 }
@@ -85,6 +88,19 @@ impl Core {
         self.keymap.generation
     }
 
+    /// The default table the keymap resolves against: the one this OS ships.
+    #[must_use]
+    pub fn keymap_defaults(&self) -> ShippedDefaults {
+        ShippedDefaults::for_os(self.keymap.os)
+    }
+
+    /// Resolves the keymap against `os`'s default table from now on, so a test on any OS reaches each table.
+    pub fn set_keymap_os(&mut self, os: KeymapOs) {
+        self.keymap.os = os;
+        self.keymap.keymap = Keymap::empty(&self.keymap_defaults());
+        self.keymap.generation += 1;
+    }
+
     /// Installs the reader of the live menu's accelerators `keymap.list` reports.
     pub fn set_menu_reader(&mut self, reader: MenuReader) {
         self.keymap.menu_reader = Some(reader);
@@ -93,13 +109,13 @@ impl Core {
     /// The launch step: writes the commented starter `keymap.conf` when none exists and loads it (upstream's
     /// `SettingsModel` init); its problems post a banner, as upstream's scene task does.
     pub fn load_keymap_at_launch(&mut self) {
-        ensure_starter_keymap(&self.keymap_path(), &linux_defaults());
+        ensure_starter_keymap(&self.keymap_path(), &self.keymap_defaults());
         self.reload_keymap();
     }
 
     /// Re-reads `keymap.conf` (File > Reload Keymap, `keymap.reload`); diagnostics post a banner. The diagnostic count.
     pub fn reload_keymap(&mut self) -> usize {
-        let (keymap, diagnostics) = load_keymap(&self.keymap_path(), &linux_defaults());
+        let (keymap, diagnostics) = load_keymap(&self.keymap_path(), &self.keymap_defaults());
         self.keymap.keymap = keymap;
         self.keymap.diagnostics = diagnostics;
         self.keymap.generation += 1;

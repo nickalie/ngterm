@@ -399,7 +399,7 @@ fn shell(cx: &mut TestAppContext) -> Shell<'_> {
         .add_session(workspace, ngterm_core::model::NewSession::at_cwd("/var"))
         .unwrap();
     store.select_session(Some(var));
-    let core = Core::new(
+    let mut core = Core::new(
         CoreConfig {
             app: AppIdentity::from_recorded("1.2.3", None),
             capabilities: Vec::new(),
@@ -414,6 +414,8 @@ fn shell(cx: &mut TestAppContext) -> Shell<'_> {
             ..CoreState::default()
         },
     );
+    // the tests type the Linux chords
+    core.set_keymap_os(ngterm_core::keymap::KeymapOs::Linux);
     let posted = std::sync::Arc::new(Posted::default());
     let weak: Poster = std::sync::Arc::downgrade(&posted) as Poster;
     let mut state = AppState::new(core);
