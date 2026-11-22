@@ -99,7 +99,8 @@ Linux build unless it names another OS.
   it again (`crates/ngterm-core/src/remote/page.rs`); a viewer tells the page's close (`page.closed`) from its own
   helper's end (`page.detached`, this build's presentation kind, sent only to an origin that lists it). Closing the
   page (its X, ⌘W/Ctrl+W, `session overlay close`, `window.close()`, a submit, the session's close) ends it for good.
-  Page companions are still not kept; a page already open on a desktop origin before a viewer attached stays there;
+  A page session (top-level or a companion) is saved and restored with its page, as upstream's are (#930), through the
+  same page entry; a page already open on a desktop origin before a viewer attached stays there;
   a page comes back from its original source, without its in-page state. Rust-only capability `pages-survive`.
 - No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
   Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row),
