@@ -243,20 +243,20 @@ impl Modals {
         true
     }
 
-    /// Applies a presenter's answer; refused unless it is for the pick `session`'s presenter holds under that owner and
+    /// Applies a presenter's answer; ignored unless it is for the pick `session`'s presenter holds under that owner and
     /// names a row or a custom answer the pick allows. One past the pick's deadline resolves cancelled.
-    pub(crate) fn resolve_remote_pick(&mut self, answer: &PresentationPickAnswer, session: Uuid) -> bool {
+    pub(crate) fn resolve_remote_pick(&mut self, answer: &PresentationPickAnswer, session: Uuid) {
         let Some(entry) = self.session_picks.entries.get(&answer.id) else {
-            return false;
+            return;
         };
         if entry.session != session || entry.placement != (Placement::Presenter { owner: answer.owner }) {
-            return false;
+            return;
         }
         let Some(result) = entry
             .pick
             .validated_result(answer.item.as_deref(), answer.query.as_deref())
         else {
-            return false;
+            return;
         };
         let result = if self.expired(&answer.id) {
             ControlPickResult::outcome(ControlPickOutcome::Cancelled)
@@ -264,7 +264,6 @@ impl Modals {
             result
         };
         self.session_picks.finish(&answer.id, result);
-        true
     }
 
     /// Moves `session`'s presenter-held pick into window `window`'s slot after the presenter refused it (`refused`,

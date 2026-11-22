@@ -1020,6 +1020,44 @@ fn a_notify_lands_its_banner_and_its_sound_with_the_frontend() {
     assert_eq!(state.take_frontend_work(), FrontendWork::default(), "landed once");
 }
 
+/// An ask opened with `--timeout` ends cancelled once the loop runs the expiry that settle armed.
+#[test]
+fn a_timed_ask_is_cancelled_by_its_expiry_on_the_loop() {
+    let (mut state, _window, session) = state_with_terminal();
+    let (main_loop, _keep) = record(&mut state);
+    let args: Args = serde_json::from_value(serde_json::json!({
+        "title": "t",
+        "buttons": [{"id": "ok", "label": "OK"}],
+        "timeout": 0.01,
+    }))
+    .unwrap();
+    let opened = send(
+        &mut state,
+        Command::Ask(ngterm_proto::command::AskCmd::Open),
+        Some(ngterm_core::pane_env::uuid_string(session)),
+        args,
+    );
+    assert!(opened.ok, "{opened:?}");
+    let id = opened.result.unwrap()["id"].as_str().unwrap().to_owned();
+    std::thread::sleep(Duration::from_millis(20));
+    let expiries: Vec<_> = main_loop
+        .take()
+        .into_iter()
+        .filter(|(delay, _)| *delay == Some(Duration::from_millis(10)))
+        .collect();
+    assert_eq!(expiries.len(), 1, "settle arms the ask's expiry with its timeout");
+    for (_, task) in expiries {
+        task(&mut state);
+    }
+    let read = send(
+        &mut state,
+        Command::Ask(ngterm_proto::command::AskCmd::Result),
+        Some(id),
+        Args::default(),
+    );
+    assert_eq!(read.result.unwrap()["ask"], serde_json::json!({"result": "cancelled"}));
+}
+
 /// Runs the link lookups and document reads a click started, then the tasks they posted.
 fn finish_links(state: &mut AppState, main_loop: &RecordingLoop<AppState>) {
     // a found location's document read posts after the lookup's task runs

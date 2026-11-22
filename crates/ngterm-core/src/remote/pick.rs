@@ -2,9 +2,9 @@
 //! `presentPickRemotely`; `ControlServer+Pick.swift`'s `takeBackRemotePick` and `showReplicaPick`).
 //!
 //! On the origin, a pick bound to a session that presents remotely goes to the session's presenter when its hello lists
-//! every [`PICK_KINDS`](super::hub::PICK_KINDS); the book ([`crate::session_pick`]) keeps it and its outcome here. A
-//! presenter that refuses it or goes away hands it back into the session's window. On a viewer, a pick its origin
-//! handed over is a replica in the window holding the attached row, and its outcome goes back on the stream.
+//! `pick.request`; the book ([`crate::modal::SessionPicks`]) keeps it and its outcome here. A presenter that refuses it
+//! or goes away hands it back into the session's window. On a viewer, a pick its origin handed over is a replica in the
+//! window holding the attached row, and its outcome goes back on the stream.
 
 use ngterm_proto::{ControlPickOutcome, ControlPickResult, PickItem};
 use serde::{Deserialize, Serialize};

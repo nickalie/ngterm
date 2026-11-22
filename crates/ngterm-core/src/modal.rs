@@ -9,7 +9,7 @@
 mod session_pick;
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use ngterm_proto::{ControlAskOutcome, ControlAskResult, ControlPickOutcome, ControlPickResult, PickItem};
 use uuid::Uuid;
@@ -194,7 +194,7 @@ pub struct Modals {
     /// The picks bound to a session rather than to a window.
     pub(crate) session_picks: SessionPicks,
     /// When each ask or pick opened with `--timeout` ends unanswered, by id.
-    deadlines: HashMap<String, SystemTime>,
+    deadlines: HashMap<String, Instant>,
     /// The deadlines armed since the frontend last took them.
     expiries: Vec<InteractionExpiry>,
 }
@@ -420,7 +420,7 @@ impl Modals {
     /// Ends ask or pick `id` unanswered `seconds` from now, a valid `--timeout`.
     pub(crate) fn arm_deadline(&mut self, id: &str, seconds: f64) {
         let delay = Duration::from_secs_f64(seconds);
-        self.deadlines.insert(id.to_owned(), SystemTime::now() + delay);
+        self.deadlines.insert(id.to_owned(), Instant::now() + delay);
         self.expiries.push(InteractionExpiry {
             delay,
             id: id.to_owned(),
@@ -444,8 +444,8 @@ impl Modals {
     }
 }
 
-fn expired(deadlines: &HashMap<String, SystemTime>, id: &str) -> bool {
-    deadlines.get(id).is_some_and(|deadline| *deadline <= SystemTime::now())
+fn expired(deadlines: &HashMap<String, Instant>, id: &str) -> bool {
+    deadlines.get(id).is_some_and(|deadline| *deadline <= Instant::now())
 }
 
 fn held_by(controller: &PickController) -> Option<&'static str> {
@@ -597,7 +597,7 @@ impl crate::Core {
         let Some(deadline) = self.modals.deadlines.get(&expiry.id).copied() else {
             return;
         };
-        if let Ok(rest) = deadline.duration_since(SystemTime::now())
+        if let Some(rest) = deadline.checked_duration_since(Instant::now())
             && !rest.is_zero()
         {
             self.modals.expiries.push(InteractionExpiry { delay: rest, ..expiry });
