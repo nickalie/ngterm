@@ -46,11 +46,11 @@ import java.util.Collections
 
 /**
  * Every notification switch turned off in Settings, end to end: the session's agent asks a question (its sheet, while
- * the session is on screen), the app goes to the background, and there the agent sets its status to waiting and sends
- * a notification. The test sees the status reach the app with the session out of sight, and the notification reach
- * it, and then that none of them posts: the attached session's quiet notification, which Android needs to keep the
- * connection, is the only one of the agents' and machines' up. Then Questions is turned on again, and the question
- * that still waits posts.
+ * the session is on screen), the app goes to the background, and there the agent sets its status to waiting, sends a
+ * notification and sets its status to finished. The test sees both statuses reach the app with the session out of
+ * sight, and the notification reach it, and then that none of them posts: the attached session's quiet notification,
+ * which Android needs to keep the connection, is the only one of the agents' and machines' up. Then Questions is
+ * turned on again, and the question that still waits posts.
  *
  * The machine is the private `ngterm-headless` behind the private `sshd` that `scripts/test-android-e2e.sh` starts;
  * without the script's arguments the test is skipped. No live ngterm.
@@ -113,9 +113,9 @@ class NotificationsOffE2eTest {
         val came = Collections.synchronizedSet(mutableSetOf<String>())
         val asks = graph().asks
         graph().connections.listen { event ->
-            if (event is MobileEvent.SessionStatus && event.status?.status == "blocked") {
+            STATUSES[(event as? MobileEvent.SessionStatus)?.status?.status]?.let { status ->
                 // on screen, the status is taken down before any switch is read: then it tests nothing
-                came += if (asks.onScreen.value == null) "status" else ON_SCREEN
+                came += if (asks.onScreen.value == null) status else ON_SCREEN
             }
             if (event is MobileEvent.Notify) came += "notice"
         }
@@ -133,7 +133,10 @@ class NotificationsOffE2eTest {
         shell("input keyevent KEYCODE_HOME")
         // the test rule's clock moves only when the test waits for it: then the app sees it left the screen
         compose.waitUntil(CONNECT_WAIT_MS) { asks.onScreen.value == null }
-        compose.waitUntil(CONNECT_WAIT_MS) { ON_SCREEN in came || came.containsAll(listOf("status", "notice")) }
+        compose.waitUntil(CONNECT_WAIT_MS) {
+            ON_SCREEN in came ||
+                came.containsAll(listOf("waiting", "finished", "notice"))
+        }
         assertFalse("the status came while its session was on screen", ON_SCREEN in came)
         // a post that a switch let through would land a moment after its event
         Thread.sleep(SETTLE_MS)
@@ -271,8 +274,12 @@ class NotificationsOffE2eTest {
                 "set%s-x%st%s\$NGTERM_SESSION_ID",
                 "fish%s-c%s'sleep%s10;ngtermctl%ssession%sstatus%sblocked%s--target%s\$t;" +
                     "ngtermctl%snotify%sqaoff%s--target%s\$t'%s&",
+                "fish%s-c%s'sleep%s13;ngtermctl%ssession%sstatus%scompleted%s--target%s\$t'%s&",
                 "ngtermctl%sask%sopen%sQaOff%s--button%syes%s--button%sno%s--target%s\$t",
             )
+
+        /** The agent statuses that would post, by what the test records for each. */
+        val STATUSES = mapOf("blocked" to "waiting", "completed" to "finished")
 
         /** Typed until the shell prints [READY], which the typed line itself does not hold. */
         const val PING = "string%supper%sqaready"
