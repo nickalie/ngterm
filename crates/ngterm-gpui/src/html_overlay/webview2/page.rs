@@ -65,6 +65,22 @@ struct Shown {
     can_go_forward: bool,
 }
 
+/// Why the page fails for good, and whether the model was told, so a new element does not post it again.
+#[derive(Clone)]
+struct Failure {
+    reason: String,
+    reported: bool,
+}
+
+impl Failure {
+    fn new(reason: String) -> Self {
+        Self {
+            reason,
+            reported: false,
+        }
+    }
+}
+
 /// What the page's handlers share.
 struct PageState {
     /// The model's value as last applied.
@@ -73,9 +89,7 @@ struct PageState {
     load: LoadTracker,
     /// The address of the document a browsing page shows; `None` until its first commit.
     shown_url: Option<Url>,
-    storage_failure: Option<String>,
-    /// Whether the model was told of `storage_failure`, so a new element does not post it again.
-    failure_reported: bool,
+    storage_failure: Option<Failure>,
     prompt: Option<Entity<Alert>>,
     /// Counts the prompts the page opened, so an answer reaches only the prompt it belongs to: a withdrawal answers
     /// its prompt late, after another may have taken its place.
@@ -212,7 +226,7 @@ impl Page {
         poster: &Poster,
     ) -> Rc<Self> {
         let storage_failure = match &storage {
-            Storage::Unavailable(failure) => Some(failure.clone()),
+            Storage::Unavailable(failure) => Some(Failure::new(failure.clone())),
             _ => None,
         };
         Rc::new_cyclic(|me| Self {
@@ -231,7 +245,6 @@ impl Page {
                 load: LoadTracker::default(),
                 shown_url: None,
                 storage_failure,
-                failure_reported: false,
                 prompt: None,
                 prompt_serial: 0,
                 prompts_silenced: false,
@@ -462,26 +475,26 @@ impl Page {
             if state.storage_failure.is_some() {
                 return;
             }
-            state.storage_failure = Some(failure.to_owned());
+            state.storage_failure = Some(Failure::new(failure.to_owned()));
         }
         self.fail_for_good(failure.to_owned());
     }
 
     /// Reports the page's own store failure when its element is made, once; true while the page has one.
     pub fn fail_storage(&self) -> bool {
-        let (failure, reported) = {
-            let state = self.state.borrow();
-            (state.storage_failure.clone(), state.failure_reported)
+        let Some(failure) = self.state.borrow().storage_failure.clone() else {
+            return false;
         };
-        let Some(failure) = failure else { return false };
-        if !reported {
-            self.fail_for_good(failure);
+        if !failure.reported {
+            self.fail_for_good(failure.reason);
         }
         true
     }
 
     fn fail_for_good(&self, failure: String) {
-        self.state.borrow_mut().failure_reported = true;
+        if let Some(stored) = &mut self.state.borrow_mut().storage_failure {
+            stored.reported = true;
+        }
         self.fail(failure);
     }
 
@@ -1184,7 +1197,7 @@ impl Page {
             let mut state = self.state.borrow_mut();
             if let Some(failure) = state.storage_failure.clone() {
                 drop(state);
-                self.fail_for_good(failure);
+                self.fail_for_good(failure.reason);
                 return;
             }
             state.load.begin();
