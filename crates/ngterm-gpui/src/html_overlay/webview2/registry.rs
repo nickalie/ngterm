@@ -352,8 +352,12 @@ fn native_window(window: &Window) -> Option<isize> {
     }
 }
 
-/// Asks the pump for `page`'s web view, unless it has one, is getting one, or cannot have one.
+/// Asks the pump for `page`'s web view, unless it has one, is getting one, or cannot have one; a page without its store
+/// reports why.
 fn request_build(page: &Page) {
+    if page.fail_storage() {
+        return;
+    }
     if let Some(failure) = with(|registry| registry.failure.clone()) {
         page.engine_failed(&failure);
         return;

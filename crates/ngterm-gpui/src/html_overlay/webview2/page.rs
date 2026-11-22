@@ -74,6 +74,8 @@ struct PageState {
     /// The address of the document a browsing page shows; `None` until its first commit.
     shown_url: Option<Url>,
     storage_failure: Option<String>,
+    /// Whether the model was told of `storage_failure`, so a new element does not post it again.
+    failure_reported: bool,
     prompt: Option<Entity<Alert>>,
     /// Counts the prompts the page opened, so an answer reaches only the prompt it belongs to: a withdrawal answers
     /// its prompt late, after another may have taken its place.
@@ -229,6 +231,7 @@ impl Page {
                 load: LoadTracker::default(),
                 shown_url: None,
                 storage_failure,
+                failure_reported: false,
                 prompt: None,
                 prompt_serial: 0,
                 prompts_silenced: false,
@@ -461,7 +464,25 @@ impl Page {
             }
             state.storage_failure = Some(failure.to_owned());
         }
-        self.fail(failure.to_owned());
+        self.fail_for_good(failure.to_owned());
+    }
+
+    /// Reports the page's own store failure when its element is made, once; true while the page has one.
+    pub fn fail_storage(&self) -> bool {
+        let (failure, reported) = {
+            let state = self.state.borrow();
+            (state.storage_failure.clone(), state.failure_reported)
+        };
+        let Some(failure) = failure else { return false };
+        if !reported {
+            self.fail_for_good(failure);
+        }
+        true
+    }
+
+    fn fail_for_good(&self, failure: String) {
+        self.state.borrow_mut().failure_reported = true;
+        self.fail(failure);
     }
 
     /// The pump made the web view: it takes its place and loads the source.
@@ -1137,11 +1158,12 @@ impl Page {
         }
     }
 
-    /// Reloads what the page shows; before a first commit there is nothing to reload, so the source loads again.
+    /// Reloads what the page shows; before a first commit there is nothing to reload, and after a failure for good the
+    /// web view cannot load, so the source loads again.
     fn reload_shown(&self) {
         let reload = {
             let mut state = self.state.borrow_mut();
-            let reload = !state.overlay.text_loaded() && state.load.committed();
+            let reload = state.storage_failure.is_none() && !state.overlay.text_loaded() && state.load.committed();
             if reload {
                 state.load.begin();
             }
@@ -1162,7 +1184,7 @@ impl Page {
             let mut state = self.state.borrow_mut();
             if let Some(failure) = state.storage_failure.clone() {
                 drop(state);
-                self.fail(failure);
+                self.fail_for_good(failure);
                 return;
             }
             state.load.begin();

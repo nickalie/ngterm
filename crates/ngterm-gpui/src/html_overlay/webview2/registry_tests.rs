@@ -212,6 +212,18 @@ fn an_unreadable_page_fails_with_its_reason_and_gets_no_web_view(cx: &mut TestAp
     let mut model = Model::new(&source);
     let page = page_of(&source, storage(&source), &model);
     assert!(!page.wants_native());
+    let failed = |model: &Model| {
+        assert_eq!(
+            (model.overlay().load_state, model.overlay().load_error.as_deref()),
+            (HtmlLoadState::Failed, Some(reason))
+        );
+    };
+    request_build(&page);
+    model.drain();
+    failed(&model);
+    request_build(&page);
+    assert_eq!(model.pending(), 0, "a new element does not post the failure again");
+    assert!(!page.wants_native());
     assert_eq!(
         navigate(page.id(), HtmlNavigation::Browser),
         Err(errors::UNREADABLE_PAGE.to_owned())
@@ -234,11 +246,7 @@ fn an_unreadable_page_fails_with_its_reason_and_gets_no_web_view(cx: &mut TestAp
     let reloaded = model.overlay().clone();
     cx.update(|cx| page.apply(&reloaded, true, cx));
     model.drain();
-    assert_eq!(
-        model.overlay().load_error.as_deref(),
-        Some(reason),
-        "a missing runtime or an ended engine keeps the page's reason"
-    );
+    failed(&model);
 }
 
 #[test]

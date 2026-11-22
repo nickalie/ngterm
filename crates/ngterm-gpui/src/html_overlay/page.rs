@@ -71,6 +71,8 @@ struct PageState {
     storage_failure: Option<String>,
     /// Whether the model was told of `storage_failure`, so a prepaint does not post it again.
     failure_reported: bool,
+    /// The engine's unavailable reason the model was told of last, so a prepaint does not post it again.
+    unavailable_reported: Option<String>,
     prompt: Option<Entity<Alert>>,
     /// Counts the prompts the page opened, so an answer reaches only the prompt it belongs to: a withdrawal answers
     /// its prompt late, after another may have taken its place.
@@ -166,6 +168,7 @@ impl Page {
                 grant_root: None,
                 storage_failure,
                 failure_reported: false,
+                unavailable_reported: None,
                 prompt: None,
                 prompt_serial: 0,
                 prompts_silenced: false,
@@ -327,12 +330,21 @@ impl Page {
     }
 
     /// There is no engine for now, and `reason` says why: the model's load fails with it, and a retry takes it back.
+    /// Each prepaint asks again, so a reason already reported is not posted again.
     pub(super) fn engine_unavailable(&self, reason: &str) {
+        {
+            let mut state = self.state.borrow_mut();
+            if state.unavailable_reported.as_deref() == Some(reason) {
+                return;
+            }
+            state.unavailable_reported = Some(reason.to_owned());
+        }
         self.report_load(HtmlLoadState::Failed, Some(reason.to_owned()));
     }
 
     /// The user retried getting the engine: the page is loading again.
     pub(super) fn engine_retried(&self) {
+        self.state.borrow_mut().unavailable_reported = None;
         self.report_load(HtmlLoadState::Loading, None);
     }
 
@@ -744,11 +756,12 @@ impl Page {
         }
     }
 
-    /// Reloads what the page shows; before a first commit the engine has nothing to reload, so the source loads again.
+    /// Reloads what the page shows; before a first commit the engine has nothing to reload, and after a failure for good
+    /// it has gone, so the source loads again.
     fn reload_shown(&self) {
         let reload = {
             let mut state = self.state.borrow_mut();
-            let reload = !state.overlay.text_loaded() && state.load.committed();
+            let reload = state.storage_failure.is_none() && !state.overlay.text_loaded() && state.load.committed();
             if reload {
                 state.load.begin();
             }
@@ -1458,6 +1471,31 @@ mod tests {
                 Call::Visible(false),
                 Call::Load(Load::Uri("https://example.invalid/start".to_owned()))
             ]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn reload_current_after_the_engine_ended_fails_again_and_asks_nothing_of_it(cx: &mut TestAppContext) {
+        let source = url_overlay();
+        let (page, web, mut model) = model_page(&source);
+        cx.update(|cx| progress(&page, ngterm_wpe_client::LoadEvent::Committed, cx));
+        let ended = "the web engine ended";
+        page.engine_failed(ended);
+        model.drain();
+        web.recorder.take();
+        assert!(
+            model
+                .state
+                .core
+                .reload_html_overlay(page.id(), HtmlReloadTarget::Current)
+        );
+        let reloaded = model.overlay().clone();
+        cx.update(|cx| page.apply(&reloaded, true, cx));
+        model.drain();
+        assert!(!web.recorder.take().contains(&Call::Reload));
+        assert_eq!(
+            (model.overlay().load_state, model.overlay().load_error.as_deref()),
+            (HtmlLoadState::Failed, Some(ended))
         );
     }
 

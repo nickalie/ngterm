@@ -496,6 +496,9 @@ fn an_unavailable_engine_reports_the_reason_to_the_model_and_a_retry_takes_it_ba
     model.drain();
     assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
     assert_eq!(model.overlay().load_error.as_deref(), Some("connection reset"));
+    realize_waiting();
+    realize_waiting();
+    assert_eq!(model.pending(), 0, "each prepaint does not post the same reason again");
     assert!(
         model
             .state
@@ -508,6 +511,14 @@ fn an_unavailable_engine_reports_the_reason_to_the_model_and_a_retry_takes_it_ba
     model.drain();
     assert_eq!(model.overlay().load_state, HtmlLoadState::Loading);
     assert_eq!(model.overlay().load_error, None);
+
+    // after the retry, the same reason is news again
+    let failed = Unavailable::download_failed("connection reset".to_owned());
+    with(|registry| registry.engine = EngineState::Unavailable(failed));
+    realize_waiting();
+    model.drain();
+    assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
+    assert_eq!(model.overlay().load_error.as_deref(), Some("connection reset"));
 }
 
 fn assert_unreadable_profile(model: &Model) {
@@ -588,14 +599,16 @@ fn an_unreadable_page_fails_with_its_reason_and_never_waits_for_the_engine(cx: &
 
     use_web(Rc::new(Recorded::default()));
     engine_ended();
+    assert!(
+        model
+            .state
+            .core
+            .reload_html_overlay(page.id(), HtmlReloadTarget::Original)
+    );
+    let reloaded = model.overlay().clone();
     cx.update(|cx| page.apply(&reloaded, true, cx));
     model.drain();
     failed(&model);
-    assert_eq!(
-        page.failure().as_deref(),
-        Some(reason),
-        "the engine's end keeps the page's reason"
-    );
 }
 
 #[gpui_kit::test]

@@ -1143,6 +1143,27 @@ fn a_reload_of_a_committed_page_reloads_and_before_a_commit_loads_the_source_aga
     assert!(driven.view.take().is_empty(), "the same revision reloads nothing");
 }
 
+#[gpui_kit::test]
+fn a_reload_after_the_engine_ended_fails_again_and_asks_nothing_of_the_web_view(cx: &mut TestAppContext) {
+    let mut driven = realized(&url_overlay());
+    driven.report(Report::Committed, cx);
+    let ended = "the web engine ended";
+    driven.page.engine_failed(ended);
+    driven.model.drain();
+    driven.view.take();
+    assert!(
+        driven
+            .model
+            .state
+            .core
+            .reload_html_overlay(driven.page.id(), HtmlReloadTarget::Current)
+    );
+    let next = driven.model.overlay().clone();
+    cx.update(|cx| driven.page.apply(&next, true, cx));
+    assert!(!driven.view.take().contains(&Call::Reload));
+    assert_eq!(driven.load(), (HtmlLoadState::Failed, Some(ended.to_owned())));
+}
+
 // MARK: - the bridge and the user's input
 
 #[gpui_kit::test]
