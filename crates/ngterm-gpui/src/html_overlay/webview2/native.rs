@@ -517,11 +517,17 @@ impl NativeView for Native {
     }
 }
 
+/// The browser switches of every web view: wry's defaults, which a value of ours replaces, and paint holding off.
+/// After each load Chromium holds paint until the first contentful paint, up to 500 ms, and drops the wheel meanwhile,
+/// so a page that draws no text lost a scroll turned as it loaded; `WKWebView` holds no input.
+const BROWSER_ARGUMENTS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,PaintHolding";
+
 /// The web view of `spec` (wry's part of it).
 fn build(spec: &Spec) -> Result<WebView, String> {
     let mut context = WebContext::new(Some(spec.store.user_data.clone()));
     let post = Rc::clone(&spec.post);
     let mut builder = WebViewBuilder::new_with_web_context(&mut context)
+        .with_additional_browser_args(BROWSER_ARGUMENTS)
         .with_visible(spec.visible)
         .with_focused(false)
         .with_devtools(false)
@@ -1261,6 +1267,7 @@ fn anchor(
     let parent = host_window()?;
     let mut context = WebContext::new(Some(user_data.to_path_buf()));
     let mut builder = WebViewBuilder::new_with_web_context(&mut context)
+        .with_additional_browser_args(BROWSER_ARGUMENTS)
         .with_visible(false)
         .with_focused(false)
         .with_devtools(false)
@@ -1352,6 +1359,15 @@ pub fn forget_anchor() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_browser_keeps_wrys_switches_and_holds_no_paint() {
+        let features = BROWSER_ARGUMENTS.strip_prefix("--disable-features=").unwrap();
+        let features: Vec<_> = features.split(',').collect();
+        for feature in ["msWebOOUI", "msPdfOOUI", "msSmartScreenProtection", "PaintHolding"] {
+            assert!(features.contains(&feature), "{feature} stays off");
+        }
+    }
 
     #[test]
     fn the_context_menu_keeps_editing_history_and_copies_only() {
