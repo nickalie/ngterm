@@ -24,6 +24,10 @@
             }
         }
 
+        internal func withdraw(kinds: Set<NoticeKind>) {
+            posted = posted.filter { _, notice in notice.kind.map { !kinds.contains($0) } ?? true }
+        }
+
         internal func delivered() {
             // kept in memory: there is nothing to wait for
         }

@@ -12,6 +12,8 @@ import UserNotifications
 public final class SystemNotices: NoticeCenter {
     // the prefix of a notice's own category
     private static let categoryPrefix = "actions:"
+    // the key of a notice's kind in its user info
+    nonisolated private static let kindInfo = "ngterm.kind"
     // what a reply action's send button says
     private static let sendTitle = String(localized: "Send")
 
@@ -39,11 +41,11 @@ public final class SystemNotices: NoticeCenter {
         )
     }
 
-    /// What a notice carries (``Notice/info``): the values of its info that are text.
+    /// What a notice carries (``Notice/info``): the values of its info that are text, without its kind.
     nonisolated public static func info(of notification: UNNotification) -> [String: String] {
         var info: [String: String] = [:]
         for case (let key as String, let value as String) in notification.request.content.userInfo {
-            info[key] = value
+            info[key] = key == kindInfo ? nil : value
         }
         return info
     }
@@ -69,15 +71,46 @@ public final class SystemNotices: NoticeCenter {
         )
     }
 
-    /// Posts `notice`, replacing one with its id.
-    public func post(_ notice: Notice) {
+    /// What `notice` says, carries and is, as the system takes it; its buttons' category is set apart.
+    nonisolated internal static func content(of notice: Notice) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = notice.title
         content.subtitle = notice.subtitle
         content.body = notice.body
         content.threadIdentifier = notice.threadId
-        content.userInfo = notice.info
+        var info = notice.info
+        info[kindInfo] = notice.kind?.storedName
+        content.userInfo = info
         content.sound = .default
+        return content
+    }
+
+    /// The ids of the `requests` of one of `kinds`; one that says no kind is none of them.
+    nonisolated internal static func ids(
+        of requests: [UNNotificationRequest],
+        ofKinds kinds: Set<NoticeKind>
+    ) -> [String] {
+        let names = Set(kinds.map(\.storedName))
+        return requests.filter { request in
+            (request.content.userInfo[kindInfo] as? String).map(names.contains) == true
+        }
+        .map(\.identifier)
+    }
+
+    // takes the notices `ids` down and leaves the categories `wanted`
+    private static func remove(
+        _ ids: [String],
+        from center: UNUserNotificationCenter,
+        keeping wanted: Set<UNNotificationCategory>
+    ) {
+        center.removePendingNotificationRequests(withIdentifiers: ids)
+        center.removeDeliveredNotifications(withIdentifiers: ids)
+        center.setNotificationCategories(wanted)
+    }
+
+    /// Posts `notice`, replacing one with its id.
+    public func post(_ notice: Notice) {
+        let content = Self.content(of: notice)
         if !notice.actions.isEmpty {
             let id = Self.category(of: notice.id)
             categories[id] = UNNotificationCategory(
@@ -103,14 +136,23 @@ public final class SystemNotices: NoticeCenter {
         guard !ids.isEmpty else {
             return
         }
-        for id in ids {
-            categories[Self.category(of: id)] = nil
-        }
+        forget(ids)
         let wanted = Set(categories.values)
         enqueue { center in
-            center.removePendingNotificationRequests(withIdentifiers: ids)
-            center.removeDeliveredNotifications(withIdentifiers: ids)
-            center.setNotificationCategories(wanted)
+            Self.remove(ids, from: center, keeping: wanted)
+        }
+    }
+
+    /// Takes down every notice delivered of one of `kinds`, and their categories.
+    public func withdraw(kinds: Set<NoticeKind>) {
+        guard !kinds.isEmpty else {
+            return
+        }
+        // the step holds the notices only until it has run
+        enqueue { center in
+            let ids = Self.ids(of: await center.deliveredNotifications().map(\.request), ofKinds: kinds)
+            self.forget(ids)
+            Self.remove(ids, from: center, keeping: Set(self.categories.values))
         }
     }
 
@@ -136,6 +178,13 @@ public final class SystemNotices: NoticeCenter {
     /// Asks the user, once, whether the app may notify: alerts, sounds and the badge.
     public func requestPermission() async -> Bool {
         (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+    }
+
+    // drops the categories of the notices `ids`
+    private func forget(_ ids: [String]) {
+        for id in ids {
+            categories[Self.category(of: id)] = nil
+        }
     }
 
     // runs `step` once the post or withdrawal before it has

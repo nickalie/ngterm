@@ -1,3 +1,4 @@
+import Foundation
 import NgtermCore
 import NgtermCoreFakes
 import NgtermPlatform
@@ -7,7 +8,7 @@ import Testing
 
 /// What reaches the user as notifications (mobile/android's `AlertsTest`): the agents' notices and statuses, a machine
 /// lost for good, and the asks out of sight, each on its session's thread, withdrawn as the rules say; the kinds the
-/// user turned off are not posted.
+/// user turned off are not posted and their notices up go, and nothing posts before the choices are read.
 @MainActor
 @Suite("the alerts")
 internal struct AlertsTests {
@@ -197,5 +198,88 @@ internal struct AlertsTests {
         test.graph.suspend()
         #expect(notices.posted.isEmpty, "the origin took it back")
         #expect(notices.log.suffix(2) == ["+" + id, "-" + id])
+    }
+
+    @Test("an ask posts only while Questions is on: off takes it down, on again posts it")
+    internal func questionsOff() async throws {
+        defer { test.remove() }
+        try await attach()
+        let id = Alert.askId(key, askId: "A1")
+        try test.graph.notificationPrefs.set(.questions, isOn: false)
+        await emit(.ask(machineId: "m1", sessionId: "s1", ask: TestAsks.plain()))
+        #expect(notices.posted.isEmpty, "Questions is off")
+        try test.graph.notificationPrefs.set(.questions, isOn: true)
+        #expect(notices.upIds == [id], "still open and out of sight")
+        #expect(notices.posted[id]?.kind == .questions)
+        try test.graph.notificationPrefs.set(.questions, isOn: false)
+        #expect(notices.posted.isEmpty)
+    }
+
+    @Test("every kind turned off takes its notices up down, an earlier run's too, and no new one posts")
+    internal func everyKindOff() async throws {
+        defer { test.remove() }
+        try await attach()
+        let earlier = Notice(id: "status:m9:s9", threadId: "session:m9:s9", title: "old", body: "", kind: .done)
+        notices.post(earlier)
+        let sent = RemoteNotice(title: "Build done", body: "All green", pane: nil, source: "agent")
+        await emit(
+            status("blocked", changed: true),
+            .notify(machineId: "m1", sessionId: "s1", notice: sent),
+            .ask(machineId: "m1", sessionId: "s1", ask: TestAsks.plain()),
+            .machineState(machineId: "m1", state: .unreachable(reason: "no route to host"))
+        )
+        #expect(notices.posted.count == 5)
+        #expect(Set(notices.posted.values.compactMap(\.kind)) == [.waiting, .done, .notices, .questions, .errors])
+        for kind in NoticeKind.allCases {
+            try test.graph.notificationPrefs.set(kind, isOn: false)
+        }
+        #expect(notices.posted.isEmpty)
+
+        var second = TestAsks.plain()
+        second.id = "A2"
+        await emit(
+            status("completed", changed: true),
+            .notify(machineId: "m1", sessionId: "s1", notice: sent),
+            .ask(machineId: "m1", sessionId: "s1", ask: second),
+            .machineState(machineId: "m1", state: .unreachable(reason: "no route to host"))
+        )
+        test.graph.alerts.post(turn: .done, of: fakeSession(id: "s1", name: "api"), on: TestGraph.machine(keyId: "k1"))
+        #expect(notices.posted.isEmpty, "every switch is off")
+    }
+
+    @Test("nothing posts while the choices can't be read; once read, what they allow does")
+    internal func choicesUnread() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "NgtermFeaturesTests-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appending(path: NotificationPrefsStore.fileName)
+        try Data(#"{"off": ["notices"]}"#.utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        let unread = TestGraph(directory: directory)
+        defer { unread.remove() }
+        #expect(!unread.graph.notificationPrefs.isRead)
+        try unread.seed(TestGraph.machine(keyId: "k1"))
+        unread.core.sessions["m1"] = [fakeSession(id: "s1", name: "api")]
+        await unread.connections.connect(TestGraph.machine(keyId: "k1").core).value
+        await unread.settled()
+        try await unread.connections.attach(machineId: "m1", sessionId: "s1")
+        let sent = RemoteNotice(title: "", body: "x", pane: nil, source: "")
+        for event: MobileEvent in [
+            status("blocked", changed: true), .notify(machineId: "m1", sessionId: "s1", notice: sent),
+            .ask(machineId: "m1", sessionId: "s1", ask: TestAsks.plain()),
+        ] {
+            unread.core.emit(event)
+        }
+        await unread.settled()
+        let api = fakeSession(id: "s1", name: "api")
+        unread.graph.alerts.post(turn: .done, of: api, on: TestGraph.machine(keyId: "k1"))
+        #expect(unread.notices.posted.isEmpty, "the choices are only the defaults yet")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        unread.graph.readUnreadStores()
+        #expect(unread.notices.upIds == [Alert.askId(key, askId: "A1")], "the open ask, now that Questions reads on")
+        unread.core.emit(.notify(machineId: "m1", sessionId: "s1", notice: sent))
+        unread.core.emit(status("completed", changed: true))
+        await unread.settled()
+        #expect(unread.notices.upIds == [Alert.askId(key, askId: "A1"), Alert.statusId(key)], "notices stay off")
     }
 }

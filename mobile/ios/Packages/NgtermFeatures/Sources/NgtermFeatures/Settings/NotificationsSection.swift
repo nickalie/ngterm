@@ -27,8 +27,6 @@ internal struct NotificationsSection: View {
             }
         } header: {
             FormHint(String(localized: "Notifications"), .header)
-        } footer: {
-            FormHint(String(localized: "Questions from agents always notify: they wait for your answer."), .note)
         }
     }
 

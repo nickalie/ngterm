@@ -8,6 +8,9 @@ public protocol NoticeCenter: AnyObject {
     /// Takes down the notices `ids` that are up.
     func withdraw(_ ids: [String])
 
+    /// Takes down every notice up of one of `kinds` (``Notice/kind``), those an earlier run of the app posted too.
+    func withdraw(kinds: Set<NoticeKind>)
+
     /// Waits until every post and withdrawal made so far has reached the system: a background run awaits it before it
     /// ends, as the system may suspend the process once it has.
     func delivered() async

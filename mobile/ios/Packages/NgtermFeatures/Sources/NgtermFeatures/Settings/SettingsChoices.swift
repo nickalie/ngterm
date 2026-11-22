@@ -66,6 +66,11 @@ internal enum SettingsChoices {
     /// The notification kinds, with what each tells.
     internal static let notices: [SettingsChoice<NoticeKind>] = [
         SettingsChoice(
+            .questions,
+            String(localized: "Questions"),
+            note: String(localized: "An agent asks you something. Off, you see it only in ngterm")
+        ),
+        SettingsChoice(
             .waiting,
             String(localized: "Waiting for you"),
             note: String(localized: "An agent stopped and waits for your answer")

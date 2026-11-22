@@ -31,6 +31,23 @@ public enum Alert: Hashable, Sendable {
         }
     }
 
+    /// The switch it goes with.
+    public var kind: NoticeKind {
+        switch self {
+        case .ask:
+            .questions
+
+        case .lost:
+            .errors
+
+        case .notice:
+            .notices
+
+        case .status(_, let kind, _, _):
+            kind
+        }
+    }
+
     /// Where its tap leads.
     public var target: OpenTarget {
         switch self {

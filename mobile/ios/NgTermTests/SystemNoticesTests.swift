@@ -169,6 +169,25 @@ internal struct SystemNoticesTests {
         #expect(await Self.category(offering: action("second")) == nil)
     }
 
+    @Test("a kind turned off leaves another kind's notice and buttons up; the kind rides apart from what a tap carries")
+    internal func withdrawKinds() async throws {
+        let presented = PresentedNotices()
+        defer { presented.restore() }
+        let notices = SystemNotices()
+        var waiting = ask("kind-waiting", actions: [NoticeAction(id: action("kind-waiting"), title: "Allow")])
+        waiting.kind = .waiting
+        notices.post(waiting)
+        await notices.delivered()
+        let shown = try await presented.presented(waiting.id)
+        #expect(shown.info == ["machine": "m1", "session": "s1"])
+        notices.withdraw(kinds: [.questions, .done])
+        notices.withdraw(kinds: [])
+        await notices.delivered()
+        #expect(await Self.category(offering: action("kind-waiting")) != nil)
+        notices.withdraw([waiting.id])
+        await notices.delivered()
+    }
+
     @Test("a notice withdrawn just after it was posted doesn't come back")
     internal func withdrawnRightAfterThePost() async {
         let notices = SystemNotices()
