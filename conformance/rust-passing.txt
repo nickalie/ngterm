@@ -781,6 +781,7 @@ tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_start_fai
 tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_start_fails_the_pages[end-before-hello]
 tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_start_fails_the_pages[timeout-before-hello]
 tests/protocol/test_page_worker.py::test_a_page_worker_whose_app_quits_during_its_start_ends[hello-after-hang-up]
+tests/protocol/test_page_worker.py::test_a_reload_after_the_engine_ended_fails_again_with_its_reason[hello-on-evaluate]
 tests/protocol/test_recent.py::test_a_parent_entry_reopens_its_companions
 tests/protocol/test_recent.py::test_a_soft_closed_group_is_one_undo
 tests/protocol/test_recent.py::test_list_reports_closed_sessions_newest_first_and_clear_empties_it

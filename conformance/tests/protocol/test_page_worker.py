@@ -209,3 +209,32 @@ def test_a_page_closed_while_its_request_waits_closes(faulty):
     # the late answer leaves the worker serving: a later page still loads
     after = _page(faulty, sid, "after.html", "after")
     assert _page_state(faulty, sid, after, "loaded")["id"] == after
+
+
+def _page_failed_with(sid, page, reason):
+    def failed(tree):
+        (found,) = [entry for entry in find_session(tree, sid).get("htmlOverlays", []) if entry["id"] == page]
+        assert (found["state"], found.get("error")) == ("failed", reason), found
+        return True
+
+    failed.__qualname__ = f"page {page} failed with {reason!r}"
+    return failed
+
+
+@pytest.mark.covers("session.overlay.reload", "field:tree.session.htmlOverlays")
+@pytest.mark.parametrize("faulty", ["hello-on-evaluate"], indirect=True)
+def test_a_reload_after_the_engine_ended_fails_again_with_its_reason(faulty):
+    sid = _new(faulty)
+    page = _page(faulty, sid, "shown.html", "shown")
+    _page_state(faulty, sid, page, "loaded")
+    # a text page's first evaluation ends the engine, and with it every page
+    text = faulty.instance.root / "evaluated.txt"
+    text.write_text("a text page\n", encoding="utf-8")
+    assert_ok(faulty.request("session.overlay.open", _new(faulty), textFile=str(text)))
+    faulty.wait_tree(_page_failed_with(sid, page, ENDED))
+    for args in ({"current": True}, {}):
+        assert assert_ok(faulty.request("session.overlay.reload", sid, **args))["id"] == sid
+        faulty.wait_tree(_page_failed_with(sid, page, ENDED))
+        # no load the reload began is left waiting on the ended engine
+        time.sleep(1)
+        assert _page_failed_with(sid, page, ENDED)(faulty.tree())
