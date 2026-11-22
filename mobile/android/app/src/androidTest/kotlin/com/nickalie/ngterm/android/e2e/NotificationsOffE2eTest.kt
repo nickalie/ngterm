@@ -4,7 +4,9 @@ import android.app.NotificationManager
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Base64
+import android.util.Log
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
@@ -40,10 +42,11 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * Every notification switch turned off in Settings, end to end: with the app in the background, the session's agent
- * sets its status to waiting, sends a notification and asks a question, and none of them posts. The attached
- * session's quiet notification, which Android needs to keep the connection, is the only one up. Then Questions is
- * turned on again, and the question that still waits posts: the events did come, and only the switches held them.
+ * Every notification switch turned off in Settings, end to end: the session's agent asks a question (its sheet, while
+ * the session is on screen), the app goes to the background, and there the agent sets its status to waiting and sends
+ * a notification. None of them posts: the attached session's quiet notification, which Android needs to keep the
+ * connection, is the only one of the agents' and machines' up. Then Questions is turned on again, and the question
+ * that still waits posts: the events did come, and only the switches held them.
  *
  * The machine is the private `ngterm-headless` behind the private `sshd` that `scripts/test-android-e2e.sh` starts;
  * without the script's arguments the test is skipped. No live ngterm.
@@ -82,7 +85,11 @@ class NotificationsOffE2eTest {
             override fun failed(
                 e: Throwable?,
                 description: Description,
-            ) = screenshot("failed")
+            ) {
+                screenshot("failed")
+                Log.e(TAG, "terminal at the failure:\n${terminalText()}")
+                Log.e(TAG, "notifications up: ${runCatching { alertsUp() }.getOrNull()}")
+            }
         }
 
     @get:Rule
@@ -101,17 +108,22 @@ class NotificationsOffE2eTest {
         openANewSession()
 
         // the agent's three signals, a moment after the app goes to the background
-        compose.waitUntil(CONNECT_WAIT_MS) { nodes(terminal()) > 0 }
+        compose.waitUntil(CONNECT_WAIT_MS) { terminalText().isNotBlank() }
+        // with no hardware keyboard, only a tap gives the terminal the focus that the typed keys need
         compose.onNode(terminal()).performClick()
         compose.waitForIdle()
-        shell("input text '$SIGNALS'")
+        shell("input text $SIGNALS")
         shell("input keyevent KEYCODE_ENTER")
-        shell("input keyevent KEYCODE_HOME")
 
-        // the question reaches the app (it waits for its answer) while nothing posts
+        // the question opens on screen, as its sheet; then the app goes to the background, where it would post
         val asks = graph().asks
         compose.waitUntil(CONNECT_WAIT_MS) { asks.open.value.isNotEmpty() }
+        shell("input keyevent KEYCODE_HOME")
+        // the test rule's clock moves only when the test waits for it: then the app sees it left the screen
+        compose.waitUntil(CONNECT_WAIT_MS) { asks.onScreen.value == null }
         Thread.sleep(SETTLE_MS)
+        compose.waitForIdle()
+        Log.i(TAG, "notifications up in the background: ${manager().activeNotifications.map { it.tag }}")
         assertEquals("notifications up with every switch off", emptyList<String>(), alertsUp())
         assertTrue("the attached session's notification is down", LINK_NOTIFICATION_ID in manager().activeIds())
 
@@ -174,13 +186,23 @@ class NotificationsOffE2eTest {
 
     private fun NotificationManager.activeIds() = activeNotifications.map { it.id }
 
-    // the tags of the app's notifications up, the attached session's one aside
+    // the tags of the agents' and machines' notifications up (the GitHub build's update notice has its own switch)
     private fun alertsUp(): List<String> =
-        manager().activeNotifications.filter { it.id != LINK_NOTIFICATION_ID }.map { it.tag.orEmpty() }
+        manager().activeNotifications.mapNotNull { it.tag }.filter { tag -> ALERT_TAGS.any { tag.startsWith(it) } }
 
     private fun nodes(matcher: SemanticsMatcher): Int = compose.onAllNodes(matcher).fetchSemanticsNodes().size
 
     private fun terminal(): SemanticsMatcher = hasContentDescription(text(R.string.terminal_description))
+
+    private fun terminalText(): String =
+        runCatching {
+            compose
+                .onAllNodes(terminal())
+                .fetchSemanticsNodes()
+                .mapNotNull { it.config.getOrNull(SemanticsProperties.Text) }
+                .flatten()
+                .joinToString("\n") { it.text }
+        }.getOrDefault("")
 
     private fun awaitText(text: String) = compose.waitUntil(CONNECT_WAIT_MS) { nodes(hasText(text)) > 0 }
 
@@ -197,6 +219,8 @@ class NotificationsOffE2eTest {
             .use { it.readText() }
 
     private companion object {
+        const val TAG = "QaE2e"
+
         /** The instrumentation arguments the script passes: the host, the machine's port, the user and key. */
         const val HOST = "e2eHost"
         const val PORT = "e2ePort"
@@ -206,10 +230,15 @@ class NotificationsOffE2eTest {
         const val MACHINE = "qa-quiet"
         const val SESSION = "qa-quiet-work"
 
-        /** Typed into the session's shell (`%s` is a space to `input text`): waiting, a notification, a question. */
+        /**
+         * Typed into the session's shell (fish; `%s` is a space to `input text`): a question at once, and once the app
+         * is in the background, waiting and a notification; each names this session, as the origin's active one is
+         * another.
+         */
         const val SIGNALS =
-            "sleep%s4;ngtermctl%ssession%sstatus%sblocked;ngtermctl%snotify%sqaoffbody%s--title%sQaOff;" +
-                "ngtermctl%sask%sopen%sQaOffQuestion%s--button%syes%s--button%sno"
+            "begin;sleep%s6;ngtermctl%ssession%sstatus%sblocked;" +
+                "ngtermctl%snotify%sqaoffbody%s--title%sQaOff%s--target%s\$NGTERM_SESSION_ID;end%s&;" +
+                "ngtermctl%sask%sopen%sQaOffQuestion%s--button%syes%s--button%sno%s--target%s\$NGTERM_SESSION_ID"
 
         val SWITCHES =
             listOf(
@@ -222,10 +251,12 @@ class NotificationsOffE2eTest {
 
         val TOGGLE = SemanticsProperties.ToggleableState
 
+        val ALERT_TAGS = listOf("ask:", "status:", "notice:", "lost:")
+
         const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
         const val CONNECT_WAIT_MS = 60_000L
 
         // how long the status and the notice have to post, had a switch let them
-        const val SETTLE_MS = 5_000L
+        const val SETTLE_MS = 12_000L
     }
 }
