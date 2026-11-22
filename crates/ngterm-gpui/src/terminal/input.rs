@@ -809,10 +809,14 @@ pub fn chord(stroke: &KeyStroke) -> Option<Chord> {
 }
 
 /// The chord a press with Shift spells by the symbol Shift types on its key (`cmd+shift+=` as `cmd++` on a US
-/// layout), as `AppKit` matches a menu key equivalent; `None` for a letter, or where Shift types the base key itself.
+/// layout), as `AppKit` matches a menu key equivalent; `None` for a letter, where Shift types the base key itself, or
+/// where the layout's Command table puts another key there, as the symbol then comes from a different layer.
 #[must_use]
 pub fn shifted_symbol_chord(stroke: &KeyStroke, chord: &Chord) -> Option<Chord> {
     if !chord.mods.contains(Modifiers::SHIFT) || chord.mods.contains(Modifiers::OPTION) {
+        return None;
+    }
+    if stroke.command.is_some_and(|command| Some(command) != stroke.unshifted) {
         return None;
     }
     let mut chars = stroke.text.chars();

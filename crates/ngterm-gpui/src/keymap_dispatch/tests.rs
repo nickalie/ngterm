@@ -92,11 +92,16 @@ fn a_shifted_symbol_press_fires_the_menu_chord_of_the_symbol() {
         Press::Fired(Fired::Builtin(BuiltinAction::ToggleSidebar))
     );
 
-    let mut router = load("");
-    let letter = shifted("cmd-shift-w", "W");
-    assert_eq!(router.press(&letter, now, false), Press::Passed, "not cmd+w");
-    let with_option = shifted("cmd-alt-shift-=", "+");
-    assert_eq!(router.press(&with_option, now, false), Press::Passed);
+    let mut router = load("map cmd+opt+_ toggle_sidebar\n");
+    let digit = shifted("cmd-shift-[", "0");
+    assert_eq!(router.press(&digit, now, false), Press::Passed, "not cmd+0");
+    let with_option = shifted("cmd-alt-shift--", "_");
+    assert_eq!(router.press(&with_option, now, false), Press::Passed, "not cmd+opt+_");
+
+    let mut command_layer = shifted("cmd-shift-]", "+");
+    command_layer.unshifted = Some('=');
+    command_layer.command = Some(']');
+    assert_eq!(router.press(&command_layer, now, false), Press::Passed, "not cmd++");
 }
 
 #[test]

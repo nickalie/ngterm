@@ -251,8 +251,8 @@ and how this build does it where the OS matters:
   session's row menu, agent status in the session pickers and in `pick` items.
 - Default keys: macOS ships upstream's ⌘ table, in the menus too. Linux and Windows ship a Ctrl+Shift table, because
   desktop shells take Super there (`ngterm-core` `keymap::ShippedDefaults::for_os`). A `keymap.conf` line overrides
-  either table. On macOS, a ⌘ default whose chord the earlier Ctrl+Shift table left free gives way to an existing
-  binding of that chord, as a new default does. A menu chord on a shifted symbol fires as `AppKit` matches it: ⌘+ also
+  either table. On macOS, each default whose chord differs from the one the earlier Ctrl+Shift table gave that action
+  gives way to an existing binding of that chord, as a new default does. A menu chord on a shifted symbol fires as `AppKit` matches it: ⌘+ also
   from Shift+⌘= on a US layout.
 - `version` reports the installed build beside the running one (`result.installed`, an `installed:` line when they
   differ): the staged `share/ngterm/app-BUILD`, or the `Info.plist` inside a macOS app bundle.
