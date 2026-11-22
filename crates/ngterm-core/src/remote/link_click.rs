@@ -264,6 +264,9 @@ impl Core {
         let cwd = self
             .forwarded_click_cwd(session, click.pane)
             .ok_or(RemoteLinkRefusal::PaneNotAttached)?;
+        if link_policy::names_foreign_absolute_path(&click.raw) {
+            return Err(RemoteLinkRefusal::NotFound);
+        }
         let origin = ClickOrigin::Pane(session);
         let candidates = link_policy::locations(&click.raw, origin, Some(&cwd));
         let route = link_policy::resolved_route(&click.raw, &candidates, click.mode, origin, exists);

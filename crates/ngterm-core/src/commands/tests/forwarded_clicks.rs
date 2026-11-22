@@ -159,13 +159,15 @@ fn the_page_size_follows_the_mode_the_click_carried() {
     }
 }
 
-/// Upstream's `testAClickThatNamesNoPageIsRefusedOnceAndOpensNothing` and `anUnknownPaneOrSessionNamesNothing`: a missing file, a relative path no candidate
+/// Upstream's `testAClickThatNamesNoPageIsRefusedOnceAndOpensNothing` and `anUnknownPaneOrSessionNamesNothing`: a missing file (a POSIX or a drive path on each OS), a relative path no candidate
 /// matched, an unknown pane, a file no page shows, a web link and a busy slot each answer one refusal and open nothing,
 /// here or there.
 #[test]
 fn a_click_the_origin_cannot_open_is_refused_once() {
-    let cases: [(&str, bool, &str); 6] = [
+    let cases: [(&str, bool, &str); 8] = [
         ("/nowhere/gone.md", true, "notFound"),
+        ("C:/nowhere/gone.md", true, "notFound"),
+        ("C:\\nowhere\\gone.md", true, "notFound"),
         ("src/gone.py:3", true, "notFound"),
         ("README.md", false, "paneNotAttached"),
         ("tool.bin", true, "notAPage"),

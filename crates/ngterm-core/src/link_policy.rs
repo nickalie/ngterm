@@ -409,6 +409,12 @@ fn forwards_remotely(raw: &str) -> bool {
         || raw.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
 }
 
+/// Whether `raw` is an absolute path of the other OS only: a POSIX path on Windows, or a drive path elsewhere. This
+/// machine can hold no file by that name.
+pub(crate) fn names_foreign_absolute_path(raw: &str) -> bool {
+    !is_bare_path(raw) && names_absolute_path_elsewhere(raw)
+}
+
 /// Whether `raw` is absolute on some machine, if not on this one: a POSIX path, or a Windows drive path.
 fn names_absolute_path_elsewhere(raw: &str) -> bool {
     let bytes = raw.as_bytes();
