@@ -22,6 +22,16 @@ on:
 permissions:
   contents: read
 
+# The Arch container jobs' Arch Linux Archive snapshot, and the packages their cache holds (the wpe job's comment).
+# Each job's own pacman-archive lists must resolve inside ARCH_PACKAGES, or the job downloads what is missing.
+env:
+  ARCH_SNAPSHOT: "2026/10/14"
+  ARCH_PACKAGES: >-
+    git rustup wpewebkit bubblewrap meson ninja wayland wayland-protocols libxkbcommon libxcb curl xz patch ncurses
+    fontconfig ttf-dejavu procps-ng weston dbus xorg-server-xvfb xorg-xauth mesa vulkan-swrast pixman libinput
+    libevdev libdrm cairo pango libpng hwdata seatd lcms2 python zsh fish at-spi2-core gobject-introspection pkgconf
+    gcc gst-plugins-base gst-plugins-good nodejs jq openssh
+
 concurrency:
   group: linux-${{ github.ref }}
   cancel-in-progress: true
@@ -161,10 +171,14 @@ jobs:
   # gets its user namespaces (without them no web process starts); then the checked-in bindings must equal a
   # regeneration at the pins. Bump ARCH_SNAPSHOT (a day whose extra repo carries the pinned wpewebkit) and the image
   # digest with the WPE_ pins.
-  # archive.archlinux.org stalls now and then, which fails pacman's stall timeout: every sync from the snapshot goes
-  # through pacman-archive (written by the first step; the conformance jobs carry the same one), which downloads
-  # without that timeout, each attempt bounded by `timeout` instead, retries the whole download three times, then
-  # upgrades and installs from the cache.
+  # Every Arch container job starts with the same three steps (YAML anchors). The first writes pacman-archive and the
+  # key of the package cache: the snapshot, the image's installed packages and ARCH_PACKAGES. The second restores the
+  # cache: the package files and the sync dbs of ARCH_PACKAGES with the snapshot's upgrade, about 0.26 GB. On a miss
+  # the third downloads them, and this job saves them, so a job does not need the archive while the key holds.
+  # archive.archlinux.org stalls now and then, which fails pacman's stall timeout: pacman-archive downloads without
+  # that timeout, each attempt bounded by `timeout` instead, retries the whole download three times, then upgrades and
+  # installs from the cache. The mirror list has the archive's official mirror after the archive; when both fail,
+  # pacman-archive takes the files from that mirror's package pool.
   wpe:
     runs-on: ubuntu-26.04
     timeout-minutes: 90
@@ -174,20 +188,43 @@ jobs:
       options: --privileged
     env:
       CARGO_TERM_COLOR: always
-      ARCH_SNAPSHOT: "2026/10/14"
     steps:
-      - name: system packages from the Arch Linux Archive snapshot
+      - &arch-setup
+        name: pacman-archive and the package cache's key
+        id: arch
         run: |
-          echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
+          for server in https://archive.archlinux.org https://umea.archive.pkgbuild.com; do
+            echo "Server = $server/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch"
+          done > /etc/pacman.d/mirrorlist
           cat > /usr/local/bin/pacman-archive <<'EOF'
           #!/bin/bash
-          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
+          # pacman-archive [--fill] PKG...: the snapshot's upgrade and PKG..., downloaded with retries, then installed from
+          # the cache; --fill syncs the dbs first and installs nothing
           set -u
+          sync=-Suuw
+          fill=
+          if [ "${1:-}" = --fill ]; then
+            sync=-Syyuuw
+            fill=1
+            shift
+          fi
+          pool=https://umea.archive.pkgbuild.com/packages
           for attempt in 1 2 3; do
-            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
+            if timeout --kill-after=1m 15m pacman "$sync" --needed --noconfirm --disable-download-timeout "$@"; then
+              [ -n "$fill" ] && exit 0
               exec pacman -Suu --needed --noconfirm "$@"
             fi
             rm -f /var/lib/pacman/db.lck
+            # the archive's mirror sends its snapshot's package links to archive.org, which has no recent packages
+            # yet: take the files from the mirror's pool (pacman checks each against the snapshot's db)
+            pacman -Suup --needed --print-format '%n %f' "$@" 2>/dev/null | while read -r name file; do
+              case "$file" in *.pkg.tar.*) ;; *) continue ;; esac
+              for f in "$file" "$file.sig"; do
+                [ -f "/var/cache/pacman/pkg/$f" ] && continue
+                timeout 5m curl -fsSL --retry 3 -o "/var/cache/pacman/pkg/$f.part" "$pool/${name:0:1}/$name/$f" &&
+                  mv "/var/cache/pacman/pkg/$f.part" "/var/cache/pacman/pkg/$f"
+              done
+            done
             if [ "$attempt" -lt 3 ]; then
               echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
               sleep 30
@@ -197,7 +234,29 @@ jobs:
           exit 1
           EOF
           chmod +x /usr/local/bin/pacman-archive
-          pacman-archive git wpewebkit bubblewrap rustup
+          snapshot="$(echo "$ARCH_SNAPSHOT" | tr / -)"
+          inputs="$({ pacman -Q; echo "$ARCH_PACKAGES"; } | sha256sum | cut -c1-16)"
+          echo "key=arch-packages-$snapshot-$inputs" >> "$GITHUB_OUTPUT"
+      - &arch-restore
+        uses: actions/cache/restore@v6
+        id: arch-cache
+        with: &arch-cache
+          path: |
+            /var/cache/pacman/pkg
+            /var/lib/pacman/sync
+          key: ${{ steps.arch.outputs.key }}
+      - &arch-fill
+        name: the snapshot's packages, on a cache miss
+        if: steps.arch-cache.outputs.cache-hit != 'true'
+        run: pacman-archive --fill $ARCH_PACKAGES
+      # every ref saves on a miss: a branch reads main's entry first, so it saves only when main has none for the key
+      - name: save the package cache
+        if: steps.arch-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with: *arch-cache
+      - name: system packages from the Arch Linux Archive snapshot
+        run: |
+          pacman-archive git wpewebkit bubblewrap rustup ttf-dejavu
       - uses: actions/checkout@v7
       - name: the snapshot's wpewebkit is the pinned one
         shell: bash
@@ -280,29 +339,12 @@ jobs:
       options: --privileged --init
     env:
       CARGO_TERM_COLOR: always
-      ARCH_SNAPSHOT: "2026/10/14"
     steps:
+      - *arch-setup
+      - *arch-restore
+      - *arch-fill
       - name: system packages from the Arch Linux Archive snapshot
         run: |
-          echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
-          cat > /usr/local/bin/pacman-archive <<'EOF'
-          #!/bin/bash
-          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
-          set -u
-          for attempt in 1 2 3; do
-            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
-              exec pacman -Suu --needed --noconfirm "$@"
-            fi
-            rm -f /var/lib/pacman/db.lck
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
-              sleep 30
-            fi
-          done
-          echo "::error::download from the Arch Linux Archive failed 3 times: $*"
-          exit 1
-          EOF
-          chmod +x /usr/local/bin/pacman-archive
           pacman-archive git rustup wpewebkit bubblewrap \
             meson ninja wayland wayland-protocols libxkbcommon libxcb \
             curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
@@ -509,29 +551,12 @@ jobs:
       options: --privileged --init
     env: &conformance-env
       CARGO_TERM_COLOR: always
-      ARCH_SNAPSHOT: "2026/10/14"
     steps: &conformance-build-steps
+      - *arch-setup
+      - *arch-restore
+      - *arch-fill
       - name: system packages from the Arch Linux Archive snapshot
         run: |
-          echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
-          cat > /usr/local/bin/pacman-archive <<'EOF'
-          #!/bin/bash
-          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
-          set -u
-          for attempt in 1 2 3; do
-            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
-              exec pacman -Suu --needed --noconfirm "$@"
-            fi
-            rm -f /var/lib/pacman/db.lck
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
-              sleep 30
-            fi
-          done
-          echo "::error::download from the Arch Linux Archive failed 3 times: $*"
-          exit 1
-          EOF
-          chmod +x /usr/local/bin/pacman-archive
           pacman-archive git rustup wpewebkit bubblewrap \
             meson ninja wayland wayland-protocols libxkbcommon libxcb \
             curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
@@ -604,29 +629,12 @@ jobs:
       options: --privileged --init
     env:
       CARGO_TERM_COLOR: always
-      ARCH_SNAPSHOT: "2026/10/14"
     steps:
+      - *arch-setup
+      - *arch-restore
+      - *arch-fill
       - name: system packages from the Arch Linux Archive snapshot
         run: |
-          echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
-          cat > /usr/local/bin/pacman-archive <<'EOF'
-          #!/bin/bash
-          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
-          set -u
-          for attempt in 1 2 3; do
-            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
-              exec pacman -Suu --needed --noconfirm "$@"
-            fi
-            rm -f /var/lib/pacman/db.lck
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
-              sleep 30
-            fi
-          done
-          echo "::error::download from the Arch Linux Archive failed 3 times: $*"
-          exit 1
-          EOF
-          chmod +x /usr/local/bin/pacman-archive
           pacman-archive git rustup wpewebkit bubblewrap \
             meson ninja wayland wayland-protocols libxkbcommon libxcb \
             curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
@@ -707,27 +715,11 @@ jobs:
     container: *conformance-container
     env: *conformance-env
     steps: &conformance-steps
+      - *arch-setup
+      - *arch-restore
+      - *arch-fill
       - name: system packages from the Arch Linux Archive snapshot
         run: |
-          echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
-          cat > /usr/local/bin/pacman-archive <<'EOF'
-          #!/bin/bash
-          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
-          set -u
-          for attempt in 1 2 3; do
-            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
-              exec pacman -Suu --needed --noconfirm "$@"
-            fi
-            rm -f /var/lib/pacman/db.lck
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
-              sleep 30
-            fi
-          done
-          echo "::error::download from the Arch Linux Archive failed 3 times: $*"
-          exit 1
-          EOF
-          chmod +x /usr/local/bin/pacman-archive
           pacman-archive git rustup wpewebkit bubblewrap \
             meson ninja wayland wayland-protocols libxkbcommon libxcb \
             curl xz patch ncurses fontconfig ttf-dejavu procps-ng \

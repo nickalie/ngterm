@@ -1748,6 +1748,7 @@ The vendor sizes estimate the budget after the Zig object files leave the cache:
 | cargo `ios` | `ios.yml` `core` | `core-tests`, `ios-release.yml`, `release.yml`'s iOS build | 0.6 GB |
 | vendor `ubuntu-26.04` | `linux.yml` `linux` | `headless-e2e`, `cross-platform.yml`'s Ubuntu leg | about 0.17 GB |
 | vendor `arch` | `linux.yml` `wpe` | the other jobs in its container | about 0.17 GB |
+| pacman `arch-packages` | `linux.yml` `wpe`, on every ref | the other jobs in its container | about 0.26 GB |
 | vendor `windows-2025` | `cross-platform.yml` `crates` | `windows build`, `release.yml`'s Windows build | about 0.18 GB |
 | vendor `macos-26` | `cross-platform.yml` `crates` | | about 0.15 GB |
 | vendor `android` | `android.yml` `app` | `emulator`, `release.yml`'s Android build | about 0.23 GB |
@@ -1756,9 +1757,14 @@ The vendor sizes estimate the budget after the Zig object files leave the cache:
 | the upstream reference | `reference-macos.yml` run by hand on main | its PR runs | one upstream release |
 | the iOS core | `ios.yml` `core` | | 0.05 GB for each |
 
-The new budget is about 8.3 GB, including the finished libraries.
+The new budget is about 8.6 GB, including the finished libraries.
 The exclusions remove about 0.5 GB of Zig object files.
 The first main run supplies the measured vendor sizes.
+
+The pacman cache holds the package files and sync dbs that the Arch container jobs install from the Arch Linux
+Archive snapshot. Its key is the snapshot, the image's packages and the package list, so a job does not need the
+archive while they do not change. A miss downloads from the archive, then from its official mirror. A branch run also
+saves the entry, but only on a miss: it reads main's entry first, so it saves only when main has none for its key.
 
 The saved cargo caches are those that save the most time on each workflow's longest path; the other
 jobs build their dependencies in each run (`conformance build (release)` then takes about as long as the `linux` job its
