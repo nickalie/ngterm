@@ -5,10 +5,12 @@ import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.RemoteAsk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.ConcurrentHashMap
@@ -203,6 +205,9 @@ class Alerts(
     private val statuses = HashMap<SessionKey, Alert.Status>()
     private val lostAlerts = HashMap<String, Alert.Lost>()
 
+    // counts the lost alerts recorded, so a machine detached before its alert was recorded still has it dropped
+    private val lostRecorded = MutableStateFlow(0L)
+
     init {
         connections.listen(::onEvent)
         scope.launch {
@@ -225,8 +230,14 @@ class Alerts(
                     cancelStatus(gone)
                     synchronized(lock) { noticeTags.remove(gone)?.forEach(sink::cancel) }
                 }
-                before.mapTo(HashSet()) { it.machineId }.filter { attached[it].isNullOrEmpty() }.forEach(::dropLost)
                 before = now
+            }
+        }
+        scope.launch {
+            combine(connections.attached, lostRecorded) { _, _ -> }.collect {
+                synchronized(lock) {
+                    lostAlerts.keys.filter { connections.attached.value[it].isNullOrEmpty() }.forEach(::dropLost)
+                }
             }
         }
     }
@@ -326,10 +337,11 @@ class Alerts(
         machineId: String,
         reason: LostReason,
     ) {
-        if (connections.attached.value[machineId].isNullOrEmpty()) return
         val alert = Alert.Lost(machineId, machineName(machineId), reason)
         withKinds { on ->
+            if (connections.attached.value[machineId].isNullOrEmpty()) return@withKinds
             lostAlerts[machineId] = alert
+            lostRecorded.update { it + 1 }
             if (AlertKind.Errors in on) sink.post(alert)
         }
     }

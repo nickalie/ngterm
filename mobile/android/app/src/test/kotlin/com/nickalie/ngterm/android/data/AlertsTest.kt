@@ -39,6 +39,7 @@ class AlertsTest {
     private lateinit var connections: Connections
     private lateinit var asks: Asks
     private val enabled = MutableStateFlow(AlertKind.entries.toSet())
+    private val machines = MutableStateFlow(listOf(testMachine()))
     private val key = SessionKey("m1", "s1")
 
     /** What the alerts did, in order: `post <alert>` or `cancel <tag>`. */
@@ -82,7 +83,7 @@ class AlertsTest {
         connections = Connections(this, { 0L }) { s -> FakeMobileCore(s).also { core = it } }
         asks = Asks(backgroundScope, connections)
         val live = LiveSessions(backgroundScope, connections) { ClipboardWriteStatus.DONE }
-        Alerts(alertsScope, connections, asks, flowOf(listOf(testMachine())), prefs, sink, live.sessions)
+        Alerts(alertsScope, connections, asks, machines, prefs, sink, live.sessions)
         core.sessions["m1"] =
             mutableListOf(fakeSession("s1", name = "docs-site").copy(context = "Rewrite the install guide"))
         connections.connect(testMachine().toCore())
@@ -289,6 +290,53 @@ class AlertsTest {
             enabled.value = AlertKind.entries.toSet()
             settle()
             assertFalse(sink.up(lostTag("m1")))
+        }
+
+    @Test
+    fun aMachineDetachedBeforeItsLostAlertWasSeenStaysDown() =
+        runTest {
+            attached()
+            connections.detach("m1", "s1")
+            settle()
+            // attached, lost and detached again before the alerts look at what is attached
+            connections.attach("m1", "s1")
+            core.emit(MobileEvent.MachineState("m1", MachineState.Unreachable("refused")))
+            connections.detach("m1", "s1")
+            settle()
+            assertFalse(sink.up(lostTag("m1")))
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Errors
+            settle()
+            enabled.value = AlertKind.entries.toSet()
+            settle()
+            assertFalse(sink.up(lostTag("m1")))
+        }
+
+    @Test
+    fun anAlertBroughtBackShowsTheMachinesNameOfNow() =
+        runTest {
+            attached()
+            enabled.value = AlertKind.entries.toSet() - AlertKind.Waiting - AlertKind.Errors
+            settle()
+            core.emit(status("blocked"))
+            core.emit(MobileEvent.MachineState("m1", MachineState.Unreachable("refused")))
+            machines.value = listOf(testMachine(label = "build-02"))
+            settle()
+            enabled.value = AlertKind.entries.toSet()
+            settle()
+            assertEquals(
+                "build-02",
+                sink.posted
+                    .filterIsInstance<Alert.Status>()
+                    .single()
+                    .machine,
+            )
+            assertEquals(
+                "build-02",
+                sink.posted
+                    .filterIsInstance<Alert.Lost>()
+                    .single()
+                    .machine,
+            )
         }
 
     @Test

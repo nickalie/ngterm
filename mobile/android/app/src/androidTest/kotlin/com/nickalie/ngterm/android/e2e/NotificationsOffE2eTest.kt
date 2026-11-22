@@ -31,6 +31,7 @@ import com.nickalie.ngterm.android.platform.LINK_NOTIFICATION_ID
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -46,9 +47,10 @@ import java.util.Collections
 /**
  * Every notification switch turned off in Settings, end to end: the session's agent asks a question (its sheet, while
  * the session is on screen), the app goes to the background, and there the agent sets its status to waiting and sends
- * a notification. The test sees the status and the notification reach the app, and then that none of them posts: the
- * attached session's quiet notification, which Android needs to keep the connection, is the only one of the agents'
- * and machines' up. Then Questions is turned on again, and the question that still waits posts.
+ * a notification. The test sees the status reach the app with the session out of sight, and the notification reach
+ * it, and then that none of them posts: the attached session's quiet notification, which Android needs to keep the
+ * connection, is the only one of the agents' and machines' up. Then Questions is turned on again, and the question
+ * that still waits posts.
  *
  * The machine is the private `ngterm-headless` behind the private `sshd` that `scripts/test-android-e2e.sh` starts;
  * without the script's arguments the test is skipped. No live ngterm.
@@ -109,8 +111,12 @@ class NotificationsOffE2eTest {
         turnEverySwitchOff()
         openANewSession()
         val came = Collections.synchronizedSet(mutableSetOf<String>())
+        val asks = graph().asks
         graph().connections.listen { event ->
-            if (event is MobileEvent.SessionStatus && event.status?.status == "blocked") came += "status"
+            if (event is MobileEvent.SessionStatus && event.status?.status == "blocked") {
+                // on screen, the status is taken down before any switch is read: then it tests nothing
+                came += if (asks.onScreen.value == null) "status" else ON_SCREEN
+            }
             if (event is MobileEvent.Notify) came += "notice"
         }
 
@@ -119,18 +125,16 @@ class NotificationsOffE2eTest {
         // with no hardware keyboard, only a tap gives the terminal the focus that the typed keys need
         compose.onNode(terminal()).performClick()
         compose.waitForIdle()
-        for (line in SIGNALS) {
-            shell("input text $line")
-            shell("input keyevent KEYCODE_ENTER")
-        }
+        awaitShell()
+        SIGNALS.forEach(::type)
 
         // the question opens on screen, as its sheet; then the app goes to the background, where it would post
-        val asks = graph().asks
         compose.waitUntil(CONNECT_WAIT_MS) { asks.open.value.isNotEmpty() }
         shell("input keyevent KEYCODE_HOME")
         // the test rule's clock moves only when the test waits for it: then the app sees it left the screen
         compose.waitUntil(CONNECT_WAIT_MS) { asks.onScreen.value == null }
-        compose.waitUntil(CONNECT_WAIT_MS) { came.containsAll(listOf("status", "notice")) }
+        compose.waitUntil(CONNECT_WAIT_MS) { ON_SCREEN in came || came.containsAll(listOf("status", "notice")) }
+        assertFalse("the status came while its session was on screen", ON_SCREEN in came)
         // a post that a switch let through would land a moment after its event
         Thread.sleep(SETTLE_MS)
         compose.waitForIdle()
@@ -141,6 +145,21 @@ class NotificationsOffE2eTest {
         runBlocking { graph().notificationPrefs.set(AlertKind.Questions, true) }
         compose.waitUntil(CONNECT_WAIT_MS) { alertsUp().any { it.startsWith("ask:") } }
         screenshot("question-on")
+    }
+
+    // fish drops what is typed while it starts, so a line goes only once it answers one
+    private fun awaitShell() {
+        val deadline = System.currentTimeMillis() + CONNECT_WAIT_MS
+        while (READY !in terminalText()) {
+            check(System.currentTimeMillis() < deadline) { "the shell never answered" }
+            type(PING)
+            runCatching { compose.waitUntil(PING_WAIT_MS) { READY in terminalText() } }
+        }
+    }
+
+    private fun type(line: String) {
+        shell("input text $line")
+        shell("input keyevent KEYCODE_ENTER")
     }
 
     private fun turnEverySwitchOff() {
@@ -255,6 +274,10 @@ class NotificationsOffE2eTest {
                 "ngtermctl%sask%sopen%sQaOff%s--button%syes%s--button%sno%s--target%s\$t",
             )
 
+        /** Typed until the shell prints [READY], which the typed line itself does not hold. */
+        const val PING = "string%supper%sqaready"
+        const val READY = "QAREADY"
+
         val SWITCHES =
             listOf(
                 R.string.settings_alert_questions,
@@ -266,11 +289,14 @@ class NotificationsOffE2eTest {
 
         val TOGGLE = SemanticsProperties.ToggleableState
 
+        const val ON_SCREEN = "status on screen"
+
         val ALERT_TAGS = listOf("ask:", "status:", "notice:", "lost:")
 
         const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
         const val CONNECT_WAIT_MS = 60_000L
 
         const val SETTLE_MS = 2_000L
+        const val PING_WAIT_MS = 3_000L
     }
 }
