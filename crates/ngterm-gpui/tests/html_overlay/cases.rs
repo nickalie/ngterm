@@ -1873,7 +1873,7 @@ fn markdown_link_themed(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     })?;
     let accent = [0x00, 0xff, 0x00, 0xff];
     let mut palette = vec![String::new(); 16];
-    palette[4] = "#00ff00".to_owned();
+    "#00ff00".clone_into(&mut palette[4]);
     let colors = html_overlay::TerminalColors {
         background: Some("#102030".to_owned()),
         foreground: Some("#f0f0f0".to_owned()),
@@ -1885,9 +1885,7 @@ fn markdown_link_themed(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         &element,
         |_, width, pixels| {
             close(pixel(pixels, width, 160, 130), BLUE)
-                && pixels
-                    .chunks_exact(4)
-                    .any(|rgba| close(rgba.try_into().unwrap_or_default(), accent))
+                && pixels.as_chunks::<4>().0.iter().any(|&rgba| close(rgba, accent))
         },
     )
 }
