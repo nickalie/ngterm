@@ -755,8 +755,9 @@ impl WindowLibrary {
     /// reached `recent-closed.json` is for the caller holding the persistence to read back
     /// ([`LibraryPersistence::sync_recent_closed`](crate::persist::LibraryPersistence::sync_recent_closed)).
     ///
-    /// A lone companion reopens only under its parent: a live one, else the entry holding the parent (its own, or its
-    /// removed workspace's) is reopened first; with neither, nothing is.
+    /// A lone companion reopens only under its parent's group: a live one, else the entry that `parent_holder` finds
+    /// (the parent's own, its closed group's, its removed workspace's, or the start of a chain of lone-companion
+    /// entries) is reopened first; with none, nothing is.
     pub fn reopen_recent_closed_outcome(&mut self, item: Uuid, into: Option<Uuid>) -> Option<RecentClosedReopen> {
         let entry = self.recent_closed.item(item)?;
         if let Some(parent) = companion_parent(&entry)
@@ -796,28 +797,34 @@ impl WindowLibrary {
     }
 
     /// The entry whose reopen brings `parent` back: one holding it top-level or in its group
-    /// ([`restores_session`]), else `parent`'s own lone-companion entry once a conversion nested it, when its own
-    /// parent is open or held that way. Nesting is one level, so that one hop is enough and a loop of entries naming
-    /// each other their parent holds nothing.
+    /// ([`restores_session`]), else `parent`'s own lone-companion entry once a conversion nested it, when the chain of
+    /// such entries ends at a root that is open or held that way. The reopen walks the chain one hop at a time, and a
+    /// loop of entries naming each other their parent holds nothing.
     fn parent_holder(&self, parent: Uuid) -> Option<Uuid> {
         let items = self.recent_closed.items();
         let held = |session: Uuid| items.iter().find(|candidate| restores_session(candidate, session));
         if let Some(holder) = held(parent) {
             return Some(holder.id);
         }
-        items
-            .iter()
-            .find(|candidate| {
-                companion_parent(candidate).is_some_and(|root| {
-                    root != parent
-                        && candidate
-                            .session
-                            .as_ref()
-                            .is_some_and(|recent| recent.snapshot.id == parent)
-                        && (self.window_with_session_in_tree(root).is_some() || held(root).is_some())
-                })
+        let lone_entry = |session: Uuid| {
+            items.iter().find_map(|candidate| {
+                let root = companion_parent(candidate)?;
+                let own = candidate
+                    .session
+                    .as_ref()
+                    .is_some_and(|recent| recent.snapshot.id == session);
+                (own && root != session).then_some((candidate.id, root))
             })
-            .map(|holder| holder.id)
+        };
+        let (first_hop, mut root) = lone_entry(parent)?;
+        let mut visited = HashSet::from([parent]);
+        while self.window_with_session_in_tree(root).is_none() && held(root).is_none() {
+            if !visited.insert(root) {
+                return None;
+            }
+            root = lone_entry(root)?.1;
+        }
+        Some(first_hop)
     }
 
     /// The open window whose tree holds `session`.

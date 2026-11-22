@@ -402,3 +402,20 @@ fn a_companion_of_a_converted_session_in_a_removed_workspace_reopens_that_worksp
 
     c.assert_both_under_the_fresh_parent();
 }
+
+#[test]
+fn a_companion_reopens_through_a_chain_of_closed_converted_parents() {
+    let mut c = ConvertedAfterClose::new();
+    let (task, fresh) = (c.task, c.fresh);
+    c.store_mut().close_session(task);
+    let outer = convert(c.store_mut(), fresh);
+    c.store_mut().close_session(fresh);
+    assert!(!c.library.recent_closed_item_lacks_parent(c.entry().id));
+
+    c.reopen_entry();
+
+    for id in [fresh, task, c.closed] {
+        assert_eq!(parent_of(c.store(), id), Some(outer), "{id}");
+    }
+    assert!(c.library.recent_closed_items().is_empty());
+}

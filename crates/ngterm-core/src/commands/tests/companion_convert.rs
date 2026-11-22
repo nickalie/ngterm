@@ -11,7 +11,8 @@ use super::{Fixture, UNKNOWN, args, failure, wire};
 use crate::app_actions::{ActionEffect, ActionOrigin};
 use crate::hud::HudSpec;
 use crate::keymap::BuiltinAction;
-use crate::model::{CompanionOptions, NewSession};
+use crate::model::{CompanionOptions, NewSession, SessionContent};
+use crate::palette_catalog::PaletteCommand;
 use crate::sidebar_actions::SidebarAction;
 
 fn convert(fixture: &mut Fixture, target: &str, args: Args) -> Response {
@@ -177,4 +178,42 @@ fn the_row_menus_convert_nests_the_row_under_a_fresh_parent() {
     assert_eq!(fixture.order(fixture.workspace), [selected, fresh, row]);
     assert_eq!(fixture.selected(), Some(row));
     assert!(fixture.core.pane_focus_requested(row));
+}
+
+/// The palette row and the File menu item read the window's live facts: a local top-level session converts, a page
+/// included; a companion and a remote row do not.
+#[test]
+fn the_window_facts_enable_convert_only_on_a_local_top_level_session() {
+    let mut fixture = Fixture::new(0);
+    let parent = fixture.sessions[0];
+    let child = fixture
+        .store_mut()
+        .unwrap()
+        .add_companion(parent, CompanionOptions::default(), "/home/u")
+        .unwrap();
+    let remote = remote_row(&mut fixture);
+    let workspace = fixture.workspace;
+    let page = fixture
+        .store_mut()
+        .unwrap()
+        .add_session(
+            workspace,
+            NewSession {
+                content: SessionContent::Page,
+                select: false,
+                ..NewSession::at_cwd("/tmp")
+            },
+        )
+        .unwrap();
+    let window = fixture.window;
+
+    for (session, enabled) in [(parent, true), (page, true), (child, false), (remote, false)] {
+        fixture.store_mut().unwrap().select_session(Some(session));
+        let context = fixture.core.palette_context(window);
+        assert_eq!(
+            PaletteCommand::ConvertCompanion.is_enabled(&context),
+            enabled,
+            "{session}"
+        );
+    }
 }

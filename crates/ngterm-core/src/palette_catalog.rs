@@ -226,7 +226,6 @@ impl PaletteCommand {
                 | Self::FocusLeftPane
                 | Self::FocusRightPane
                 | Self::DuplicateCompanion
-                | Self::ConvertCompanion
         )
     }
 
@@ -900,17 +899,14 @@ mod tests {
         assert_eq!(command.title_default(), "Duplicate as Companion");
     }
 
-    /// Upstream's `convertToCompanionNeedsALocalTopLevelTerminal`.
+    /// Upstream's `convertToCompanionNeedsALocalTopLevelSession`.
     #[test]
-    fn convert_to_companion_needs_a_local_top_level_terminal() {
+    fn convert_to_companion_needs_a_local_top_level_session() {
         let command = PaletteCommand::ConvertCompanion;
         assert!(command.is_enabled(&ctx(F::HAS_ACTIVE_SESSION)));
         assert!(!command.is_enabled(&ctx(F::empty())));
-        for refusing in [
-            F::ACTIVE_SESSION_IS_COMPANION,
-            F::ACTIVE_SESSION_IS_REMOTE,
-            F::ACTIVE_SESSION_IS_PAGE,
-        ] {
+        assert!(command.is_enabled(&ctx(F::HAS_ACTIVE_SESSION | F::ACTIVE_SESSION_IS_PAGE)));
+        for refusing in [F::ACTIVE_SESSION_IS_COMPANION, F::ACTIVE_SESSION_IS_REMOTE] {
             assert!(
                 !command.is_enabled(&ctx(F::HAS_ACTIVE_SESSION | refusing)),
                 "{refusing:?}"

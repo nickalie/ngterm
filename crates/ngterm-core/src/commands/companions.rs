@@ -14,14 +14,14 @@ use std::time::Duration;
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, Request};
 
-use super::{Outcome, args_of, session_store, with_id};
+use super::{Outcome, args_of, not_found, session_store, with_id};
 use crate::Core;
 use crate::dispatch::Dispatched;
-use crate::error::ControlError;
+use crate::error::{ControlError, Noun};
 use crate::model::{CompanionOptions, CompanionRefusal};
 use crate::pane_env::uuid_string;
 use crate::remote::companions::RemoteCompanionRequest;
-use crate::resolve::Resolver;
+use crate::resolve::{ACTIVE, Resolver};
 
 /// The refusal of a session move that would take a companion out of its group.
 pub(crate) const COMPANION_MOVE_ERROR: &str = "a companion moves only among its siblings";
@@ -133,8 +133,11 @@ fn new(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
 /// session takes the keyboard when its window is the active one.
 fn convert(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
-    let (store, id) = session_store(core, target, args.window.as_deref())?;
-    let parent = store
+    let id = resolved.session;
+    let parent = core
+        .library_mut()
+        .store_mut(resolved.window)
+        .ok_or_else(|| not_found(Noun::Session, target.unwrap_or(ACTIVE)))?
         .convert_to_companion(id)
         .map_err(|refusal| ControlError::rejected(refusal.message()))?;
     if core.library().active_window_id() == Some(resolved.window) {

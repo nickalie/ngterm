@@ -286,7 +286,9 @@ and how this build does it where the OS matters:
   collapse|expand` folds the group, a companion moves only among its siblings, closes with its parent's group and
   comes back with it from close undo and Open Recent, and a parent whose shell exits restarts it while it has
   companions; New Companion and Duplicate as Companion sit on the row menu, in the File menu and in the palette, and
-  flat lists label a companion `parent › child`. `session overlay open --companion` opens a page as a companion row
+  flat lists label a companion `parent › child`. Convert to Companion (v0.42): `session convert --companion` nests a
+  running session and its companions under a fresh login shell in its slot; it is on the row menu, the File menu and
+  the palette, with the keyless `convert_companion` action. `session overlay open --companion` opens a page as a companion row
   (WPE WebKit on Linux, WKWebView on macOS, WebView2 on Windows). `session duplicate --companion` re-runs the source pane's foreground
   program, read from the process table: `/proc/<pid>/exe` and `environ` on Linux, `proc_pidpath` and `KERN_PROCARGS2`
   on macOS, `QueryFullProcessImageNameW` and the process's environment block on Windows. Recognized identity
