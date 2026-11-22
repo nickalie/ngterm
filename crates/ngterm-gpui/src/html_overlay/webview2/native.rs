@@ -1329,9 +1329,10 @@ fn host_window() -> Result<isize, String> {
     Ok(window)
 }
 
-/// Makes the anchor beside page web view `native` once its first load started, since making one waits on `WebView2`
-/// (over a second on CI for the saved store's first): the saved store's for a page on it, else one that only keeps the
-/// browser, unless an anchor already does. Its in-memory profile's name is a page's, so its folder is swept with theirs.
+/// Makes the anchor beside page web view `native`, never before its first load started, since making one waits on
+/// `WebView2` (over a second on CI for the saved store's first): the saved store's for a page on it, else one that only
+/// keeps the browser, unless an anchor already does. Its in-memory profile's name is a page's, so its folder is swept
+/// with theirs.
 fn hold_profile(store: &Store, native: &Native) {
     let keeper = store::page_profile(uuid::Uuid::nil());
     let profile = if store.private { &keeper } else { &store.profile };
