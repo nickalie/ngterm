@@ -4,8 +4,8 @@
 # checksum (a file that drifted on the Mac is copied again), the removal of what the tree lost, the lock (held for
 # the command, its wait bounded), the time limit, the exit status, the logs and the cleanup. It also tests the iOS
 # build lock under an outer lockf (lib/native.sh), the core cache (lib/ios-core-cache.sh), the record of a test-plan
-# build (lib/native.sh) and the wallpaper cache bound (lib/ios-sim-cache.sh). Needs rsync, flock, perl, python3, git
-# and cargo.
+# build (lib/native.sh), the wallpaper cache bound (lib/ios-sim-cache.sh) and the removal of a simulator's hardware
+# keyboard state (lib/native.sh, over a stand-in simctl). Needs rsync, flock, perl, python3, git and cargo.
 #
 # Usage: scripts/test-ios-mac-run.sh
 # shellcheck disable=SC2016,SC2034 # check() takes its condition as text and evaluates it later, with the variables it reads
@@ -547,6 +547,104 @@ check "a bound with a leading zero is a decimal number" \
     grep -q "simulator PHONE: wallpaper cache 0 MiB, bound 8 MiB" "$err"'
 run bash "$sim_cache_call" ios_sim_cache_bound ngterm-phone "$runtime" 1234567890 <"$work/devices.json"
 check "a bound of more than 9 digits fails" '((status == 1)) && [[ "$(cache_dirs_of PHONE)" == 2 ]]'
+
+# --- a simulator's hardware keyboard state (ios_sim_forget_hardware_keyboard, lib/native.sh) ------------------------
+
+kb_sims="$work/KeyboardDevices"
+kb_bin="$work/kb-bin"
+mkdir -p "$kb_bin"
+printf '#!/usr/bin/env bash\n[[ "$*" == "-f simctl" ]] && echo %q\n' "$kb_bin/simctl" >"$kb_bin/xcrun"
+cat >"$kb_bin/simctl" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  list) cat "$FAKE_SIMCTL_DEVICES" ;;
+  shutdown)
+    echo "shutdown $2" >>"$FAKE_SIMCTL_LOG"
+    exit "${FAKE_SIMCTL_SHUTDOWN_STATUS:-0}"
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$kb_bin/xcrun" "$kb_bin/simctl"
+kb_prefs() { printf '%s\n' "$kb_sims/$1/data/Library/Preferences/com.apple.keyboard.preferences.plist"; }
+# A simulator $1 whose keyboard preferences hold both hardware keyboard keys and two others, in the format $2 (binary
+# or xml).
+make_kb_sim() {
+  mkdir -p "$kb_sims/$1/data/Library/Preferences"
+  python3 -I -c '
+import plistlib, sys
+prefs = {"AutomaticMinimizationEnabled": True, "HardwareKeyboardLastSeen": True,
+         "KeyboardHardwareKeyboardsSeen": [33], "DidShowContinuousPathIntroduction": True}
+fmt = plistlib.FMT_BINARY if sys.argv[2] == "binary" else plistlib.FMT_XML
+with open(sys.argv[1], "wb") as file:
+    plistlib.dump(prefs, file, fmt=fmt)' "$(kb_prefs "$1")" "$2"
+}
+# The keys of the property list $1, sorted, and its format, on one line.
+plist_state() {
+  python3 -I -c '
+import plistlib, sys
+raw = open(sys.argv[1], "rb").read()
+print(" ".join(sorted(plistlib.loads(raw))), "binary" if raw.startswith(b"bplist") else "xml")' "$1"
+}
+kb_state() { plist_state "$(kb_prefs "$1")"; }
+kb_device() { printf '{"name": "%s", "udid": "%s", "state": "%s", "dataPath": "%s"}' "$1" "$2" "$3" "$4"; }
+# The listing: ngterm-phone is the simulator $1 in the state $2, beside one of another name, one of the same name on
+# another runtime and one whose data path is not <udid>/data.
+kb_list() {
+  printf '{"devices": {"%s": [%s, %s, %s], "%s": [%s]}}' "$runtime" \
+    "$(kb_device ngterm-phone "$1" "$2" "$kb_sims/$1/data")" \
+    "$(kb_device ngterm-other OTHERNAME Shutdown "$kb_sims/OTHERNAME/data")" \
+    "$(kb_device ngterm-odd ODD Shutdown "$kb_sims/ODD")" \
+    com.apple.CoreSimulator.SimRuntime.iOS-26-0 \
+    "$(kb_device ngterm-phone OTHERRUNTIME Shutdown "$kb_sims/OTHERRUNTIME/data")" >"$work/kb-devices.json"
+}
+kb_call="$work/kb-call.sh"
+printf 'source %q\nIOS_SIMULATOR_RUNTIME=27.0\n"$@"\n' "$native" >"$kb_call"
+# Runs ios_sim_forget_hardware_keyboard "$kb_name" over the stand-in simctl, with the environment $@.
+kb_run() {
+  : >"$work/kb-simctl.log"
+  run env PATH="$kb_bin:$PATH" FAKE_SIMCTL_DEVICES="$work/kb-devices.json" FAKE_SIMCTL_LOG="$work/kb-simctl.log" \
+    "$@" bash "$kb_call" ios_sim_forget_hardware_keyboard "$kb_name"
+}
+kb_left="DidShowContinuousPathIntroduction KeyboardHardwareKeyboardsSeen"
+kb_all="AutomaticMinimizationEnabled $kb_left HardwareKeyboardLastSeen"
+kb_all="$(tr ' ' '\n' <<<"$kb_all" | sort | tr '\n' ' ' | sed 's/ $//')"
+make_kb_sim PHONEKB binary
+make_kb_sim OTHERNAME binary
+make_kb_sim OTHERRUNTIME binary
+mkdir -p "$kb_sims/ODD/Library/Preferences"
+odd_prefs="$kb_sims/ODD/Library/Preferences/com.apple.keyboard.preferences.plist"
+cp "$(kb_prefs OTHERNAME)" "$odd_prefs"
+kb_list PHONEKB Shutdown
+kb_name=ngterm-phone
+kb_run
+check "a shut-down simulator loses both hardware keyboard keys, keeps the others and stays shut down" \
+  '((status == 0)) && [[ "$(kb_state PHONEKB)" == "$kb_left binary" && ! -s "$work/kb-simctl.log" ]]' || cat "$err" >&2
+check "a simulator of another name or on another runtime keeps its keys" \
+  '[[ "$(kb_state OTHERNAME)" == "$kb_all binary" && "$(kb_state OTHERRUNTIME)" == "$kb_all binary" ]]'
+kb_run
+check "a second run finds nothing to remove" '((status == 0)) && [[ "$(kb_state PHONEKB)" == "$kb_left binary" ]]'
+make_kb_sim BOOTEDKB xml
+kb_list BOOTEDKB Booted
+kb_run
+check "a booted simulator is shut down first, and its XML file stays XML" \
+  '((status == 0)) && [[ "$(cat "$work/kb-simctl.log")" == "shutdown BOOTEDKB" ]] &&
+    [[ "$(kb_state BOOTEDKB)" == "$kb_left xml" ]]' || cat "$err" >&2
+make_kb_sim BOOTEDKB xml
+kb_run FAKE_SIMCTL_SHUTDOWN_STATUS=1
+check "a shutdown that fails fails the removal, and the keys stay" \
+  '((status == 1)) && [[ "$(kb_state BOOTEDKB)" == "$kb_all xml" ]]'
+kb_list NEVERBOOTED Shutdown
+kb_run
+check "a simulator with no keyboard preferences yet is no failure" \
+  '((status == 0)) && [[ ! -e "$kb_sims/NEVERBOOTED" ]]' || cat "$err" >&2
+kb_name=ngterm-missing
+kb_run
+check "no simulator of the name is no failure" '((status == 0)) && [[ ! -s "$work/kb-simctl.log" ]]'
+kb_name=ngterm-odd
+kb_run
+check "a data path that is not <udid>/data is left alone" \
+  '((status == 0)) && [[ "$(plist_state "$odd_prefs")" == "$kb_all binary" ]]'
 
 if ((failures)); then
   echo "$failures check(s) failed" >&2

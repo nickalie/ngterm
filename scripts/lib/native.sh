@@ -74,6 +74,44 @@ simctl_bounded() {
   bounded "$limit" "$simctl" "$@"
 }
 
+# Reads `simctl list -j devices` on stdin and prints "<udid>\t<state>\t<dataPath>" for each simulator named
+# $IOS_SIM_NAME on the runtime $IOS_SIM_RUNTIME (a simctl runtime identifier), whose dataPath is <a dir>/<its udid>/data.
+IOS_SIM_DEVICES_PY='
+import json
+import os
+import sys
+
+name = os.environ["IOS_SIM_NAME"]
+runtime = os.environ["IOS_SIM_RUNTIME"]
+for device in json.load(sys.stdin).get("devices", {}).get(runtime, []):
+    udid = device.get("udid", "")
+    data = device.get("dataPath", "")
+    if device.get("name") != name or not udid or "\t" in data or "\n" in data:
+        continue
+    if not os.path.isabs(data) or os.path.basename(os.path.dirname(data)) != udid or os.path.basename(data) != "data":
+        continue
+    print(udid + "\t" + device.get("state", "") + "\t" + data)
+'
+
+# Removes the keys $2... from the property list $1 and keeps its format (binary or XML). A file without them stays
+# as it is.
+IOS_SIM_PLIST_REMOVE_PY='
+import os
+import plistlib
+import sys
+
+path = sys.argv[1]
+with open(path, "rb") as file:
+    raw = file.read()
+prefs = plistlib.loads(raw)
+removed = [key for key in sys.argv[2:] if prefs.pop(key, None) is not None]
+if removed:
+    fmt = plistlib.FMT_BINARY if raw.startswith(b"bplist") else plistlib.FMT_XML
+    with open(path + ".ngterm-new", "wb") as file:
+        plistlib.dump(prefs, file, fmt=fmt)
+    os.replace(path + ".ngterm-new", path)
+'
+
 # Takes from the simulator named $1 (on the pinned iOS runtime) what its keyboard kept of a hardware keyboard, before
 # its boot. A hardware key event (XCUITest's typeKey) makes the system write AutomaticMinimizationEnabled and
 # HardwareKeyboardLastSeen. From the next boot on, AutomaticMinimizationEnabled keeps each app's soft keyboard below
@@ -82,26 +120,19 @@ simctl_bounded() {
 # removed from the shut-down simulator's file, as a new simulator has neither, and a booted simulator is shut down
 # first. A simulator that doesn't exist yet, or never booted, has no such file.
 ios_sim_forget_hardware_keyboard() {
-  local devices udid state data prefs key
+  local devices udid state data prefs
   devices="$(simctl_bounded "$SIMCTL_SECONDS" list -j devices)" || return 1
-  IFS=$'\t' read -r udid state data < <(python3 -I -c '
-import json, sys
-runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + sys.argv[2].replace(".", "-")
-for device in json.load(sys.stdin).get("devices", {}).get(runtime, []):
-    if device.get("name") == sys.argv[1]:
-        print(device["udid"] + "\t" + device.get("state", "") + "\t" + device.get("dataPath", ""))
-        break' "$1" "$IOS_SIMULATOR_RUNTIME" <<<"$devices") || true
-  [[ -n "${udid:-}" ]] || return 0
-  if [[ "$state" != Shutdown ]]; then
-    simctl_bounded "$SIMCTL_SECONDS" shutdown "$udid" || return 1
-  fi
-  prefs="$data/Library/Preferences/com.apple.keyboard.preferences.plist"
-  [[ -f "$prefs" ]] || return 0
-  for key in AutomaticMinimizationEnabled HardwareKeyboardLastSeen; do
-    if plutil -extract "$key" raw "$prefs" >/dev/null 2>&1; then
-      plutil -remove "$key" "$prefs" || return 1
+  devices="$(IOS_SIM_NAME="$1" IOS_SIM_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-${IOS_SIMULATOR_RUNTIME//./-}" \
+    python3 -I -c "$IOS_SIM_DEVICES_PY" <<<"$devices")" || return 1
+  while IFS=$'\t' read -r udid state data; do
+    [[ -n "$udid" ]] || continue
+    if [[ "$state" != Shutdown ]]; then
+      simctl_bounded "$SIMCTL_SECONDS" shutdown "$udid" || return 1
     fi
-  done
+    prefs="$data/Library/Preferences/com.apple.keyboard.preferences.plist"
+    [[ -f "$prefs" ]] || continue
+    python3 -I -c "$IOS_SIM_PLIST_REMOVE_PY" "$prefs" AutomaticMinimizationEnabled HardwareKeyboardLastSeen || return 1
+  done <<<"$devices"
 }
 
 # Tells the keyboard of the booted simulator $1 that its slide-to-type introduction was shown. A new simulator shows

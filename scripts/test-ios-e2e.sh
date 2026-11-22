@@ -317,11 +317,13 @@ MACHINE=(TEST_RUNNER_IOS_E2E_HOST=127.0.0.1 "TEST_RUNNER_IOS_E2E_PORT=$PORT" "TE
   "TEST_RUNNER_IOS_E2E_FINGERPRINT=$FINGERPRINT")
 
 status=0
+# the keyboard as on a new simulator before its first boot here (lib/native.sh): nothing kept of a hardware keyboard.
+# Once is enough: the e2e tests type no hardware key, so the simulator stays booted from one test to the next.
+ios_sim_forget_hardware_keyboard "$NAME" || die "couldn't clear simulator $NAME's hardware keyboard state"
 for test in "${TESTS[@]}"; do
   echo "→ $test on $NAME" >&2
-  # a fresh install: booted first, so the removal and the keychain reset reach the device; the keyboard as on a new
-  # simulator (lib/native.sh): nothing kept of a hardware keyboard before the boot, the slide-to-type introduction shown
-  ios_sim_forget_hardware_keyboard "$NAME" || die "couldn't clear simulator $NAME's hardware keyboard state"
+  # a fresh install: booted first, so the removal and the keychain reset reach the device; the keyboard's
+  # slide-to-type introduction marked as shown (it would cover the keys a test taps)
   UDID="$("$NATIVE_ROOT/scripts/setup-ios.sh" --simulator "$NAME")" ||
     die "the $NAME simulator on iOS $IOS_SIMULATOR_RUNTIME is not ready (see above)"
   TCC_DB="$(simctl_bounded "$SIMCTL_SECONDS" list devices -j | python3 -I -c '

@@ -12,25 +12,6 @@
 # mv, in its own parent) and then deleted: a boot that starts during the delete finds no cache, never a half-deleted
 # one. A renamed dir that an earlier delete did not complete is deleted too. The caller holds the iOS build lock.
 
-# Reads `simctl list -j devices` on stdin and prints "<udid>\t<state>\t<dataPath>" for each simulator named
-# $IOS_SIM_CACHE_NAME on the runtime $IOS_SIM_CACHE_RUNTIME, whose dataPath is <a dir>/<its udid>/data.
-IOS_SIM_CACHE_DEVICES_PY='
-import json
-import os
-import sys
-
-name = os.environ["IOS_SIM_CACHE_NAME"]
-runtime = os.environ["IOS_SIM_CACHE_RUNTIME"]
-for device in json.load(sys.stdin).get("devices", {}).get(runtime, []):
-    udid = device.get("udid", "")
-    data = device.get("dataPath", "")
-    if device.get("name") != name or not udid or "\t" in data or "\n" in data:
-        continue
-    if not os.path.isabs(data) or os.path.basename(os.path.dirname(data)) != udid or os.path.basename(data) != "data":
-        continue
-    print(udid + "\t" + device.get("state", "") + "\t" + data)
-'
-
 # The name of a cache dir after its rename, in the same parent dir.
 IOS_SIM_CACHE_REMOVED=SnapshotCache.cachedb.ngterm-removed
 
@@ -97,7 +78,7 @@ ios_sim_cache_bound() {
     return 1
   }
   bound_mib=$((10#$bound_mib))
-  devices="$(IOS_SIM_CACHE_NAME="$name" IOS_SIM_CACHE_RUNTIME="$runtime" python3 -c "$IOS_SIM_CACHE_DEVICES_PY")" ||
+  devices="$(IOS_SIM_NAME="$name" IOS_SIM_RUNTIME="$runtime" python3 -c "$IOS_SIM_DEVICES_PY")" ||
     return 1
   while IFS=$'\t' read -r udid state data; do
     [[ -n "$udid" ]] || continue

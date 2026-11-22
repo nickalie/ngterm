@@ -1243,7 +1243,10 @@ scripts/test-ios-e2e.sh [--device phone|tablet] [TEST...]   # the UI tests that 
   build beside a simulator that has just booted. It prints how long the build and each run took. A plan whose build
   fails boots no simulator and counts no tests. Before a simulator boots, a wallpaper cache over
   `BUILD_IOS_SIM_CACHE_MB` (default 1024) is removed while that simulator is shut down (`scripts/lib/ios-sim-cache.sh`):
-  the iOS 27 simulator adds up to about 350 MB of it at each boot and never removes it. The UI
+  the iOS 27 simulator adds up to about 350 MB of it at each boot and never removes it. Before each boot,
+  `build-ios.sh` and `test-ios-e2e.sh` also remove what the simulator kept of a hardware keyboard
+  (`ios_sim_forget_hardware_keyboard` in `scripts/lib/native.sh`): after a test that typed a hardware key, the iOS
+  simulator otherwise keeps the soft keyboard below the screen from its next boot on. The UI
   tests drive the app on a fake core (Debug builds only; `archive` checks the Release build doesn't hold it). The
   app they launch has its UIKit view animations off (`-ngterm-no-animations`, Debug builds only): before each action
   XCTest waits until the app's view animations end, and on the iPad simulator a system animation sometimes never
