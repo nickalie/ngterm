@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use ngterm_core::html::HtmlSource;
-use ngterm_core::link_policy::{self, ClickIntent, ClickOrigin, LinkLocation, Route};
+use ngterm_core::link_policy::{self, ClickIntent, ClickOrigin, Route};
 use ngterm_core::persist::settings::LinkOpenMode;
 use uuid::Uuid;
 
@@ -152,15 +152,13 @@ impl AppState {
         let poster = self.poster.clone();
         let raw = raw.to_owned();
         self.spawn_link_work(move || {
-            let found = first_existing(candidates);
+            let route = link_policy::resolved_route(&raw, &candidates, mode, origin, |path| {
+                Path::new(path).try_exists().is_ok_and(|exists| exists)
+            });
             post(&poster, move |state: &mut AppState| {
                 if state.quitting {
                     return;
                 }
-                let route = found.map_or_else(
-                    || link_policy::route(&raw, mode, origin),
-                    |location| link_policy::route_for_location(&location, mode, origin),
-                );
                 state.carry_out(&raw, route, reveal);
             });
         });
@@ -295,11 +293,4 @@ impl AppState {
             handle.join().expect("a link worker");
         }
     }
-}
-
-/// The first candidate on disk, tried in order (upstream's `exists` over `LinkPolicy.locations`).
-fn first_existing(candidates: Vec<LinkLocation>) -> Option<LinkLocation> {
-    candidates
-        .into_iter()
-        .find(|candidate| Path::new(&candidate.path).try_exists().is_ok_and(|exists| exists))
 }

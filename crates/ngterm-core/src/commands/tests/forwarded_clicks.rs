@@ -522,3 +522,80 @@ fn a_local_session_has_nothing_to_forward() {
     fixture.core.forward_remote_link_click(&click, false);
     assert_eq!(fixture.core.take_status_sounds(), ["default"]);
 }
+
+/// Upstream's `testAHiddenReplicaPageLetsTheClickTravel`: a hidden page the origin handed here is the one a forwarded
+/// page replaces, so the click still travels.
+#[test]
+fn a_hidden_replica_page_lets_the_click_travel() {
+    let mut viewer = presenting(&with_link_click());
+    let session = viewer.session;
+    let store = viewer.fixture.store_mut().unwrap();
+    let source = crate::html::HtmlSource::Markdown {
+        path: "/tmp/remote.md".to_owned(),
+    };
+    let mut replica = crate::html::HtmlOverlay::new(source, crate::html::HtmlPageFlags::default());
+    replica.replica_of = Some(Uuid::new_v4());
+    assert!(store.open_html_overlay(session, None, replica, None, None).is_ok());
+    assert!(
+        store
+            .apply_overlay_visibility(session, None, crate::model::OverlayVisibilityMode::Hide)
+            .is_ok()
+    );
+    viewer.fixture.core.commit();
+    let (left, _) = local_panes(&viewer);
+    forward(&mut viewer, "/repo/README.md", Some(left), false);
+    assert_eq!(viewer.sent("link.click").len(), 1);
+    assert!(viewer.fixture.core.take_status_sounds().is_empty());
+}
+
+/// The second half of upstream's `testAnOriginHudReplacesTheRefusalPanelButNotALaterLocalHud`: a HUD this machine
+/// opens after the refusal panel is no refusal panel, so the origin's next HUD waits behind it.
+#[test]
+fn an_origin_hud_leaves_a_local_hud_opened_after_the_refusal() {
+    let mut viewer = presenting(&with_link_click());
+    viewer.frame(json!({"kind": "link.refused", "link": {"reason": "notFound"}}));
+    assert_eq!(hud_message(&mut viewer), Some("no such file on origin".to_owned()));
+    open_hud(&mut viewer.fixture, viewer.session, "agent");
+    let hud = PresentationHud {
+        spec: HudSpec::new("again"),
+        pane: None,
+        generation: 2,
+        remaining: None,
+    };
+    viewer.frame(json!({"kind": "hud", "hud": serde_json::to_value(hud).unwrap()}));
+    assert_eq!(hud_message(&mut viewer), Some("agent".to_owned()));
+}
+
+/// The cover half of upstream's `testARefusalBeepsUnderAZoomedTerminalOrACover`: a shown program overlay would sit
+/// over the page, so the origin's refusal plays the alert sound and opens no panel; a shown page the origin handed
+/// here would too, so a click under it sends nothing and plays the alert sound.
+#[test]
+fn a_refusal_under_a_shown_cover_plays_the_alert() {
+    let mut viewer = presenting(&with_link_click());
+    let session = viewer.session;
+    let program = crate::model::OverlayProgram {
+        command: "/bin/cat".to_owned(),
+        ..crate::model::OverlayProgram::default()
+    };
+    assert!(viewer.fixture.store_mut().unwrap().open_overlay(session, program));
+    viewer.fixture.core.commit();
+    viewer.frame(json!({"kind": "link.refused", "link": {"reason": "notOpened"}}));
+    assert_eq!(viewer.fixture.core.take_status_sounds(), ["default"]);
+    assert_eq!(hud_message(&mut viewer), None);
+
+    let mut viewer = presenting(&with_link_click());
+    let session = viewer.session;
+    let source = crate::html::HtmlSource::Markdown {
+        path: "/tmp/remote.md".to_owned(),
+    };
+    let mut replica = crate::html::HtmlOverlay::new(source, crate::html::HtmlPageFlags::default());
+    replica.replica_of = Some(Uuid::new_v4());
+    let store = viewer.fixture.store_mut().unwrap();
+    assert!(store.open_html_overlay(session, None, replica, None, None).is_ok());
+    viewer.fixture.core.commit();
+    let (left, _) = local_panes(&viewer);
+    forward(&mut viewer, "/repo/README.md", Some(left), false);
+    assert!(viewer.sent("link.click").is_empty());
+    assert_eq!(viewer.fixture.core.take_status_sounds(), ["default"]);
+    assert_eq!(hud_message(&mut viewer), None);
+}

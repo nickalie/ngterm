@@ -396,7 +396,9 @@ pub fn route_for_hosts<S: BuildHasher>(
 }
 
 /// Whether a link clicked in a remote pane names a file on that pane's machine (upstream's `forwardsRemotely`): a bare
-/// or relative path, or any `file://` link, whose host only that machine can judge.
+/// or relative path, or any `file://` link, whose host only that machine can judge. Unlike upstream, a name with no
+/// separator (`notes.txt`) goes too, as this build's origin joins it to the pane's directory ([`locations()`]), and so
+/// does an absolute path of the other OS.
 fn forwards_remotely(raw: &str) -> bool {
     if raw.chars().any(char::is_control) {
         return false;
@@ -415,7 +417,7 @@ fn names_absolute_path_elsewhere(raw: &str) -> bool {
 }
 
 /// The route of the first of `candidates` that `exists` finds, or of `raw` as typed when none is (upstream's
-/// `resolvedRoute`). The caller keeps it off a thread that must not block, since `exists` touches the file system.
+/// `resolvedRoute`). Each `exists` call can touch the file system, so it can block the thread that calls it.
 #[must_use]
 pub fn resolved_route(
     raw: &str,
@@ -1344,7 +1346,9 @@ mod tests {
     /// Upstream's remote-pane rows of `LinkPolicyTests` (#923, `remotePaneKeepsWebLinksAndIgnoresTheRest`,
     /// `aLocationFromARemotePaneIsIgnored`): a bare, `~/`, relative or `file://` path of any host
     /// goes to the pane's machine as typed, a `.bin` too, which only that machine can judge; a web link keeps its web
-    /// route; a session link still selects; and nothing names a local file the reveal chord could pick.
+    /// route; a session link still selects; and nothing names a local file the reveal chord could pick. This build's
+    /// own rows: a name with no separator (`notes.txt`), which upstream ignores, and the other OS's absolute paths go
+    /// too, as [`forwards_remotely`] says.
     #[test]
     fn a_remote_pane_forwards_its_paths_as_typed() {
         let session = Uuid::new_v4();
