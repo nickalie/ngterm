@@ -4,10 +4,21 @@
 const GoTo = (() => {
   const PLACEHOLDER = "/ search agents and terminals";
   const NO_MATCH = "No matching agents or terminals";
-  const HINTS = "↑↓/j/k rows · ←→ workspace · / search · a/b/w/i/d/t filter · enter open · esc close";
+  const FILTER_KEYS = "a/b/w/i/d/t";
+  const HINTS = `↑↓/j/k rows · ←→ workspace · / search · ${FILTER_KEYS} filter · enter open · esc close`;
   const SEARCH_HINTS = "search type · move ↑↓/ctrl+n/p · open enter · back esc";
   const PAGE = 8;
-  const FILTERS = { b: "blocked", w: "working", i: "idle", d: "done", t: "top level" };
+  const FILTERS = { b: "blocked", w: "working", i: "idle", d: "done", t: "top-level" };
+  const CWD_MAX = 28;
+  const BRANCH_MAX = 20;
+  const AGE_WIDTH = 4;
+  const AGENT_WIDTH = 9;
+  const STATUS_WIDTH = 9;
+  const LABEL_ROOM = 16;
+  const CUT_MIN = 6;
+  const SLACK = 0.5;
+  const CAPS = { branch: BRANCH_MAX, cwd: CWD_MAX, line: Infinity };
+  const WHOLE = { branch: Infinity, cwd: Infinity };
   const AGENTS = ["claude", "codex", "opencode", "gemini", "aider", "amp", "pi", "omp", "crush", "goose",
                   "cursor-agent", "copilot", "qwen", "droid", "kiro-cli", "kimi", "auggie"];
   const STATUS = { active: "working", blocked: "blocked", completed: "done" };
@@ -33,15 +44,141 @@ const GoTo = (() => {
     return null;
   }
 
-  function workspacesOf(tree, branches) {
+  function tildePath(path, home) {
+    const root = home && home !== "/" ? home.replace(/\/+$/, "") : "";
+    if (!root || !path) return path;
+    if (path === root) return "~";
+    return path.startsWith(`${root}/`) ? `~${path.slice(root.length)}` : path;
+  }
+
+  function age(changedAt, now) {
+    if (typeof changedAt !== "number" || !Number.isFinite(changedAt)) return "";
+    const s = Math.max(0, Math.floor(now - changedAt));
+    if (s < 5) return "now";
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h`;
+    return `${Math.floor(s / 86400)}d`;
+  }
+
+  function spans(indices) {
+    const out = [];
+    for (const i of indices) {
+      const last = out[out.length - 1];
+      if (last && last[1] === i) last[1] = i + 1;
+      else out.push([i, i + 1]);
+    }
+    return out;
+  }
+
+  const letters = text => [...String(text)].map(c => c.toLowerCase());
+
+  function fuzzy(text, word) {
+    const s = letters(text);
+    const w = letters(word);
+    if (!w.length) return [];
+    let best = null;
+    for (let from = 0; ;) {
+      let end = -1;
+      for (let i = from, k = 0; i < s.length; i++) {
+        if (s[i] === w[k] && ++k === w.length) {
+          end = i;
+          break;
+        }
+      }
+      if (end < 0) break;
+      const at = [];
+      for (let i = end, k = w.length - 1; k >= 0; i--) {
+        if (s[i] === w[k]) {
+          at.unshift(i);
+          k--;
+        }
+      }
+      if (!best || end - at[0] < best[best.length - 1] - best[0]) best = at;
+      from = at[0] + 1;
+    }
+    return best && spans(best);
+  }
+
+  function matcher(query) {
+    const words = query.trim().split(/\s+/).filter(Boolean);
+    const hits = text => {
+      if (!words.length) return [];
+      if (text === null || text === undefined || text === "") return null;
+      const at = new Set();
+      for (const w of words) {
+        const found = fuzzy(text, w);
+        if (!found) return null;
+        for (const [s, e] of found) for (let i = s; i < e; i++) at.add(i);
+      }
+      return spans([...at].sort((a, b) => a - b));
+    };
+    return { words, hits, matches: text => hits(text) !== null };
+  }
+
+  function parts(text, marks) {
+    const cps = [...String(text)];
+    const out = [];
+    let at = 0;
+    for (const [s, e] of marks || []) {
+      if (s > at) out.push({ text: cps.slice(at, s).join(""), mark: false });
+      if (e > Math.max(s, at)) out.push({ text: cps.slice(Math.max(s, at), e).join(""), mark: true });
+      at = Math.max(at, e);
+    }
+    if (at < cps.length) out.push({ text: cps.slice(at).join(""), mark: false });
+    return out.filter(p => p.text);
+  }
+
+  const size = marks => marks.reduce((n, [s, e]) => n + e - s, 0);
+
+  function cutHead(text, marks, cut) {
+    return {
+      text: `…${[...text].slice(cut).join("")}`,
+      marks: marks.filter(([, e]) => e > cut).map(([s, e]) => [Math.max(s, cut) - cut + 1, e - cut + 1]),
+    };
+  }
+
+  function clip(text, marks, max) {
+    const cps = [...text];
+    if (cps.length <= max) return { text, marks };
+    if (max < 1) return { text: "", marks: [] };
+    const least = cps.length - max + 1;
+    const slash = cps.indexOf("/", least);
+    return cutHead(text, marks, slash >= 0 && cps.length - slash >= max / 2 ? slash : least);
+  }
+
+  function clipTail(text, marks, max) {
+    const cps = [...text];
+    if (cps.length <= max) return { text, marks };
+    if (max < 1) return { text: "", marks: [] };
+    const keep = max - 1;
+    return {
+      text: `${cps.slice(0, keep).join("")}…`,
+      marks: marks.filter(([s]) => s < keep).map(([s, e]) => [s, Math.min(e, keep)]),
+    };
+  }
+
+  function around(text, marks, max) {
+    const length = [...text].length;
+    if (length <= max || !marks.length || marks[0][1] < max) return clipTail(text, marks, max);
+    const head = cutHead(text, marks, Math.min(marks[0][0], length - max + 1));
+    return clipTail(head.text, head.marks, max);
+  }
+
+  const whole = (shown, found) => shown.length > 0 && size(shown) === size(found);
+
+  function workspacesOf(tree, branches, home) {
+    const known = branches || {};
     return ((tree && tree.workspaces) || []).map(ws => {
       const sessions = (ws.sessions || []).filter(s => s.content !== "page");
       const panes = [];
       for (const s of sessions) {
         const split = !!s.hasSplit;
         const holder = split && s.statusPane === "right" ? "right" : "left";
+        const local = !s.remoteHost;
         for (const side of split ? ["left", "right"] : ["left"]) {
           const agent = agentOf(side === "left" ? s.foreground : s.splitForeground);
+          const cwd = (side === "right" ? s.splitCwd || s.cwd : s.cwd) || "";
           let status;
           if (side === holder) status = STATUS[s.status] || (agent ? "idle" : "shell");
           else status = agent ? "unknown" : "shell";
@@ -49,7 +186,9 @@ const GoTo = (() => {
             session: s.id, parent: s.parent || null, pane: side, sessionName: s.name || "", split,
             // the tree's title, like its cwd and foreground, is the primary pane's
             title: side === "left" ? s.title || null : null,
-            cwd: (side === "right" ? s.splitCwd || s.cwd : s.cwd) || "",
+            cwd, path: local ? tildePath(cwd, home) : cwd,
+            branch: local && cwd && Object.hasOwn(known, cwd) ? known[cwd] : null,
+            changedAt: s.statusChangedAt ?? null, ownsStatus: side === holder,
             agent, status,
             indicator: side === holder && !!STATUS[s.status],
             current: !!s.active && (!split || (side === "right") === !!s.splitFocused),
@@ -88,7 +227,8 @@ const GoTo = (() => {
   const holds = (node, session) => node.main.session === session || node.children.some(c => holds(c, session));
   const nodeCurrent = node => node.panes.some(p => p.current) || node.children.some(nodeCurrent);
   const branchLine = (rails, last) => rails.concat([last ? "└─" : "├─"]);
-  const columns = p => ({ agent: kind(p), status: p.status, indicator: p.indicator, current: p.current });
+  const columns = p => ({ agent: kind(p), status: p.status, indicator: p.indicator, current: p.current,
+                          branch: p.branch || "", path: p.path, changedAt: p.ownsStatus ? p.changedAt : null });
 
   function workspaceRow(ws) {
     return { target: target.workspace(ws.id), workspace: true, tree: [], label: ws.name, branch: ws.branch,
@@ -102,7 +242,7 @@ const GoTo = (() => {
     const session = `${ws.name} / ${p.sessionName}`;
     return { target: target.pane(p.session, p.pane), workspace: false, tree, label: paneLabel(p),
              detail: p.split ? `${session} / ${kind(p)}` : session, meta: p.cwd, pane: columns(p), terminals: 1,
-             title: p.title };
+             title: p.title, kind: p.split ? kind(p) : "" };
   }
 
   function sessionRows(rows, ws, node, rails, last) {
@@ -124,21 +264,68 @@ const GoTo = (() => {
       holder = node.main;
       row = paneRow(ws, node.main, tree);
     }
-    return { ...row, pane: { ...columns(holder), current: nodeCurrent(node) } };
+    const { branch, path, changedAt } = node.main;
+    return { ...row, pane: { ...columns(holder), branch: branch || "", path, changedAt, current: nodeCurrent(node) } };
   }
 
   function paneMatches(p, matches) {
-    return matches(p.sessionName) || matches(paneLabel(p)) || matches(p.cwd) ||
+    return matches(p.sessionName) || matches(paneLabel(p)) || matches(p.path) || (!!p.branch && matches(p.branch)) ||
       (!!p.agent && matches(p.agent)) || (!!p.title && matches(p.title));
   }
 
+  function footer(r, path, max) {
+    let line;
+    if (r.hint === path) {
+      const shift = [...r.meta].length - [...path].length;
+      line = around(r.meta, r.marks.hint.map(([s, e]) => [s ? s + shift : 0, e + shift]), max);
+    } else {
+      const both = [r.hint, r.meta].filter(Boolean).join("  ");
+      line = around([...both].length <= max ? both : r.hint, r.marks.hint, max);
+    }
+    r.meta = line.text;
+    r.metaMarks = line.marks;
+  }
+
+  function detailMarks(r, marks) {
+    const k = r.kind ? [...r.kind].length : 0;
+    const from = k && k + 3;
+    const end = [...r.detail].length;
+    const shift = end - [...r.label].length - from;
+    return marks.filter(([s]) => s >= from).map(([s, e]) => [s + shift, e + shift])
+      .concat(marks.filter(([, e]) => e <= k).map(([s, e]) => [s + end - k, e + end - k]));
+  }
+
+  function decorate(r, hits, hinting, now, limits) {
+    const marks = { label: hits(r.label) || [], branch: [], cwd: [], agent: [], hint: [] };
+    if (r.workspace && r.branch) marks.branch = hits(r.branch) || [];
+    r.marks = marks;
+    r.metaMarks = [];
+    r.detailMarks = detailMarks(r, marks.label);
+    if (!r.pane) return;
+    const p = r.pane;
+    const branch = p.branch;
+    const onBranch = hits(branch) || [];
+    const shortBranch = clipTail(branch, onBranch, limits.branch);
+    p.branch = shortBranch.text;
+    marks.branch = shortBranch.marks;
+    if (AGENTS.includes(p.agent)) marks.agent = hits(p.agent) || [];
+    const found = hits(p.path) || [];
+    const cwd = clip(p.path, found, limits.cwd);
+    p.cwd = cwd.text;
+    marks.cwd = cwd.marks;
+    p.age = age(p.changedAt, now);
+    const shown = marks.label.length || marks.agent.length || whole(shortBranch.marks, onBranch) ||
+      whole(cwd.marks, found);
+    if (!hinting || shown) return;
+    r.hint = [r.title, branch, p.path].find(v => v && hits(v)) || null;
+    if (!r.hint) return;
+    marks.hint = hits(r.hint);
+    footer(r, p.path, limits.line);
+  }
+
   // Every query word must be in one field; a status filter keeps its panes; `t` keeps top-level sessions.
-  function rows(workspaces, query, filter) {
-    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const matches = v => {
-      const s = String(v).toLowerCase();
-      return words.every(w => s.includes(w));
-    };
+  function rows(workspaces, query, filter, now = Date.now() / 1000, limits = CAPS) {
+    const { words, hits, matches } = matcher(query);
     const status = filter && filter !== "t" ? FILTERS[filter] : null;
     const narrowing = !!status || words.length > 0;
     const out = [];
@@ -147,20 +334,14 @@ const GoTo = (() => {
       const keeps = p => (!status || p.status === status) && (wsMatches || paneMatches(p, matches));
       const sessions = nodes(ws).map(n => kept(n, keeps)).filter(Boolean);
       if (!narrowing || sessions.length || (!status && wsMatches)) {
-        out.push(workspaceRow(ws));
         const first = out.length;
+        out.push(workspaceRow(ws));
         sessions.forEach((n, i) => {
           const last = i === sessions.length - 1;
           if (filter === "t") out.push(topLevelRow(ws, n, branchLine([], last)));
           else sessionRows(out, ws, n, [], last);
         });
-        // a pane kept by its title or cwd, neither on its row, shows the text that matched
-        if (words.length && !wsMatches) {
-          for (const r of out.slice(first)) {
-            if (!r.pane || matches(r.label)) continue;
-            r.hint = [r.title, r.meta].find(v => v && matches(v)) || null;
-          }
-        }
+        for (const r of out.slice(first)) decorate(r, hits, words.length > 0 && !wsMatches, now, limits);
       }
     }
     return out;
@@ -189,6 +370,100 @@ const GoTo = (() => {
     return t;
   }
 
+  const longest = values => values.reduce((n, v) => Math.max(n, [...(v || "")].length), 0);
+
+  function widths(list) {
+    const panes = list.filter(r => r.pane).map(r => r.pane);
+    return {
+      branch: longest(panes.map(p => p.branch)),
+      cwd: longest(panes.map(p => p.cwd)),
+      age: panes.some(p => p.age) ? AGE_WIDTH : 0,
+    };
+  }
+
+  function needs(list) {
+    const panes = list.filter(r => r.pane);
+    return {
+      ...widths(list),
+      tree: longest(panes.map(r => `${r.tree.join("")} `)),
+      agent: Math.max(AGENT_WIDTH, longest(panes.map(r => r.pane.agent))),
+    };
+  }
+
+  function columnLimits(room, gap, need) {
+    const want = { branch: Math.min(need.branch, CAPS.branch), cwd: Math.min(need.cwd, CAPS.cwd) };
+    if (!(room > 0)) return want;
+    const cells = [need.tree, LABEL_ROOM, 1, need.agent, STATUS_WIDTH].concat(need.age ? [need.age] : []);
+    const fixed = cells.reduce((n, w) => n + w, 0) + gap * (cells.length - 1);
+    let shown = ["cwd", "branch"].filter(k => want[k] > 0);
+    for (;;) {
+      const space = Math.max(0, room - fixed - (gap + SLACK) * shown.length);
+      const out = { branch: 0, cwd: 0 };
+      for (const k of shown) out[k] = want[k];
+      while (out.branch + out.cwd > space) {
+        if (out.cwd >= out.branch) out.cwd--;
+        else out.branch--;
+      }
+      const narrow = shown.find(k => out[k] < Math.min(want[k], CUT_MIN));
+      if (!narrow) return out;
+      shown = shown.filter(k => k !== narrow);
+    }
+  }
+
+  function pageZoom(tree, session) {
+    const sessions = ((tree && tree.workspaces) || []).flatMap(ws => ws.sessions || []);
+    const id = String(session || "").toUpperCase();
+    const own = (id && sessions.find(s => String(s.id).toUpperCase() === id)) || sessions.find(s => s.active);
+    const page = own && (own.htmlOverlays || []).find(o => !o.pane && o.javascript);
+    return page && page.zoom > 0 ? page.zoom : 1;
+  }
+
+  class Fit {
+    constructor() {
+      this.height = null;
+    }
+
+    next(cssHeight, zoom) {
+      if (!(cssHeight > 0)) return null;
+      const height = Math.ceil(cssHeight * (zoom > 0 ? zoom : 1) - 1e-3);
+      if (height === this.height) return null;
+      this.height = height;
+      return height;
+    }
+  }
+
+  function stackHeight(blocks, gap, padding) {
+    return blocks.reduce((h, b) => h + b, 0) + gap * Math.max(0, blocks.length - 1) + padding;
+  }
+
+  class Panel {
+    constructor(request, measure, session) {
+      this.request = typeof request === "function" ? (...args) => request(...args) : null;
+      this.measure = measure;
+      this.session = session;
+      this.fit = new Fit();
+      this.fitted = null;
+    }
+
+    poll(apply) {
+      if (!this.request) return Promise.resolve(null);
+      return this.request("tree").then(r => {
+        const tree = r && r.tree ? r.tree : r;
+        return tree && tree.workspaces ? this.place(tree, apply(tree)) : null;
+      });
+    }
+
+    place(tree, view) {
+      if (!this.request) return null;
+      const json = JSON.stringify(tree);
+      if (json === this.fitted) return null;
+      this.fitted = json;
+      const height = this.fit.next(this.measure(view.all, view), pageZoom(tree, this.session));
+      if (height !== null) this.request("session.overlay.resize", { args: { height } }).catch(() => {});
+      return height;
+    }
+  }
+
   // A list key is the letter it types, or, on a layout that types no Latin letter, the one at its position.
   function letterOf(ev) {
     // the case comes from Shift, not from what Caps Lock makes the key type
@@ -199,17 +474,26 @@ const GoTo = (() => {
   }
 
   class Navigator {
-    constructor(tree, branches) {
+    constructor(tree, branches, options = {}) {
       this.branches = branches || {};
+      this.home = options.home || "";
+      this.now = options.now || (() => Date.now() / 1000);
       this.query = "";
       this.searching = false;
       this.filter = null;
+      this.room = null;
+      this.gap = 0;
       this.setTree(tree);
       this.selected = this.currentTarget();
     }
 
     setTree(tree) {
-      this.workspaces = workspacesOf(tree, this.branches);
+      this.workspaces = workspacesOf(tree, this.branches, this.home);
+    }
+
+    setRoom(room, gap) {
+      this.room = room;
+      this.gap = gap || 0;
     }
 
     currentTarget() {
@@ -218,19 +502,25 @@ const GoTo = (() => {
     }
 
     view() {
-      const list = rows(this.workspaces, this.query, this.filter);
+      const now = this.now();
+      const limits = { ...columnLimits(this.room, this.gap, needs(rows(this.workspaces, "", null, now, WHOLE))),
+                       line: this.room > 0 ? Math.floor(this.room) : Infinity };
+      const list = rows(this.workspaces, this.query, this.filter, now, limits);
+      const all = this.query || this.filter ? rows(this.workspaces, "", null, now, limits) : list;
       const selected = selectedIndex(list, this.selected);
-      let search;
-      if (this.filter && !this.searching) search = `/ ${FILTERS[this.filter]}`;
-      else if (this.searching || this.query) search = `/ ${this.query}`;
-      else search = PLACEHOLDER;
+      const search = this.searching || this.query ? `/ ${this.query}` : PLACEHOLDER;
       const count = list.reduce((n, r) => n + r.terminals, 0);
+      const filter = this.filter && !this.searching ? this.filter : null;
+      const key = filter ? [...HINTS.slice(0, HINTS.indexOf(FILTER_KEYS) + FILTER_KEYS.indexOf(filter))].length : -1;
       return {
-        rows: list, selected, search, searching: this.searching,
+        rows: list, all, selected, search, searching: this.searching,
         placeholder: search === PLACEHOLDER && !this.searching,
+        filter: filter && FILTERS[filter],
         count: `${count} ${count === 1 ? "terminal" : "terminals"}`,
         hints: this.searching ? SEARCH_HINTS : HINTS,
+        hintMarks: key < 0 ? [] : [[key, key + 1]],
         empty: NO_MATCH,
+        widths: widths(all),
       };
     }
 
@@ -349,7 +639,8 @@ const GoTo = (() => {
     }
   }
 
-  return { Navigator, agentOf, workspacesOf, rows, selectedIndex, target };
+  return { Navigator, Fit, Panel, agentOf, workspacesOf, rows, selectedIndex, target, fuzzy, parts, age, pageZoom,
+           columnLimits, stackHeight };
 })();
 
 if (typeof module !== "undefined") module.exports = GoTo;

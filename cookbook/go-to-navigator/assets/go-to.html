@@ -10,48 +10,69 @@
     margin: 0; height: 100%;
     background: var(--ngterm-background, #1e1e1e);
     color: var(--ngterm-foreground, #ddd);
-    font: 13px/1.45 ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", monospace;
+    font: 13px/19px ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", monospace;
     overflow: hidden;
   }
+  body { --dim: color-mix(in srgb, var(--ngterm-foreground, #ddd) 55%, transparent); }
   #app { display: flex; flex-direction: column; height: 100%; padding: 10px 12px; gap: 8px; }
-  #top { display: flex; align-items: baseline; gap: 12px; padding: 6px 8px; border-radius: 6px;
-         border: 1px solid color-mix(in srgb, var(--ngterm-foreground, #ddd) 22%, transparent); }
+  #top, #info, #hints { flex: none; }
+  #top { display: flex; align-items: baseline; gap: 12px; padding: 7px 9px; border-radius: 6px;
+         box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ngterm-foreground, #ddd) 22%, transparent); }
+  #chip { flex: none; padding: 0 6px; border-radius: 4px; box-shadow: inset 0 0 0 1px currentColor; font-weight: 700;
+          white-space: pre; }
+  #chip[hidden] { display: none; }
+  #chip.f-blocked { color: var(--ngterm-color-1, #e05a5a); }
+  #chip.f-working { color: var(--ngterm-color-3, #d8b84a); }
+  #chip.f-done { color: var(--ngterm-color-2, #6ac46a); }
+  #chip.f-top-level { color: var(--ngterm-color-4, #4a7ad8); }
   #search { flex: 1; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
   #search.placeholder { opacity: .5; }
   #search .caret { display: inline-block; width: .55em; height: 1.1em; vertical-align: text-bottom;
                    background: var(--ngterm-foreground, #ddd); animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   #count { opacity: .6; white-space: nowrap; }
-  #rows { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  #rows { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+  #measure { position: absolute; top: 0; left: 12px; right: 12px; visibility: hidden; pointer-events: none; }
   .row { display: flex; align-items: baseline; gap: 10px; padding: 1px 8px; border-radius: 4px;
          white-space: pre; cursor: default; }
   .row.sel { background: color-mix(in srgb, var(--ngterm-color-4, #4a7ad8) 35%, transparent); }
   .row.ws { font-weight: 700; margin-top: 6px; }
   .row.ws:first-child { margin-top: 0; }
   .row .tree { opacity: .45; }
-  .row .label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-  .row .branch, .row .hint { opacity: .55; font-weight: 400; }
-  .row .agent { opacity: .7; min-width: 9ch; text-align: right; }
+  .row .label { flex: 1 1 0; min-width: 8ch; overflow: hidden; text-overflow: ellipsis; }
+  .row .branch, .row .hint { color: var(--dim); font-weight: 400; }
+  .row .col-branch { flex: none; width: calc(var(--branch-w) + .5ch);
+                     color: color-mix(in srgb, var(--ngterm-color-5, #b48ead) 80%, transparent); }
+  .row .cwd { flex: none; width: calc(var(--cwd-w) + .5ch); color: var(--dim); }
+  .row .age { flex: none; width: var(--age-w); text-align: right; color: var(--dim); }
+  .row .agent { color: color-mix(in srgb, var(--ngterm-foreground, #ddd) 70%, transparent); min-width: 9ch;
+                text-align: right; }
   .row .status { min-width: 9ch; }
+  mark { color: var(--ngterm-foreground, #ddd); border-radius: 2px;
+         background: color-mix(in srgb, var(--ngterm-color-3, #d8b84a) 35%, transparent); }
   .row .cur { color: var(--ngterm-color-6, #4cc); }
   .st-working { color: var(--ngterm-color-3, #d8b84a); }
   .st-blocked { color: var(--ngterm-color-1, #e05a5a); }
   .st-done { color: var(--ngterm-color-2, #6ac46a); }
   .st-idle, .st-shell, .st-unknown { opacity: .55; }
-  #empty { opacity: .55; padding: 8px; }
-  #info { padding: 6px 8px; border-top: 1px solid color-mix(in srgb, var(--ngterm-foreground, #ddd) 18%, transparent); }
+  .empty { opacity: .55; padding: 8px; }
+  #info { padding: 7px 8px 6px;
+          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--ngterm-foreground, #ddd) 18%, transparent); }
   #info div { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
   #meta { opacity: .6; }
-  #hints { opacity: .45; font-size: 12px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #hints { color: color-mix(in srgb, var(--ngterm-foreground, #ddd) 45%, transparent); padding: 0 8px;
+           font-size: 12px; line-height: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #hints mark { background: color-mix(in srgb, var(--ngterm-color-4, #4a7ad8) 45%, transparent); }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="top"><div id="search"></div><div id="count"></div></div>
+  <div id="top"><div id="chip" hidden></div><div id="search"></div><div id="count"></div></div>
   <div id="rows"></div>
   <div id="info"><div id="detail">&nbsp;</div><div id="meta">&nbsp;</div></div>
   <div id="hints"></div>
 </div>
+<div id="measure" aria-hidden="true"></div>
 <script>
 /*GOTO_DATA*/
 </script>
@@ -60,16 +81,36 @@
 </script>
 <script>
 "use strict";
-const nav = new GoTo.Navigator(GOTO.tree, GOTO.branches);
+const nav = new GoTo.Navigator(GOTO.tree, GOTO.branches, { home: GOTO.home });
 const request = window.ngterm && window.ngterm.request;
 let done = false;
 
 const $ = id => document.getElementById(id);
+const px = value => parseFloat(value) || 0;
 function span(cls, text) {
   const s = document.createElement("span");
   s.className = cls;
   s.textContent = text;
   return s;
+}
+function marked(cls, text, marks) {
+  const s = span(cls, "");
+  for (const part of GoTo.parts(text, marks)) {
+    if (!part.mark) {
+      s.append(part.text);
+      continue;
+    }
+    const m = document.createElement("mark");
+    m.textContent = part.text;
+    s.append(m);
+  }
+  return s;
+}
+function emptyRow(text) {
+  const empty = document.createElement("div");
+  empty.className = "empty";
+  empty.textContent = text;
+  return empty;
 }
 
 // Ends the page: a choice goes back to the script blocked on it, which switches there.
@@ -83,8 +124,36 @@ const open = t => finish("session.overlay.submit", { value: t });
 
 let shown = null;
 
+function rowElement(r, widths, selected) {
+  const el = document.createElement("div");
+  el.className = "row" + (r.workspace ? " ws" : "") + (selected ? " sel" : "");
+  if (r.tree.length) el.append(span("tree", r.tree.join("") + " "));
+  const label = marked("label", r.label, r.marks.label);
+  if (r.workspace && r.branch) label.append("  ", marked("branch", r.branch, r.marks.branch));
+  if (r.hint) label.append("  ", marked("hint", r.hint, r.marks.hint));
+  el.append(label);
+  if (r.pane) {
+    if (widths.branch) el.append(marked("col-branch", r.pane.branch, r.marks.branch));
+    if (widths.cwd) el.append(marked("cwd", r.pane.cwd, r.marks.cwd));
+    el.append(span("cur", r.pane.current ? "●" : " "));
+    el.append(marked("agent", r.pane.agent, r.marks.agent));
+    el.append(span("status st-" + r.pane.status, (r.pane.indicator ? "◆ " : "  ") + r.pane.status));
+    if (widths.age) el.append(span("age", r.pane.age));
+  }
+  return el;
+}
+
 function render() {
   const v = nav.view();
+  const style = document.body.style;
+  style.setProperty("--branch-w", `${v.widths.branch}ch`);
+  style.setProperty("--cwd-w", `${v.widths.cwd}ch`);
+  style.setProperty("--age-w", `${v.widths.age}ch`);
+
+  const chip = $("chip");
+  chip.hidden = !v.filter;
+  chip.className = v.filter ? `f-${v.filter}` : "";
+  chip.textContent = v.filter || "";
   const search = $("search");
   search.className = v.placeholder ? "placeholder" : "";
   search.textContent = v.search;
@@ -93,25 +162,9 @@ function render() {
 
   const list = $("rows");
   list.replaceChildren();
-  if (!v.rows.length) {
-    const empty = document.createElement("div");
-    empty.id = "empty";
-    empty.textContent = v.empty;
-    list.append(empty);
-  }
+  if (!v.rows.length) list.append(emptyRow(v.empty));
   v.rows.forEach((r, i) => {
-    const el = document.createElement("div");
-    el.className = "row" + (r.workspace ? " ws" : "") + (i === v.selected ? " sel" : "");
-    if (r.tree.length) el.append(span("tree", r.tree.join("") + " "));
-    const label = span("label", r.label);
-    if (r.workspace && r.branch) label.append(span("branch", `  ${r.branch}`));
-    if (r.hint) label.append(span("hint", `  ${r.hint}`));
-    el.append(label);
-    if (r.pane) {
-      el.append(span("cur", r.pane.current ? "●" : " "));
-      el.append(span("agent", r.pane.agent));
-      el.append(span("status st-" + r.pane.status, (r.pane.indicator ? "◆ " : "  ") + r.pane.status));
-    }
+    const el = rowElement(r, v.widths, i === v.selected);
     el.addEventListener("click", () => { nav.select(r.target); render(); });
     el.addEventListener("dblclick", () => open(r.target));
     list.append(el);
@@ -121,9 +174,36 @@ function render() {
   shown = v.selected === null ? null : v.rows[v.selected].target;
 
   const row = v.selected === null ? null : v.rows[v.selected];
-  $("detail").textContent = (row && row.detail) || " ";
-  $("meta").textContent = (row && row.meta) || " ";
-  $("hints").textContent = v.hints;
+  $("detail").replaceChildren(marked("", (row && row.detail) || " ", (row && row.detailMarks) || []));
+  $("meta").replaceChildren(marked("", (row && row.meta) || " ", (row && row.metaMarks) || []));
+  $("hints").replaceChildren(marked("", v.hints, v.hintMarks));
+  return v;
+}
+
+function fullHeight(rows, v) {
+  const measure = $("measure");
+  measure.replaceChildren(...(rows.length ? rows.map(r => rowElement(r, v.widths, false)) : [emptyRow(v.empty)]));
+  const app = getComputedStyle($("app"));
+  const blocks = [$("top"), measure, $("info"), $("hints")].map(el => el.getBoundingClientRect().height);
+  return GoTo.stackHeight(blocks, px(app.rowGap), px(app.paddingTop) + px(app.paddingBottom));
+}
+
+function charWidth() {
+  const probe = span("", "0".repeat(64));
+  $("measure").append(probe);
+  const width = probe.getBoundingClientRect().width / 64;
+  probe.remove();
+  return width;
+}
+let ch = charWidth();
+
+function place() {
+  const probe = document.createElement("div");
+  probe.className = "row";
+  $("rows").append(probe);
+  const style = getComputedStyle(probe);
+  nav.setRoom((probe.clientWidth - px(style.paddingLeft) - px(style.paddingRight)) / ch, px(style.columnGap) / ch);
+  probe.remove();
 }
 
 document.addEventListener("keydown", e => {
@@ -136,21 +216,32 @@ document.addEventListener("keydown", e => {
   render();
 });
 
+addEventListener("resize", () => {
+  place();
+  render();
+});
+
+place();
 render();
 window.focus();
 
+const panel = new GoTo.Panel(request, fullHeight, GOTO.session);
+
 // Keep the rows live while the window is open: statuses, new and closed sessions.
-if (request) {
-  setInterval(() => {
-    if (done) return;
-    request("tree").then(r => {
-      const tree = r && r.tree ? r.tree : r;
-      if (!tree || !tree.workspaces) return;
-      nav.setTree(tree);
-      render();
-    }).catch(() => {});
-  }, 1500);
+function refresh() {
+  if (done) return;
+  panel.poll(tree => {
+    nav.setTree(tree);
+    return render();
+  }).catch(() => {});
 }
+(document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+  ch = charWidth();
+  place();
+  render();
+  refresh();
+  if (panel.request) setInterval(refresh, 1500);
+});
 </script>
 </body>
 </html>
