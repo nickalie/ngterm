@@ -2,7 +2,8 @@
 //! `ControlServerCompanionPageTests` `session.page` cases): a top-level page row after its target's group, its
 //! refusals, the terminal commands it refuses, and its page coming back pending across a relaunch.
 
-use ngterm_proto::command::{AgentCmd, SessionCmd};
+use ngterm_proto::PickItem;
+use ngterm_proto::command::{AgentCmd, PickCmd, SessionCmd};
 use ngterm_proto::{Args, Command, Request, Response};
 use serde_json::json;
 use uuid::Uuid;
@@ -10,6 +11,7 @@ use uuid::Uuid;
 use super::overlay_page::fixture_with_host;
 use super::page_restore::{html_overlays, launch, outcome};
 use super::{Fixture, answered_id, args, failure, send, short_tempdir, wire};
+use crate::app_actions::{ActionEffect, FrontendAction};
 use crate::commands::companion_page::refusal;
 use crate::model::{CompanionOptions, NewSession, SessionContent};
 
@@ -251,4 +253,141 @@ fn a_page_session_comes_back_with_its_companions_after_a_relaunch() {
         outcome(&mut core, after).result.unwrap()["pageOutcome"]["outcome"],
         json!("pending")
     );
+}
+
+// MARK: - the page's own close (upstream's `HtmlOverlayRegistryTests` and `ControlServerCompanionPageTests` close cases)
+
+/// A page session of the first session: its row id and page id.
+fn page_row(fixture: &mut Fixture) -> (Uuid, Uuid) {
+    let target = fixture.sessions[0];
+    let response = page_session(fixture, target, |a| a.html = Some(html()));
+    let page = response.result.as_ref().unwrap()["pageID"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    (answered_id(&response).unwrap(), page)
+}
+
+/// A page session's `window.close()` takes the undoable session close once: the request an undo's remount repeats does
+/// nothing, and the row stays.
+#[test]
+fn a_page_sessions_own_close_soft_closes_it_once() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let (id, page) = page_row(&mut fixture);
+    let companion = fixture
+        .store_mut()
+        .unwrap()
+        .add_companion(id, CompanionOptions::default(), "/home/u")
+        .unwrap();
+
+    assert_eq!(
+        fixture.core.close_html_overlay_from_page(page),
+        Some(ActionEffect::Done)
+    );
+    let _ = fixture.core.commit();
+    assert!(fixture.store().session(id).is_none());
+    assert!(
+        fixture.store().pending_close_session(id).is_some(),
+        "the close is undoable"
+    );
+    assert!(
+        fixture.store().pending_close_session(companion).is_some(),
+        "with its companions"
+    );
+
+    assert!(fixture.store_mut().unwrap().undo_pending_close(None));
+    let _ = fixture.core.commit();
+    assert_eq!(fixture.core.close_html_overlay_from_page(page), None);
+    let _ = fixture.core.commit();
+    assert!(fixture.store().session(id).is_some(), "an undo does not close it again");
+}
+
+/// With the confirmation on, the page's own close asks once: a cancelled answer leaves the row and asks no more.
+#[test]
+fn a_page_sessions_own_close_asks_for_the_confirmation_once() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let (id, page) = page_row(&mut fixture);
+    fixture.core.update_settings(|s| s.confirm_close_session = Some(true));
+    let window = fixture.window;
+
+    assert_eq!(
+        fixture.core.close_html_overlay_from_page(page),
+        Some(ActionEffect::Frontend(FrontendAction::ConfirmCloseSession {
+            window,
+            session: id
+        }))
+    );
+    assert_eq!(
+        fixture.core.close_html_overlay_from_page(page),
+        None,
+        "a cancel does not ask again"
+    );
+    assert!(fixture.store().session(id).is_some());
+}
+
+/// The page's own close waits while a picker is pending in its window and goes through once the picker ends.
+#[test]
+fn a_page_sessions_own_close_waits_for_a_pending_pick() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let (id, page) = page_row(&mut fixture);
+    let item = PickItem {
+        id: "a".to_owned(),
+        label: "Alpha".to_owned(),
+        ..PickItem::default()
+    };
+    let opened = fixture.send(Command::Pick(PickCmd::Open), None, args(|a| a.items = Some(vec![item])));
+    let pick = opened.result.as_ref().unwrap()["id"].as_str().unwrap().to_owned();
+
+    assert_eq!(fixture.core.close_html_overlay_from_page(page), None);
+    assert!(fixture.store().session(id).is_some(), "it waits for the picker");
+
+    assert!(
+        fixture
+            .send(Command::Pick(PickCmd::Cancel), Some(&pick), Args::default())
+            .ok
+    );
+    assert_eq!(
+        fixture.core.close_html_overlay_from_page(page),
+        Some(ActionEffect::Done)
+    );
+    let _ = fixture.core.commit();
+    assert!(fixture.store().pending_close_session(id).is_some());
+}
+
+/// A page over a terminal closes only itself, as before; the control close of a page session never asks.
+#[test]
+fn a_page_over_a_terminal_closes_only_itself_and_the_control_close_never_asks() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let terminal = fixture.sessions[0];
+    let opened = fixture.session(
+        SessionCmd::OverlayOpen,
+        Some(&wire(terminal)),
+        args(|a| a.html = Some(html())),
+    );
+    let page: Uuid = opened.result.as_ref().unwrap()["pageID"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        fixture.core.close_html_overlay_from_page(page),
+        Some(ActionEffect::Done)
+    );
+    assert!(
+        fixture
+            .store()
+            .session(terminal)
+            .is_some_and(|session| session.overlay.page().is_none())
+    );
+
+    let (id, _) = page_row(&mut fixture);
+    fixture.core.update_settings(|s| s.confirm_close_session = Some(true));
+    assert!(
+        fixture
+            .session(SessionCmd::OverlayClose, Some(&wire(id)), Args::default())
+            .ok
+    );
+    let _ = fixture.core.commit();
+    assert!(fixture.store().session(id).is_none());
 }

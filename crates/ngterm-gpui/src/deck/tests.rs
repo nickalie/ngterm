@@ -1850,3 +1850,5 @@ mod color_scheme;
 mod dashboard;
 mod overlay;
 mod overlay_visibility;
+#[cfg(all(feature = "html", target_os = "linux"))]
+mod page_sessions;

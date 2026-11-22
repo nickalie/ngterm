@@ -70,6 +70,9 @@ pub(crate) struct PageRuntime {
     persisted: HashMap<Uuid, (Uuid, PageSnapshot)>,
     /// Pages that left every slot since the frontend last took them.
     released: Vec<Uuid>,
+    /// The page sessions whose page's own `window.close()` was handed to the session close: a later request of the
+    /// same page (an undo's remount, a cancelled confirmation) does nothing.
+    closes_handed_off: HashSet<Uuid>,
     host: Option<Box<dyn HtmlHost>>,
     /// How an origin with no web views reads a page's file before handing it over.
     probe: Option<Box<dyn PageProbe>>,
@@ -85,6 +88,7 @@ impl fmt::Debug for PageRuntime {
             .field("viewer", &self.viewer)
             .field("persisted", &self.persisted)
             .field("released", &self.released)
+            .field("closes_handed_off", &self.closes_handed_off)
             .field("host", &self.host.is_some())
             .field("probe", &self.probe.is_some())
             .field("presenter_only", &self.presenter_only)
@@ -624,6 +628,7 @@ impl Core {
         let gone: Vec<Uuid> = self.pages.known.difference(&live).copied().collect();
         for page in gone {
             self.pages.known.remove(&page);
+            self.pages.closes_handed_off.remove(&page);
             self.pages.outcomes.dismiss(page);
             // only a frontend with web views takes the released pages; a headless origin's would pile up
             if self.pages.host.is_some() {
@@ -759,28 +764,58 @@ impl Core {
     /// close as Close Session does, confirmed first when the setting asks (the frontend's half) and with its undo
     /// grace; any other page leaves its slot as [`Core::close_html_overlay`] has it. `None` when nothing changed.
     pub fn close_html_overlay_from_strip(&mut self, id: Uuid) -> Option<ActionEffect> {
-        let row = self.html_overlay_slot(id).filter(|slot| {
+        match self.page_row_slot(id) {
+            Some(slot) => self.close_page_row(slot),
+            None => self.close_html_overlay(id).then_some(ActionEffect::Done),
+        }
+    }
+
+    /// The page's own `window.close()` (upstream's `HtmlOverlayRegistry.closePageSession`): a page session's page is
+    /// its row, so it takes the session close as the strip's Close does, in the page's own window, once. It waits while
+    /// a picker is pending in that window, the frontend asking again at its next apply, and once handed off a later
+    /// request of the page does nothing, so a cancelled confirmation or an undo never asks again. Any other page leaves
+    /// its slot as [`Core::close_html_overlay`] has it. `None` when nothing changed.
+    pub fn close_html_overlay_from_page(&mut self, id: Uuid) -> Option<ActionEffect> {
+        let Some(slot) = self.page_row_slot(id) else {
+            return self.close_html_overlay(id).then_some(ActionEffect::Done);
+        };
+        let picking = self
+            .modals
+            .controller(slot.window)
+            .is_some_and(|controller| controller.pending().is_some());
+        if picking || !self.pages.closes_handed_off.insert(id) {
+            return None;
+        }
+        self.close_page_row(slot)
+    }
+
+    /// Where page `id` is the page of a page session, its row's session-wide page; `None` for any other page.
+    fn page_row_slot(&self, id: Uuid) -> Option<HtmlPageSlot> {
+        self.html_overlay_slot(id).filter(|slot| {
             slot.pane.is_none()
                 && self
                     .library()
                     .store(slot.window)
                     .and_then(|store| store.session(slot.session))
                     .is_some_and(|session| session.content() == crate::model::SessionContent::Page)
-        });
-        let closed = match row {
-            Some(HtmlPageSlot { window, session, .. }) if self.settings().confirm_close_session == Some(true) => {
-                return Some(ActionEffect::Frontend(FrontendAction::ConfirmCloseSession {
-                    window,
-                    session,
-                }));
-            }
-            Some(slot) => self.sidebar_action(
-                slot.window,
-                crate::sidebar_actions::SidebarAction::CloseSessions(vec![slot.session]),
-            ),
-            None => self.close_html_overlay(id),
-        };
-        closed.then_some(ActionEffect::Done)
+        })
+    }
+
+    /// Closes a page session as Close Session does: confirmed first when the setting asks (the frontend's half), with
+    /// its undo grace.
+    fn close_page_row(&mut self, slot: HtmlPageSlot) -> Option<ActionEffect> {
+        let HtmlPageSlot { window, session, .. } = slot;
+        if self.settings().confirm_close_session == Some(true) {
+            return Some(ActionEffect::Frontend(FrontendAction::ConfirmCloseSession {
+                window,
+                session,
+            }));
+        }
+        self.sidebar_action(
+            window,
+            crate::sidebar_actions::SidebarAction::CloseSessions(vec![session]),
+        )
+        .then_some(ActionEffect::Done)
     }
 
     /// Hides page `id` from its own strip with the page's scope: its pane's overlay, or every overlay of its session for

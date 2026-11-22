@@ -1415,11 +1415,7 @@ impl Page {
             return;
         }
         let id = self.id;
-        post(&self.poster, move |state: &mut AppState| {
-            if state.core.close_html_overlay(id) {
-                state.settle();
-            }
-        });
+        post(&self.poster, move |state: &mut AppState| state.page_closed_itself(id));
     }
 
     // MARK: - release

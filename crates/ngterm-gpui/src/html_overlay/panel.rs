@@ -371,13 +371,37 @@ pub fn act(id: Uuid, item: StripItem, poster: &Poster, cx: &mut App) {
     }
 }
 
-/// The failure shown over a page that did not load, so a failed load never reads as a blank one; a reload replaces it
-/// with the loading state. `None` unless the page failed.
+/// The failure shown over a page that did not load, so a failed load never reads as a blank one; its Reload, the only
+/// retry a page without `--navigation` or its strip has, replaces it with the loading state (upstream's `failure`).
+/// `None` unless the page failed.
 #[must_use]
-pub fn failure(overlay: &HtmlOverlay, colors: &PanelColors, error: Option<AnyElement>) -> Option<AnyElement> {
+pub fn failure(
+    overlay: &HtmlOverlay,
+    colors: &PanelColors,
+    error: Option<AnyElement>,
+    poster: &Poster,
+) -> Option<AnyElement> {
     if overlay.load_state != HtmlLoadState::Failed {
         return None;
     }
+    let id = overlay.id;
+    let ink = colors.ink(1.0);
+    let poster = poster.clone();
+    let reload = Button::new(FAILURE_RELOAD)
+        .debug_selector(|| FAILURE_RELOAD.to_owned())
+        .px(px(10.))
+        .h(px(24.))
+        .rounded(px(4.))
+        .wash(ink)
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .child(svg().path("icons/rotate-cw.svg").size(px(14.)).text_color(ink))
+        .child(div().text_size(px(12.)).child("Reload"))
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            act(id, StripItem::Reload, &poster, cx);
+        });
     // the error as the element made it (selectable text), else as plain text
     let error = error.or_else(|| {
         overlay
@@ -427,9 +451,13 @@ pub fn failure(overlay: &HtmlOverlay, colors: &PanelColors, error: Option<AnyEle
                         .child(error),
                 )
             })
+            .child(reload)
             .into_any_element(),
     )
 }
+
+/// The failure's Reload (upstream's `htmlOverlay.failureReload`).
+pub const FAILURE_RELOAD: &str = "htmlOverlay.failureReload";
 
 #[cfg(test)]
 mod tests {

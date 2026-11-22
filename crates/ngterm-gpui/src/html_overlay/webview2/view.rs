@@ -150,7 +150,7 @@ impl Render for PageView {
                     .min_h(px(0.))
                     .track_focus(&self.focus)
                     .child(content)
-                    .children(panel::failure(&overlay, &colors, error)),
+                    .children(panel::failure(&overlay, &colors, error, &poster)),
             )
     }
 }

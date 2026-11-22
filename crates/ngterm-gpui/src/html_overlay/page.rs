@@ -96,7 +96,8 @@ impl PageState {
 enum Life {
     Active,
     /// The page's `window.close()` asked for its close. It stays asked while the session sits in an undoable close,
-    /// where no slot is found to close, so a restored page closes at its next apply.
+    /// where no slot is found to close, so a restored page closes at its next apply; a page session's page asks the core
+    /// at each apply, which hands the close off once.
     CloseRequested,
     /// Released: the handlers still reached do nothing.
     Released,
@@ -1062,11 +1063,7 @@ impl Page {
             return;
         }
         let id = self.id;
-        post(&self.poster, move |state: &mut AppState| {
-            if state.core.close_html_overlay(id) {
-                state.settle();
-            }
-        });
+        post(&self.poster, move |state: &mut AppState| state.page_closed_itself(id));
     }
 
     // MARK: - input

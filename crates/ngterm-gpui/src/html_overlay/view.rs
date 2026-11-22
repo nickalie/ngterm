@@ -745,7 +745,7 @@ impl Render for PageView {
             .flatten()
         {
             Some(wait) => Some(super::engine_wait::element(&wait, &colors, error)),
-            None => panel::failure(&overlay, &colors, error),
+            None => panel::failure(&overlay, &colors, error, &poster),
         };
         div()
             .id(SharedString::from(format!("html-page-{}", overlay.id)))
