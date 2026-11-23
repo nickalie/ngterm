@@ -506,6 +506,36 @@ def test_a_session_pick_holds_the_session_and_its_window_slot(ctl):
     assert_absent(_top(ctl), "pickPending")
 
 
+def _active(ctl, wid):
+    def active(response):
+        (node,) = [node for node in assert_ok(response)["windows"] if node["id"] == wid]
+        assert node.get("active") is True, node
+        return True
+
+    active.__qualname__ = f"window {wid} active"
+    ctl.wait_response("window.list", None, active)
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("pick.open", "pick.cancel", "field:tree.session.pick")
+def test_a_session_pick_opens_in_its_own_window_while_another_is_frontmost(ctl):
+    first = assert_ok(ctl.request("window.list"))["windows"][0]["id"]
+    sid = assert_ok(ctl.request("session.new", window=first))["id"]
+    ctl.wait_mounted(sid, "left")
+    second = assert_ok(ctl.request("window.new", name="frontmost"))["id"]
+    try:
+        assert_ok(ctl.request("window.select", second))
+        _active(ctl, second)
+        with _cancelled(ctl, "pick.cancel", assert_ok(ctl.request("pick.open", sid, items=ITEMS))["id"]) as pick_id:
+            own = assert_ok(ctl.request("tree", window=first))
+            assert own["tree"]["pickPending"] == pick_id
+            assert find_session(own, sid)["pick"] == {"id": pick_id}
+            assert_absent(assert_ok(ctl.request("tree", window=second))["tree"], "pickPending")
+    finally:
+        assert_ok(ctl.request("window.delete", second))
+        assert_ok(ctl.request("session.close", sid))
+
+
 # -- timeouts
 
 

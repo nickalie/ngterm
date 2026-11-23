@@ -1177,6 +1177,58 @@ def test_pick_blocks_until_cancelled(cli, ctl):
     assert (finished.returncode, json.loads(finished.stdout), finished.stderr) == (2, {"result": "cancelled"}, "")
 
 
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("cli:pick", "cli:pick cancel")
+def test_pick_bound_to_a_session(cli, ctl):
+    sid = _new(ctl)
+    opened = cli("pick", "--no-block", "--session", sid, input="a\nb\n")
+    pick_id = json.loads(_ok(opened))["id"]
+    assert _node(ctl, sid)["pick"] == {"id": pick_id}
+    _refused(cli("pick", "--no-block", "--session", sid, input="a\n"), "pick already pending")
+    _ok(cli("pick", "cancel", pick_id), "ok\n")
+    assert_absent(_node(ctl, sid), "pick")
+    _refused(cli("pick", "--no-block", "--session", UNKNOWN, input="a\n"), f"no such session: {UNKNOWN}")
+    assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("cli:pick", "cli:ask")
+def test_a_timed_pick_and_ask_end_cancelled(cli, ctl):
+    timed = cli("pick", "--timeout", "0.5", input="a\nb\n")
+    assert (timed.returncode, json.loads(timed.stdout), timed.stderr) == (2, {"result": "cancelled"}, "")
+    assert_absent(ctl.tree()["tree"], "pickPending")
+    sid = _new(ctl)
+    timed = cli("ask", "open", "--timeout", "0.5", "--button", "yes", "--target", sid, "Proceed?")
+    assert (timed.returncode, json.loads(timed.stdout), timed.stderr) == (2, {"result": "cancelled"}, "")
+    assert_absent(_node(ctl, sid), "ask")
+    assert_ok(ctl.request("session.close", sid))
+
+
+INTERACTION_TIMEOUT_REFUSAL = "timeout must be more than 0 and at most 86400 seconds"
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("cli:pick", "cli:ask")
+@pytest.mark.parametrize("command", [("pick", "--no-block"), ("ask", "open", "--no-block", "--button", "yes")])
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("0", INTERACTION_TIMEOUT_REFUSAL),
+        # The argument parsers differ on a value that looks like an option: only the usage error is shared.
+        ("-1", None),
+        ("86400.5", INTERACTION_TIMEOUT_REFUSAL),
+        ("inf", INTERACTION_TIMEOUT_REFUSAL),
+        ("nan", INTERACTION_TIMEOUT_REFUSAL),
+    ],
+    ids=["zero", "negative", "over-a-day", "infinite", "nan"],
+)
+def test_a_timeout_out_of_range_is_refused_before_sending(cli, ctl, command, value, message):
+    args = [*command, "--timeout", value]
+    _usage(cli(*args, input="a\n") if command[0] == "pick" else cli(*args, "Proceed?"), message)
+    assert_absent(ctl.tree()["tree"], "pickPending")
+    assert_absent(ctl.tree()["tree"], "askPending")
+
+
 @pytest.mark.covers("cli:ask", "cli:ask result", "cli:ask cancel")
 def test_ask_without_blocking(cli, ctl):
     sid = _new(ctl)
