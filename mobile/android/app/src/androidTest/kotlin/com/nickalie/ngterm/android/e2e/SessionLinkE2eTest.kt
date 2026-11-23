@@ -26,7 +26,6 @@ import com.nickalie.ngterm.android.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
-import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
@@ -126,7 +125,6 @@ class SessionLinkE2eTest {
         screenshot("linked-attached")
     }
 
-    @Ignore("Q1 of QA 328: a link to a session made after the phone's last listing does the usual tap")
     @Test
     fun aTapOnALinkToASessionMadeAfterTheListingOpensIt() {
         openANewSession(SESSION)
@@ -188,6 +186,9 @@ class SessionLinkE2eTest {
         awaitTerminal("flipped:$DARK")
         screenshot("scheme-flipped")
 
+        // the flip's configuration change closes the soft keyboard: a tap gives the terminal the focus again
+        tapTheTopLeftCell()
+        Thread.sleep(SETTLE_MS)
         run(
             "stty raw -echo; printf '\\033[?996n'; r=\$(dd bs=1 count=9 2>/dev/null); stty sane\n" +
                 "printf '%s:%s\\n' again \"\$r\" | tr -d '\\033'\n",

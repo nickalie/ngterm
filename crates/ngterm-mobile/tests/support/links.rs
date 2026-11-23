@@ -1,9 +1,6 @@
 //! A session link tapped in a pane, the app's appearance reported to the program in it, and the origin's unseen badge
 //! cleared by what the phone types: each as a user meets it in a pane the phone leads.
 
-use std::thread;
-use std::time::Duration;
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ngterm_mobile::{CellPoint, PaneColorScheme};
@@ -14,10 +11,6 @@ use crate::phone::{Client, block_on, enter, poll, screen_text};
 /// The color scheme report of a dark (`1`) or light (`2`) appearance, as the screen shows it with its ESC dropped.
 const DARK_REPORT: &str = "[?997;1n";
 const LIGHT_REPORT: &str = "[?997;2n";
-
-/// How long a new appearance takes to reach the side that answers a query (QA 328 Q2: a query sent sooner can get the
-/// old one).
-const SCHEME_SETTLE: Duration = Duration::from_secs(3);
 
 /// A program that asks for the color scheme (`CSI ? 996 n`) and prints every answer it reads within three seconds,
 /// so a second answer shows too, before the bar that ends them.
@@ -30,17 +23,15 @@ const AWAIT_FLIP: &str = r#"stty raw -echo; printf '\033[?2031h%s%s\r\n' arm ed;
 printf '\033[?2031l'; stty sane; printf '%s%s:%s\n' flip ped "$r" | tr -d '\033'
 "#;
 
-/// The phone's appearance reaches the program in its pane: a query gets the app's light or dark, and with mode 2031
-/// on, a flip of the appearance is reported.
+/// The phone's appearance reaches the program in its pane: a query sent right after a change gets the app's new light
+/// or dark, and with mode 2031 on, a flip of the appearance is reported.
 pub(crate) fn the_program_gets_the_apps_appearance(client: &mut Client) {
     let pane = client.terminal.clone().expect("a shown pane");
     pane.set_color_scheme(PaneColorScheme::Dark);
-    thread::sleep(SCHEME_SETTLE);
     run(client, ASK_SCHEME);
     client.wait_screen(&format!("asked:{DARK_REPORT}|"));
 
     pane.set_color_scheme(PaneColorScheme::Light);
-    thread::sleep(SCHEME_SETTLE);
     run(client, ASK_SCHEME);
     client.wait_screen(&format!("asked:{LIGHT_REPORT}|"));
 
@@ -66,21 +57,14 @@ pub(crate) fn typing_clears_the_origins_badge(world: &World, client: &mut Client
     });
 }
 
-/// A link to another session of the machine names that session, so a tap opens it; a link to a session the machine
-/// does not list, or to a web page, names none.
+/// A link to another session of the machine, made after the phone's last listing, names that session, so a tap opens
+/// it; a link to a session the machine does not list, or to a web page, names none.
 pub(crate) fn a_session_link_names_its_session(world: &World, client: &mut Client) {
     let other = world
         .headless
         .ctl(&["session", "new", "--no-select", "--name=e2e-linked"])
         .expect("create the linked session");
     let other = other.trim().to_owned();
-    poll("the linked session listed", || {
-        client
-            .list()
-            .iter()
-            .any(|(id, _)| id.eq_ignore_ascii_case(&other))
-            .then_some(())
-    });
     let unknown = "0E2B7C1A-5D4F-4E3B-9A61-7C2D8F0B1A23";
     run(
         client,
