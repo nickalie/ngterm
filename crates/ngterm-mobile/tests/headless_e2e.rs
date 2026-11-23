@@ -10,6 +10,10 @@
 //! session made through the private socket must be all that `live tree` over ssh lists. On every exit path the
 //! sessions are reaped through the private namespace's own session server.
 //!
+//! Before that, in the pane the phone leads ([`links`]): a key it types clears the badge a notification raised on the
+//! origin, a program's color scheme query gets the phone's appearance and a mode 2031 program its flip, and a session
+//! link names the listed session it links to and nothing for any other link.
+//!
 //! Once the phone has read, led and reconnected, a fake agent (`support/fake_agent.py`, a stand-in Claude Code run
 //! by the system's `python3`) takes the pane's foreground: it replays Task 1's recorded idle screen, writes a
 //! transcript made from the recorded session and reports its `SessionStart` through `ngtermctl agent hook` on the private
@@ -52,6 +56,9 @@ mod chat;
 #[cfg(test)]
 #[path = "support/left_arrow.rs"]
 mod left_arrow;
+#[cfg(test)]
+#[path = "support/links.rs"]
+mod links;
 #[cfg(test)]
 #[path = "support/machine.rs"]
 mod machine;
@@ -143,6 +150,11 @@ fn the_mobile_core_drives_a_real_headless_machine_over_ssh() {
     let marker = assert_isolated(&world, &first);
     let session = create_and_read(&mut first);
     let pane = first.pane.clone().expect("a shown pane");
+    links::typing_clears_the_origins_badge(&world, &mut first, &session);
+    links::the_program_gets_the_apps_appearance(&mut first);
+    links::a_session_link_names_its_session(&world, &mut first);
+    // the steps below look for the line's output, which the links pushed off the screen
+    first.run_line();
 
     let mut second = Client::new("second", &world);
     second.connect(world.sshd.port());
