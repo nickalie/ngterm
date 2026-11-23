@@ -2041,12 +2041,18 @@ fn a_job_handoff_reports_the_helpers_exit_code_to_the_overlay_result() {
         )
         .ok
     );
-    let job = presenter.last("overlay.request")["overlay"]["job"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let overlay = presenter.last("overlay.request")["overlay"].clone();
+    let token = overlay["token"].as_str().map(str::to_owned);
+    assert!(
+        token.is_some(),
+        "a presenter listing job.token gets the job's offer token: {overlay}"
+    );
     let mut reply = state.handle_request(&Request {
-        target: Some(job),
+        target: overlay["job"].as_str().map(str::to_owned),
+        args: Some(Args {
+            token,
+            ..Args::default()
+        }),
         ..Request::new(Command::Session(SessionCmd::OverlayJobRun))
     });
     assert!(reply.response.ok, "{:?}", reply.response);
