@@ -2,11 +2,10 @@
 on the icon folds and opens it again instead of starting a rename (#952, `SidebarUITests`
 `testWorkspaceIconClickTogglesWhenRowClickIsOff` and `testWorkspaceIconDoubleClickFoldsTwiceWithoutRename` v0.42.0)."""
 
-import time
-
 import pytest
+from agterm_conformance.drivers.base import ReadFailed
 from agterm_conformance.match import assert_ok, workspaces
-from agterm_conformance.wait import wait_until
+from agterm_conformance.wait import WaitTimeout, wait_until
 
 pytestmark = pytest.mark.since("0.42.0")
 
@@ -43,6 +42,14 @@ def _icon(ui, name):
     return wait_until(find, timeout=ui.timeout)
 
 
+def _rename_field(ui):
+    """The rename field, if one shows; a read the folding outline invalidates mid-way is read again."""
+    try:
+        return next(iter(ui.all("edit-field")), None)
+    except ReadFailed:
+        return None
+
+
 @pytest.mark.covers("ui:workspace-icon", "ui:workspace-row", "field:tree.workspace.collapsed")
 def test_a_workspace_icon_click_folds_it_with_the_row_click_setting_off(launch, ui_for):
     ctl = launch(settings={"workspaceRowClickExpands": False})
@@ -60,8 +67,6 @@ def test_a_workspace_icon_double_click_folds_twice_without_a_rename(launch, ui_f
     ui = ui_for(ctl)
     wid = _workspace_with_a_session(ctl, "ui-icon-double")
     ui.mouse_double_click(_icon(ui, "ui-icon-double"))
-    deadline = time.monotonic() + NO_RENAME_WAIT
-    while time.monotonic() < deadline:
-        assert not ui.all("edit-field"), "an icon double-click must not start a rename"
-        time.sleep(0.1)
+    with pytest.raises(WaitTimeout):
+        wait_until(lambda: _rename_field(ui), timeout=NO_RENAME_WAIT)
     ctl.wait_tree(lambda tree: _collapsed(tree, wid) is False)

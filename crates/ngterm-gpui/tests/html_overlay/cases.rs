@@ -303,6 +303,8 @@ impl Fixture {
             },
         );
         overlay.replica_of = Some(Uuid::new_v4());
+        // no model here marks the first load, which takes the loading indicator off the page
+        overlay.content_shown = true;
         overlay
     }
 
@@ -669,6 +671,8 @@ fn content_replica(origin: &Rc<FakeOrigin>, path: &str, content: ngterm_core::ht
         HtmlPageFlags::default(),
     );
     overlay.replica_of = Some(Uuid::new_v4());
+    // no model here marks the first load, which takes the loading indicator off the page
+    overlay.content_shown = true;
     overlay
 }
 

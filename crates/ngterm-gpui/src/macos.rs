@@ -251,8 +251,8 @@ extern "C" fn app_activation_changed() {
     }
 }
 
-/// Runs `changed` after each change of the application's activation.
-pub fn watch_app_activation(changed: fn(&mut gpui_kit::App), cx: &mut gpui_kit::App) {
+/// Runs `on_change` after each change of the application's activation.
+pub fn watch_app_activation(on_change: fn(&mut gpui_kit::App), cx: &mut gpui_kit::App) {
     let (changes, queue) = async_channel::unbounded();
     if APP_ACTIVATION.set(changes).is_err() {
         return;
@@ -261,7 +261,7 @@ pub fn watch_app_activation(changed: fn(&mut gpui_kit::App), cx: &mut gpui_kit::
     unsafe { ngterm_app_activation_start(app_activation_changed) };
     cx.spawn(async move |cx| {
         while queue.recv().await.is_ok() {
-            cx.update(changed);
+            cx.update(on_change);
         }
     })
     .detach();
