@@ -10,7 +10,7 @@ import json
 import shlex
 
 import pytest
-from agterm_conformance.match import assert_ok, find_session, session_ids
+from agterm_conformance.match import assert_ok, find_session, held_interactions, session_ids
 from agterm_conformance.plugin import Ctl
 from agterm_conformance.wait import wait_until
 
@@ -164,7 +164,8 @@ def test_an_ask_from_an_attached_pane_while_a_new_split_on_the_origin_leads(remo
 
 @pytest.mark.since("0.42.0")
 @pytest.mark.parametrize("remote_origin", ["headless"], indirect=True)
-@pytest.mark.covers("ask.open", "ask.cancel", "session.select", "field:tree.session.ask", "field:tree.session.interactions")
+@pytest.mark.covers("ask.open", "ask.result", "ask.cancel", "session.select", "field:tree.session.ask",
+                    "field:tree.session.interactions")
 def test_a_headless_origins_gui_ask_for_a_row_not_on_screen_waits_hidden_on_the_viewer(remote_origin, remote_viewer):
     """A viewer refuses a GUI ask for a row it does not show, so that a desktop origin shows it itself; a headless origin
     has no screen to take it back to, so the viewer keeps it hidden with the row until the row is shown."""
@@ -178,9 +179,8 @@ def test_a_headless_origins_gui_ask_for_a_row_not_on_screen_waits_hidden_on_the_
     ask = assert_ok(origin.request("ask.open", sid, title="Proceed?", style="gui",
                                    buttons=[{"id": "yes", "label": "Yes"}]))["id"]
     remote_viewer.wait_tree(lambda tree: find_session(tree, local).get("ask") == {"id": ask, "replica": True})
-    assert [(held["kind"], held["state"]) for held in find_session(origin.tree(), sid)["interactions"]] == [
-        ("ask", "offered")
-    ], "the viewer took the ask, and did not refuse it back to the origin"
+    assert held_interactions(origin.tree(), sid) == [("ask", "offered")], \
+        "the viewer took the ask, and did not refuse it back to the origin"
     assert assert_ok(origin.request("ask.result", ask))["ask"] == {"result": "pending"}
     assert_ok(remote_viewer.request("session.select", local))
     assert find_session(remote_viewer.tree(), local).get("ask") == {"id": ask, "replica": True}

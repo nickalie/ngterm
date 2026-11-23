@@ -33,6 +33,7 @@ from agterm_conformance.match import (
     assert_ok,
     assert_subset,
     find_session,
+    held_interactions,
     program_argv,
     session_ids,
 )
@@ -2059,10 +2060,6 @@ def _pending_batch(stream, timeout=30):
     pytest.fail(f"no pending.commit within {timeout}s")
 
 
-def _held(tree, sid):
-    return [(held["kind"], held["state"]) for held in find_session(tree, sid).get("interactions", [])]
-
-
 @headless_origin
 @pytest.mark.covers(
     "ask.open",
@@ -2106,7 +2103,7 @@ def test_a_headless_origin_holds_interactions_for_the_next_presenter(remote_orig
         assert [frame["kind"] for frame in batch] == ["ask.request", "pick.request", "overlay.request"]
         assert [batch[0]["ask"]["id"], batch[1]["pick"]["id"], batch[2]["overlay"]["job"]] == [ask, pick, job]
         token = batch[2]["overlay"]["token"]
-        assert _held(origin.tree(), sid) == [("ask", "offered"), ("pick", "offered"), ("job", "offered")]
+        assert held_interactions(origin.tree(), sid) == [("ask", "offered"), ("pick", "offered"), ("job", "offered")]
         assert isinstance(find_session(origin.tree(), sid)["interactions"][2]["deadline"], float), \
             "a job's launch window starts at its offer"
         with origin.stream("session.overlay.job.run", job) as untokened:
@@ -2116,6 +2113,6 @@ def test_a_headless_origin_holds_interactions_for_the_next_presenter(remote_orig
             assert helper.read()["context"]["command"] == "true"
             helper.send({"kind": "started"})
             helper.send({"kind": "exited", "code": 0})
-            origin.wait_tree(lambda tree: [kind for kind, _ in _held(tree, sid)] == ["ask", "pick"])
-    origin.wait_tree(lambda tree: _held(tree, sid) == [("ask", "unpresented"), ("pick", "unpresented")])
+            origin.wait_tree(lambda tree: [kind for kind, _ in held_interactions(tree, sid)] == ["ask", "pick"])
+    origin.wait_tree(lambda tree: held_interactions(tree, sid) == [("ask", "unpresented"), ("pick", "unpresented")])
     assert_ok(origin.request("session.close", sid))

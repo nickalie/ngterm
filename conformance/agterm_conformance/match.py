@@ -218,6 +218,10 @@ def find_session(source: Any, session_id: str) -> Mapping[str, Any]:
     return found[0]
 
 
+def held_interactions(source: Any, session_id: str) -> list[tuple[str, str]]:
+    return [(held["kind"], held["state"]) for held in find_session(source, session_id).get("interactions", [])]
+
+
 def active_workspace_id(source: Any) -> str:
     return _single_active(workspaces(source), "workspace")
 

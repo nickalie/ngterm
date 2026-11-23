@@ -2,13 +2,14 @@
 an origin that is a second instance of the build behind the harness's own sshd (`remote_origin`). The origin hands the
 pick to the viewer, which shows a replica in the window holding the attached row; the replica's outcome goes back to the
 origin, and the origin's end of the pick takes the replica down. A viewer that goes away, or whose pick slot is busy,
-hands the pick back into the origin's window.
+hands the pick back into a desktop origin's window; a headless origin, which has none, holds it for the next viewer, and
+a busy viewer keeps it queued behind its own pick.
 
 No protocol command answers a pick, so the outcomes reached here are `pending` and `cancelled`: a cancel on the viewer
 stands for its Esc."""
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_ok, find_session, session_ids
+from agterm_conformance.match import assert_absent, assert_ok, find_session, held_interactions, session_ids
 from agterm_conformance.plugin import Ctl
 from agterm_conformance.wait import wait_response
 
@@ -141,10 +142,6 @@ def test_a_viewer_with_a_busy_pick_slot_hands_the_pick_back(remote_origin, remot
     assert_ok(origin.request("session.close", sid))
 
 
-def _held(tree, sid):
-    return [(held["kind"], held["state"]) for held in find_session(tree, sid).get("interactions", [])]
-
-
 @pytest.mark.since("0.42.0")
 @pytest.mark.parametrize("remote_origin", ["headless"], indirect=True)
 @pytest.mark.covers("pick.open", "pick.result", "pick.cancel", "field:tree.session.pick",
@@ -156,16 +153,16 @@ def test_a_headless_origins_pick_waits_for_a_viewer_and_behind_its_busy_slot(rem
     sid = assert_ok(origin.request("session.new"))["id"]
     origin.wait_mounted(sid, "left")
     pick_id = _open(origin, sid)
-    assert _held(origin.tree(), sid) == [("pick", "unpresented")]
+    assert held_interactions(origin.tree(), sid) == [("pick", "unpresented")]
 
     local = assert_ok(remote_viewer.request("live.attach", sid, host=remote_origin.host))["id"]
     _replica(remote_viewer, local, pick_id)
-    origin.wait_tree(lambda tree: _held(tree, sid) == [("pick", "offered")])
+    origin.wait_tree(lambda tree: held_interactions(tree, sid) == [("pick", "offered")])
     assert_ok(remote_viewer.request("session.close", local))
-    origin.wait_tree(lambda tree: _held(tree, sid) == [("pick", "unpresented")])
+    origin.wait_tree(lambda tree: held_interactions(tree, sid) == [("pick", "unpresented")])
     assert assert_ok(origin.request("pick.result", pick_id))["pick"] == {"result": "pending"}
     assert_ok(origin.request("pick.cancel", pick_id))
-    origin.wait_tree(lambda tree: _held(tree, sid) == [])
+    origin.wait_tree(lambda tree: held_interactions(tree, sid) == [])
 
     local = assert_ok(remote_viewer.request("live.attach", sid, host=remote_origin.host))["id"]
     remote_viewer.wait_tree(lambda tree: find_session(tree, local).get("realized"))
@@ -174,7 +171,7 @@ def test_a_headless_origins_pick_waits_for_a_viewer_and_behind_its_busy_slot(rem
     try:
         pick_id = _open(origin, sid)
         remote_viewer.wait_tree(lambda tree: find_session(tree, local).get("pick") == {"id": pick_id, "replica": True})
-        origin.wait_tree(lambda tree: _held(tree, sid) == [("pick", "offered")])
+        origin.wait_tree(lambda tree: held_interactions(tree, sid) == [("pick", "offered")])
         assert remote_viewer.tree()["tree"]["pickPending"] == busy
         assert assert_ok(remote_viewer.request("pick.result", pick_id))["pick"] == {"result": "pending"}
     finally:
@@ -182,7 +179,7 @@ def test_a_headless_origins_pick_waits_for_a_viewer_and_behind_its_busy_slot(rem
     remote_viewer.wait_tree(lambda tree: tree["tree"].get("pickPending") == pick_id)
     assert_ok(remote_viewer.request("pick.cancel", pick_id))
     _ends_cancelled(origin, pick_id)
-    origin.wait_tree(lambda tree: _held(tree, sid) == [])
+    origin.wait_tree(lambda tree: held_interactions(tree, sid) == [])
     _no_pick(remote_viewer, local)
 
     assert_ok(remote_viewer.request("session.close", local))

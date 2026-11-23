@@ -14,6 +14,7 @@ from agterm_conformance.match import (
     assert_subset,
     assert_version_result,
     find_session,
+    held_interactions,
     program_argv,
     session_ids,
     window_ids,
@@ -170,6 +171,16 @@ def test_ids_from_tree() -> None:
     assert active_workspace_id(TREE) == "w2"
     assert active_session_id(TREE) == "s2"
     assert find_session(TREE, "s3") == {"id": "s3", "active": False}
+
+
+def test_held_interactions() -> None:
+    held = {"workspaces": [{"id": "w", "active": True, "sessions": [
+        {"id": "s1", "interactions": [{"kind": "ask", "state": "offered", "id": "a"},
+                                      {"kind": "job", "state": "unpresented", "id": "j"}]},
+        {"id": "s2"},
+    ]}]}
+    assert held_interactions(held, "s1") == [("ask", "offered"), ("job", "unpresented")]
+    assert held_interactions(held, "s2") == []
 
 
 def test_ids_errors() -> None:
