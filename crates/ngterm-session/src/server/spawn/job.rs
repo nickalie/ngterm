@@ -240,11 +240,16 @@ fn domain() -> String {
 
 /// Runs `launchctl` with `arguments` until `deadline`; its exit status is the error number it prints.
 fn launchctl(arguments: &[OsString], deadline: Instant) -> Outcome {
+    run(Path::new(LAUNCHCTL), arguments, deadline)
+}
+
+/// Runs `program`, a `launchctl`, with `arguments` until `deadline`.
+fn run(program: &Path, arguments: &[OsString], deadline: Instant) -> Outcome {
     let verb = arguments
         .first()
         .map(|verb| verb.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut child = match Command::new(LAUNCHCTL)
+    let mut child = match Command::new(program)
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -388,6 +393,42 @@ mod tests {
         };
         assert!(reason.starts_with("plist:"), "{reason}");
         assert!(!missing.exists());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_bootstrap_without_launchctl_fails_and_leaves_no_plist() {
+        let root = tempfile::tempdir().unwrap();
+        let outcome = job().bootstrap(root.path(), Instant::now() + LAUNCHCTL_BUDGET);
+        let Outcome::Failed(reason) = outcome else {
+            panic!("expected a failure, got {outcome:?}");
+        };
+        assert!(reason.starts_with("launchctl: "), "{reason}");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launchctl_s_exit_status_and_deadline_decide_the_outcome() {
+        let soon = || Instant::now() + LAUNCHCTL_BUDGET;
+        let shell = Path::new("/bin/sh");
+        let script = |body: &str| [OsString::from("-c"), OsString::from(body)];
+        assert_eq!(run(shell, &script("exit 0"), soon()), Outcome::Succeeded);
+        assert_eq!(
+            run(shell, &script("exit 5"), soon()),
+            Outcome::Failed("launchctl -c exit status: 5".to_owned())
+        );
+        let begun = Instant::now();
+        assert_eq!(
+            run(shell, &script("sleep 30"), Instant::now() + Duration::from_millis(100)),
+            Outcome::Uncertain
+        );
+        assert!(begun.elapsed() < Duration::from_secs(10));
+        let missing = run(Path::new("/nonexistent/launchctl"), &[], soon());
+        assert!(
+            matches!(&missing, Outcome::Failed(reason) if reason.starts_with("launchctl: ")),
+            "{missing:?}"
+        );
     }
 
     #[test]
