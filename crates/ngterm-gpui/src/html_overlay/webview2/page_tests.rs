@@ -1046,7 +1046,37 @@ fn a_replica_link_pages_anchor_keeps_a_held_link(cx: &mut TestAppContext) {
         .page
         .link_read(2, path.clone(), &guide, Ok("<p>guide</p>".to_owned()));
     assert_eq!(driven.view.take(), [Call::Load(guide.clone())]);
+    assert!(
+        driven
+            .page
+            .allows(&navigation(&format!("{readme}#install"), true, true, false, 4))
+    );
     assert_eq!(driven.page.take_link_document(&path).as_deref(), Some("<p>guide</p>"));
+}
+
+/// A reload of a shown address with a fragment loads the document again, so it replaces a held link.
+#[gpui_kit::test]
+fn a_replica_link_pages_reload_at_an_anchor_replaces_a_held_link(cx: &mut TestAppContext) {
+    let (mut driven, source, readme) = realized_replica_link_page(cx);
+    let anchor = format!("{readme}#usage");
+    driven.report(Report::Source(anchor.clone()), cx);
+    let path = "/nowhere/docs/sub/guide.md".to_owned();
+    let guide = scheme::replica_link_address(source.id, &path).unwrap();
+    let follow = navigation(&guide, true, true, false, 2);
+    assert!(!driven.page.allows(&follow), "held until the origin read the link");
+    driven.report(
+        Report::Navigation {
+            navigation: follow,
+            allowed: false,
+        },
+        cx,
+    );
+    assert!(driven.page.allows(&navigation(&anchor, true, false, false, 3)));
+    driven
+        .page
+        .link_read(2, path.clone(), &guide, Ok("<p>guide</p>".to_owned()));
+    assert!(driven.view.take().is_empty(), "a replaced hold's read loads nothing");
+    assert_eq!(driven.page.take_link_document(&path), None);
 }
 
 #[gpui_kit::test]

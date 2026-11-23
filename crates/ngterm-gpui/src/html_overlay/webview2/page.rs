@@ -177,6 +177,11 @@ impl PageState {
         };
         url.fragment().is_some() && shown[..url::Position::AfterQuery] == url[..url::Position::AfterQuery]
     }
+
+    /// Whether `url` moves to another place in the shown document; the shown address itself is a reload.
+    fn moves_in_document(&self, url: &Url) -> bool {
+        self.same_document(url) && self.engine.uri.as_deref().and_then(app_url).as_ref() != Some(url)
+    }
 }
 
 /// An address the web view reports, as the app spells it.
@@ -863,14 +868,14 @@ impl Page {
     }
 
     /// A main-frame load that goes ahead after a held link replaces that link, and a read document it does not load
-    /// is not served later. A move inside the shown document loads nothing, so it keeps both. Both engines decide every
-    /// navigation here; WKWebView reports no allowed one.
+    /// is not served later. A move to another place in the shown document loads nothing, so it keeps both; a reload
+    /// loads. Both engines decide every navigation here; WKWebView reports no allowed one.
     fn link_superseded(&self, navigation: &Navigation) {
         let Ok(mut state) = self.state.try_borrow_mut() else {
             return;
         };
         let url = app_url(&navigation.uri);
-        if url.as_ref().is_some_and(|url| state.same_document(url)) {
+        if url.as_ref().is_some_and(|url| state.moves_in_document(url)) {
             return;
         }
         state.link_read.take_if(|held| *held < navigation.id);
