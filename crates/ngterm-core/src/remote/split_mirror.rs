@@ -27,12 +27,17 @@ pub(crate) enum SplitChange {
 }
 
 /// The origin lines of one split change, run in order until one fails.
+struct Change {
+    action: &'static str,
+    lines: VecDeque<Vec<String>>,
+}
+
+/// A row's split changes, sent to its origin one line at a time in the order the viewer made them.
 pub(crate) struct MirrorRun {
     session: Uuid,
     host: String,
     peer: RemotePeer,
-    action: &'static str,
-    lines: VecDeque<Vec<String>>,
+    changes: VecDeque<Change>,
     answer: Option<Answer>,
 }
 
@@ -43,10 +48,12 @@ impl MirrorRun {
             session: id,
             host,
             peer,
-            action: CLOSE_SPLIT,
-            lines: VecDeque::from([["session", "split", "close", "--target", origin]
-                .map(str::to_owned)
-                .to_vec()]),
+            changes: VecDeque::from([Change {
+                action: CLOSE_SPLIT,
+                lines: VecDeque::from([["session", "split", "close", "--target", origin]
+                    .map(str::to_owned)
+                    .to_vec()]),
+            }]),
             answer: None,
         }
     }
@@ -91,14 +98,24 @@ impl Core {
             session: id,
             host,
             peer,
-            action,
-            lines,
+            changes: VecDeque::from([Change { action, lines }]),
             answer: None,
         })
     }
 
-    /// Sends `run`'s first line to the origin.
+    /// Sends `run`'s first line to the origin, or queues its changes behind the row's change still in flight, so the
+    /// origin applies them in the viewer's order.
     pub(crate) fn start_split_mirror(&mut self, mut run: MirrorRun) {
+        if let Some(pending) = self
+            .remote
+            .viewer
+            .split_mirrors
+            .iter_mut()
+            .find(|pending| pending.session == run.session)
+        {
+            pending.changes.append(&mut run.changes);
+            return;
+        }
         if self.send_next_mirror_line(&mut run) {
             self.remote.viewer.split_mirrors.push(run);
         }
@@ -113,35 +130,52 @@ impl Core {
             };
             if let Some(reason) = mirror_failure(&result, &run.host) {
                 self.mirror_failed(&run, &reason);
-            } else if self.send_next_mirror_line(&mut run) {
+                run.changes.pop_front();
+            }
+            if self.send_next_mirror_line(&mut run) {
                 self.remote.viewer.split_mirrors.push(run);
             }
         }
     }
 
-    /// Whether a line went out; `false` once none is left or it could not start.
+    /// Whether a line went out; `false` once none is left. A change whose line could not start is dropped, and the
+    /// next change goes out.
     fn send_next_mirror_line(&mut self, run: &mut MirrorRun) -> bool {
-        let Some(words) = run.lines.pop_front() else {
-            return false;
-        };
-        let answer = control_command(&run.host, run.peer, &words)
-            .ok()
-            .and_then(|argv| run_off_thread(&self.remote.runner, argv, COMPANION_DEADLINE));
-        if answer.is_none() {
+        loop {
+            let Some(change) = run.changes.front_mut() else {
+                return false;
+            };
+            let Some(words) = change.lines.pop_front() else {
+                run.changes.pop_front();
+                continue;
+            };
+            let answer = control_command(&run.host, run.peer, &words)
+                .ok()
+                .and_then(|argv| run_off_thread(&self.remote.runner, argv, COMPANION_DEADLINE));
+            if answer.is_some() {
+                run.answer = answer;
+                return true;
+            }
             let reason = format!("the remote command failed on {}", run.host);
             self.mirror_failed(run, &reason);
-            return false;
+            run.changes.pop_front();
         }
-        run.answer = answer;
-        true
+    }
+
+    /// Whether row `id` has split changes on their way to its origin.
+    pub(super) fn split_mirror_pending(&self, id: Uuid) -> bool {
+        self.remote.viewer.split_mirrors.iter().any(|run| run.session == id)
     }
 
     fn mirror_failed(&mut self, run: &MirrorRun, reason: &str) {
-        tracing::info!(reason, action = run.action, "a split change did not reach the origin");
+        let Some(action) = run.changes.front().map(|change| change.action) else {
+            return;
+        };
+        tracing::info!(reason, action, "a split change did not reach the origin");
         let Some(window) = self.library().window_holding_session(run.session) else {
             return;
         };
-        self.action_failed(run.action, window, Some(run.session), reason);
+        self.action_failed(action, window, Some(run.session), reason);
     }
 }
 

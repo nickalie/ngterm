@@ -141,14 +141,9 @@ impl Core {
             return true;
         }
         // A promoted, still-pending split can gain another split. Serialize their origin mutations and binding,
-        // so the later request sees its sibling's daemon and can actually create the origin's next split.
-        if self
-            .remote
-            .viewer
-            .split_flows
-            .iter()
-            .any(|run| run.target.session == id)
-        {
+        // so the later request sees its sibling's daemon and can actually create the origin's next split. A split
+        // change still on its way to the origin goes first too, so its late close cannot remove this split.
+        if self.origin_split_busy(id) {
             self.remote.viewer.queued_split_panes.insert(pane, id);
             return true;
         }
@@ -158,7 +153,7 @@ impl Core {
         };
         let origin = binding.remote_session_id.clone();
         // Capture the sibling now: it may leave or trade roles while the new daemon starts. Ignore bindings for
-        // closed panes, so reopening a split can still reuse the origin daemon it detached from.
+        // closed panes, so a split whose origin close failed can still be attached again.
         let excluded_daemons = [Some(session.pane_identity), session.split_pane_identity]
             .into_iter()
             .flatten()
@@ -216,13 +211,7 @@ impl Core {
             }
         }
         for (pane, session) in std::mem::take(&mut self.remote.viewer.queued_split_panes) {
-            if self
-                .remote
-                .viewer
-                .split_flows
-                .iter()
-                .any(|run| run.target.session == session)
-            {
+            if self.origin_split_busy(session) {
                 self.remote.viewer.queued_split_panes.insert(pane, session);
             } else {
                 self.grant_remote_pane_spawn(pane);
@@ -421,6 +410,16 @@ impl Core {
         let target = run.target;
         let mirror = MirrorRun::abandoned(target.session, target.host, target.peer, &target.origin);
         self.start_split_mirror(mirror);
+    }
+
+    /// Whether row `id` has an origin split mutation in flight: a split being made, or a split change being sent.
+    fn origin_split_busy(&self, id: Uuid) -> bool {
+        self.remote
+            .viewer
+            .split_flows
+            .iter()
+            .any(|run| run.target.session == id)
+            || self.split_mirror_pending(id)
     }
 
     fn fail_remote_split(&mut self, id: Uuid, pane: Uuid, reason: &str) {

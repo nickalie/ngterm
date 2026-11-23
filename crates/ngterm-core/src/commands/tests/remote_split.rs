@@ -1,7 +1,7 @@
 //! A viewer's new split must attach to an origin daemon before the terminal receives its launch seed.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use ngterm_host::fakes::FakeSurface;
@@ -23,11 +23,27 @@ const ORIGIN: &str = "origin-session";
 struct Runner {
     results: Mutex<VecDeque<RemoteCommandResult>>,
     calls: Mutex<Vec<Vec<String>>>,
+    /// While set, each command waits for [`Runner::release`] before it answers.
+    held: Mutex<bool>,
+    released: Condvar,
+}
+
+impl Runner {
+    fn hold(&self) {
+        *self.held.lock().unwrap() = true;
+    }
+
+    fn release(&self) {
+        *self.held.lock().unwrap() = false;
+        self.released.notify_all();
+    }
 }
 
 impl RemoteCommandRunner for Runner {
     fn run(&self, argv: &[String], _deadline: Duration) -> RemoteCommandResult {
         self.calls.lock().unwrap().push(argv.to_vec());
+        let held = self.held.lock().unwrap();
+        drop(self.released.wait_while(held, |held| *held).unwrap());
         self.results
             .lock()
             .unwrap()
@@ -814,4 +830,143 @@ fn a_split_closed_while_its_origin_split_is_made_closes_that_split_on_the_origin
         lines[2],
         origin_line(&["session", "split", "close", "--target", "origin-session"])
     );
+}
+
+impl Remote {
+    /// Ticks for a while and returns how many origin commands started, to show that no other one goes out.
+    fn settled_calls(&mut self) -> usize {
+        for _ in 0..20 {
+            self.fixture.core.remote_tick(Instant::now());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.runner.calls.lock().unwrap().len()
+    }
+}
+
+#[test]
+fn split_changes_reach_the_origin_one_at_a_time_in_the_viewers_order() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    remote.script([result(&json!({"ok": true})), result(&json!({"ok": true}))]);
+    remote.runner.hold();
+    let row = Some(wire(remote.row));
+    let hide = args(|args| args.mode = Some("off".to_owned()));
+    assert!(remote.fixture.session(SessionCmd::Split, row.as_deref(), hide).ok);
+    let show = args(|args| args.mode = Some("on".to_owned()));
+    assert!(remote.fixture.session(SessionCmd::Split, row.as_deref(), show).ok);
+    assert_eq!(remote.settled_calls(), 1, "the show must wait for the hide's answer");
+    remote.runner.release();
+    let lines = remote.origin_lines(2);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(
+        lines[0],
+        origin_line(&["session", "split", "visibility", "off", "--target", ORIGIN])
+    );
+    assert_eq!(
+        lines[1],
+        origin_line(&[
+            "session",
+            "split",
+            "visibility",
+            "on",
+            "--target",
+            ORIGIN,
+            "--axis",
+            "vertical"
+        ])
+    );
+}
+
+#[test]
+fn a_split_reopened_while_its_close_is_on_the_way_is_made_after_the_close() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    remote.script([
+        result(&json!({"ok": true})),
+        result(&json!({"ok": true})),
+        Remote::listing(&[remote.origin_pane, Uuid::from_u128(3)]),
+    ]);
+    remote.runner.hold();
+    let row = Some(wire(remote.row));
+    assert!(
+        remote
+            .fixture
+            .session(SessionCmd::SplitClose, row.as_deref(), args(|_| {}))
+            .ok
+    );
+    let store = remote.fixture.store_mut().unwrap();
+    store.toggle_split(remote.row, None);
+    let session = store.session_mut(remote.row).unwrap();
+    remote.pane = session.split_pane_identity.unwrap();
+    session
+        .split_surface
+        .replace(Box::new(FakeSurface::new(wire(remote.pane))));
+    remote.request();
+    assert_eq!(
+        remote.settled_calls(),
+        1,
+        "the new split must wait for the close's answer"
+    );
+    remote.runner.release();
+    let seed = remote.spawn();
+    assert!(crate::remote::viewer_run::readable(&seed.command.unwrap()).contains(&daemon_name(Uuid::from_u128(3))));
+    let lines = remote.origin_lines(3);
+    assert_eq!(
+        lines[0],
+        origin_line(&["session", "split", "close", "--target", ORIGIN])
+    );
+    assert_eq!(
+        lines[1],
+        origin_line(&["session", "split", "on", "--target", ORIGIN, "--axis", "vertical"])
+    );
+}
+
+#[test]
+fn the_close_split_menu_command_closes_a_remote_split_on_the_origin() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    remote.script([result(&json!({"ok": true}))]);
+    remote.fixture.store_mut().unwrap().select_session(Some(remote.row));
+    let window = remote.fixture.window;
+    remote
+        .fixture
+        .core
+        .perform_menu_command(window, crate::palette_catalog::PaletteCommand::CloseSplit);
+    assert!(!remote.fixture.store().session(remote.row).unwrap().split.exists);
+    let lines = remote.origin_lines(1);
+    assert_eq!(lines, [origin_line(&["session", "split", "close", "--target", ORIGIN])]);
+}
+
+/// Closes the viewer split while the origin's answer to `split on` is held, then releases `answer`.
+fn close_during_creation(answer: RemoteCommandResult) -> (Remote, usize) {
+    let mut remote = Remote::new();
+    remote.script([answer, result(&json!({"ok": true}))]);
+    remote.runner.hold();
+    remote.request();
+    let row = Some(wire(remote.row));
+    assert!(
+        remote
+            .fixture
+            .session(SessionCmd::SplitClose, row.as_deref(), args(|_| {}))
+            .ok
+    );
+    let before = remote.settled_calls();
+    remote.runner.release();
+    (remote, before)
+}
+
+#[test]
+fn a_split_closed_before_the_origin_made_it_closes_there_once_it_is_made() {
+    let (mut remote, before) = close_during_creation(result(&json!({"ok": true})));
+    assert_eq!(before, 1, "no close may go out before the origin made the split");
+    let lines = remote.origin_lines(2);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(
+        lines[1],
+        origin_line(&["session", "split", "close", "--target", ORIGIN])
+    );
+}
+
+#[test]
+fn a_split_closed_before_the_origin_refused_it_sends_no_close() {
+    let (mut remote, before) = close_during_creation(result(&json!({"ok": false, "error": "refused"})));
+    assert_eq!(before, 1);
+    assert_eq!(remote.settled_calls(), 1);
 }
