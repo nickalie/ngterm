@@ -375,7 +375,7 @@ fn presented() -> (HeadlessState, Arc<Loop>, Uuid, Lines, u64, tempfile::TempDir
     let serial = state
         .core
         .adopt_presentation_stream(&session.to_string(), Box::new(lines.clone()));
-    state.core.presentation_line(serial, &serde_json::to_vec(&json!({"kind":"hello","gen":0,"rev":0,"hello":{"version":1,"mode":"presenter","kinds":ngterm_core::remote::hub::SUPPORTED_KINDS}})).unwrap());
+    state.core.presentation_line(serial, &serde_json::to_vec(&json!({"kind":"hello","gen":0,"rev":0,"hello":{"version":1,"mode":"presenter","kinds":&ngterm_core::remote::hub::SUPPORTED_KINDS[..]}})).unwrap());
     let gen_id = lines.last("hello")["gen"].clone();
     state.core.presentation_line(
         serial,

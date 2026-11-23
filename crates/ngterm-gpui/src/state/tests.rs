@@ -1999,7 +1999,7 @@ fn presented_state() -> (AppState, Uuid, Presenter, tempfile::TempDir) {
     let serial = state
         .core
         .adopt_presentation_stream(&session.to_string(), Box::new(presenter.clone()));
-    state.core.presentation_line(serial, &serde_json::to_vec(&serde_json::json!({"kind":"hello", "gen":0, "rev":0, "hello":{"version":1, "kinds":ngterm_core::remote::hub::SUPPORTED_KINDS, "mode":"presenter"}})).unwrap());
+    state.core.presentation_line(serial, &serde_json::to_vec(&serde_json::json!({"kind":"hello", "gen":0, "rev":0, "hello":{"version":1, "kinds":&ngterm_core::remote::hub::SUPPORTED_KINDS[..], "mode":"presenter"}})).unwrap());
     let generation = presenter.last("hello")["gen"].clone();
     state.core.presentation_line(
         serial,

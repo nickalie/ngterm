@@ -1,11 +1,17 @@
-//! A shown pane's appearance (its answers to color scheme queries) and the session links tapped in it.
+//! A shown pane's appearance (its answers to color scheme queries), the session links tapped in it, and the keys typed
+//! in it that its origin hears of for its Badge reset rule.
 
 use futures_lite::future::block_on;
 use ngterm_core::live::daemon_name;
 use uuid::Uuid;
 
-use super::pane_tests::{Fixture, PANE, SESSION, contains, inputs_until, send};
+use ngterm_core::remote::frames::{self, Body, PresentationFrame, PresentationHello, PresentationMode};
+use ngterm_core::remote::hub::PANE_INPUT_KIND;
+use ngterm_core::remote::ssh::present_tail;
+
+use super::pane_tests::{Fixture, MACHINE, PANE, SESSION, contains, inputs_until, send};
 use crate::api::{CellPoint, PaneColorScheme};
+use crate::api::{PaneKey, PaneKeyAction};
 use crate::transport::ChannelEnd;
 use crate::transport::fake::Script;
 
@@ -79,4 +85,47 @@ fn a_session_link_in_the_pane_names_a_session_the_machine_lists() {
     for (x, y) in [(1, 1), (1, 2), (1, 3), (10, 0)] {
         assert_eq!(at(x, y), None, "cell {x},{y}");
     }
+}
+
+fn key(name: &str, mods: u8, text: &str) -> PaneKey {
+    PaneKey {
+        action: PaneKeyAction::Press,
+        key: name.to_owned(),
+        mods,
+        consumed: 0,
+        composing: false,
+        text: text.to_owned(),
+        unshifted: None,
+    }
+}
+
+#[test]
+fn keys_typed_in_the_pane_reach_an_origin_that_speaks_them() {
+    let mut fixture = Fixture::connected();
+    block_on(fixture.core.attach_session(MACHINE.to_owned(), SESSION.to_owned())).unwrap();
+    let mut stream = fixture.opened(|opened| {
+        opened.command == present_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION).unwrap()
+    });
+    let hello = Body::Hello(PresentationHello {
+        version: frames::VERSION,
+        kinds: vec![PANE_INPUT_KIND.to_owned()],
+        mode: PresentationMode::Mirror,
+    });
+    let line = frames::encode(&PresentationFrame {
+        generation: 1,
+        rev: 1,
+        body: hello,
+    })
+    .unwrap();
+    send(&stream.peer, &line);
+    let pane = fixture.show();
+    fixture.attach();
+    fixture.attached();
+
+    assert!(pane.type_text("ls".to_owned()).unwrap());
+    let plain = format!(r#""input":{{"pane":"{PANE}","key":"other"}}"#);
+    inputs_until(&mut stream.peer, |bytes, _| contains(bytes, plain.as_bytes()));
+    assert!(pane.key(key("enter", 0, "")).unwrap());
+    let submit = format!(r#""input":{{"pane":"{PANE}","key":"submit"}}"#);
+    inputs_until(&mut stream.peer, |bytes, _| contains(bytes, submit.as_bytes()));
 }

@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::frames::{
-    self, Body, PresentationFrame, PresentationHello, PresentationLayout, PresentationMode, PresentationPageChange,
-    PresentationSnapshot, PresentationStatus, negotiated_version,
+    self, Body, PresentationFrame, PresentationHello, PresentationInput, PresentationLayout, PresentationMode,
+    PresentationPageChange, PresentationSnapshot, PresentationStatus, negotiated_version,
 };
 
 /// Where the hub hands a subscriber's frames. The bounded queue and the socket live behind it; the hub only learns
@@ -75,6 +75,8 @@ pub enum HubEvent {
     /// What the session's presenter sent about an ask, or its surface holder about an overlay or a page. Frames of
     /// these kinds from any other viewer are dropped before they get here.
     PresenterFrame(Uuid, Box<Body>),
+    /// A key any viewer of the session typed into one of its panes.
+    Input(Uuid, PresentationInput),
 }
 
 /// What the origin hands a session's viewer to show besides the presenter's asks and sounds (this build's extension):
@@ -283,11 +285,16 @@ pub const COMPANION_PAGE_KIND: &str = "companion.page";
 /// otherwise.
 pub const PAGE_DETACHED_KIND: &str = "page.detached";
 
+/// A viewer tells of a key typed into one of the session's panes ([`super::frames::Body::Input`]), and the origin clears
+/// the session's unseen badge by its Badge reset rule. This build's addition; a viewer sends it only to an origin
+/// whose hello answer lists it.
+pub const PANE_INPUT_KIND: &str = "pane.input";
+
 /// The frame kinds this origin produces, in upstream's order; a hello's kinds are filtered through it. Work handed to a
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
-pub const SUPPORTED_KINDS: [&str; 32] = [
+pub const SUPPORTED_KINDS: [&str; 33] = [
     "status",
     "hud",
     "notify",
@@ -310,6 +317,7 @@ pub const SUPPORTED_KINDS: [&str; 32] = [
     COMPANION_PAGE_KIND,
     PAGE_DETACHED_KIND,
     PAGE_TEXT_KIND,
+    PANE_INPUT_KIND,
     PAGE_KINDS[0],
     PAGE_KINDS[1],
     PAGE_KINDS[2],
@@ -685,6 +693,7 @@ impl PresentationHub {
             {
                 self.events.push(HubEvent::PresenterFrame(session, Box::new(body)));
             }
+            Body::Input(input) => self.events.push(HubEvent::Input(session, input)),
             body @ (Body::OverlayRejected(_) | Body::OverlayClosed(_))
                 if self.surfaces.holder(session, Surface::Overlays) == Some(from) =>
             {
@@ -1433,8 +1442,8 @@ mod tests {
 
     #[test]
     fn the_kinds_follow_upstreams_order() {
-        // upstream's, with this build's loopback forward, companion pages and page detach before the page kinds, and
-        // the pick kinds closing the list
+        // upstream's, with this build's loopback forward, companion pages, page detach and typed keys before the page
+        // kinds, and the pick kinds closing the list
         assert_eq!(
             SUPPORTED_KINDS,
             [
@@ -1460,6 +1469,7 @@ mod tests {
                 "companion.page",
                 "page.detached",
                 "page.text",
+                "pane.input",
                 "page.request",
                 "page.rejected",
                 "page.close",

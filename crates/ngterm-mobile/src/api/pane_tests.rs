@@ -548,3 +548,30 @@ fn a_delivery_names_what_became_of_input_for_the_log() {
         assert!(crate::applog::is_class(class));
     }
 }
+
+/// A key's meaning to the origin's Badge reset rule: Enter alone submits (the locks aside), Escape and a bare Ctrl-C
+/// interrupt, anything else is plain typing.
+#[test]
+fn a_keys_kind_follows_the_cores_classification() {
+    let key = |name: &str, mods: u8, text: &str| PaneKey {
+        action: PaneKeyAction::Press,
+        key: name.to_owned(),
+        mods,
+        consumed: 0,
+        composing: false,
+        text: text.to_owned(),
+        unshifted: None,
+    };
+    let caps_lock = 16;
+    for (pressed, kind) in [
+        (key("enter", 0, ""), StatusKeystroke::Submit),
+        (key("numpad_enter", caps_lock, ""), StatusKeystroke::Submit),
+        (key("enter", 1, ""), StatusKeystroke::Other),
+        (key("escape", 8, ""), StatusKeystroke::Interrupt),
+        (key("key_c", 2, "c"), StatusKeystroke::Interrupt),
+        (key("key_c", 3, "C"), StatusKeystroke::Other),
+        (key("key_a", 4, "a"), StatusKeystroke::Other),
+    ] {
+        assert_eq!(key_kind(&pressed), kind, "{pressed:?}");
+    }
+}

@@ -16,16 +16,17 @@ use uuid::Uuid;
 
 use super::frames::{
     self, Body, PendingBatch, PresentationAgent, PresentationAsk, PresentationAskRef, PresentationCompanion,
-    PresentationFrame, PresentationHello, PresentationHud, PresentationLayout, PresentationMode, PresentationNotify,
-    PresentationOverlay, PresentationOverlayChange, PresentationPage, PresentationPageChange, PresentationPageCommand,
-    PresentationRespawns, PresentationSound, PresentationStatus,
+    PresentationFrame, PresentationHello, PresentationHud, PresentationInput, PresentationLayout, PresentationMode,
+    PresentationNotify, PresentationOverlay, PresentationOverlayChange, PresentationPage, PresentationPageChange,
+    PresentationPageCommand, PresentationPane, PresentationRespawns, PresentationSound, PresentationStatus,
 };
 use super::hub::{
     AGENT_KIND, COMPANION_PAGE_KIND, HELD_KINDS, LINK_CLICK_KIND, NO_OVERLAYS_KIND, OPT_IN_KINDS, PAGE_CONTENT_KIND,
-    PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, PAGE_TEXT_KIND, PICK_KINDS, SUPPORTED_KINDS,
+    PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, PAGE_TEXT_KIND, PANE_INPUT_KIND, PICK_KINDS,
+    SUPPORTED_KINDS,
 };
 use super::reconnect::retry_delay;
-use crate::model::RemoteConnection;
+use crate::model::{RemoteConnection, StatusKeystroke};
 
 /// The origin pings every ten seconds, so three missed is a dead link and not a quiet one.
 pub const STALE_AFTER: Duration = Duration::from_secs(30);
@@ -323,6 +324,20 @@ impl PresentationClient {
         }
     }
 
+    /// Tells the origin of a key the user typed into `pane` ([`PANE_INPUT_KIND`]), for its Badge reset rule; whether it
+    /// went: only on a link up now to an origin that speaks it.
+    #[must_use]
+    pub fn typed(&self, pane: Uuid, key: StatusKeystroke) -> bool {
+        let sends = self.link_speaks(PANE_INPUT_KIND);
+        if sends {
+            self.answer(Body::Input(PresentationInput {
+                pane: PresentationPane::Identity(pane),
+                key,
+            }));
+        }
+        sends
+    }
+
     /// Reconnects when a retry is due and drops a link that has gone quiet.
     pub fn tick(&mut self, transport: &dyn PresentationTransport, now: Instant) -> Vec<ClientEffect> {
         let mut effects = Vec::new();
@@ -458,6 +473,7 @@ impl PresentationClient {
             Body::Ack
             | Body::PresenterAcquire
             | Body::LinkClick(_)
+            | Body::Input(_)
             | Body::AskResolve(_)
             | Body::AskRejected(_)
             | Body::PickResolve(_)
@@ -743,6 +759,38 @@ mod tests {
             }
             waited
         }
+    }
+
+    /// A typed key travels only on a link that is up after a hello listing `pane.input`, and every viewer lists the
+    /// kind.
+    #[test]
+    fn a_typed_key_needs_the_origins_kind_on_a_live_link() {
+        assert!(viewer_kinds(false).iter().any(|kind| kind == PANE_INPUT_KIND));
+        let pane = Uuid::new_v4();
+        let mut harness = Harness::started();
+        assert!(!harness.client.typed(pane, StatusKeystroke::Submit), "before the hello");
+        let hello = |kinds: &[&str]| PresentationHello {
+            version: 1,
+            kinds: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
+            mode: PresentationMode::Mirror,
+        };
+        harness.deliver(&line(Body::Hello(hello(&["status"])), 7, 0));
+        assert!(
+            !harness.client.typed(pane, StatusKeystroke::Submit),
+            "an origin without the kind"
+        );
+        harness.deliver(&line(Body::Hello(hello(&["status", PANE_INPUT_KIND])), 7, 1));
+        assert!(harness.client.typed(pane, StatusKeystroke::Submit));
+        let sent = harness.transport.link(0).0.borrow().sent.last().unwrap().body.clone();
+        assert_eq!(
+            sent,
+            Body::Input(PresentationInput {
+                pane: PresentationPane::Identity(pane),
+                key: StatusKeystroke::Submit,
+            })
+        );
+        harness.close("gone");
+        assert!(!harness.client.typed(pane, StatusKeystroke::Other), "with no link");
     }
 
     /// Upstream's `theOriginsAgreedKindsHoldOnlyForTheLinkTheyCameWith` and `anOriginsLinkRefusalReachesTheApp`: the origin's agreement on

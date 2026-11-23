@@ -676,6 +676,9 @@ impl Core {
                     HubEvent::SurfaceGained(session, Surface::Pages) => self.hand_on_parked_pages(session),
                     HubEvent::SurfaceGained(session, Surface::Overlays) => self.offer_held_jobs(session),
                     HubEvent::PresenterFrame(session, body) => self.receive_presenter_frame(session, *body),
+                    HubEvent::Input(session, input) => {
+                        self.clear_badge_on_viewer_input(session, input);
+                    }
                 }
             }
         }
