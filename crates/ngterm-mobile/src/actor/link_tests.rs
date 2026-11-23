@@ -17,9 +17,15 @@ use crate::transport::fake::Script;
 
 const OTHER: &str = "00000000-0000-0000-0000-0000000000A4";
 const UNLISTED: &str = "00000000-0000-0000-0000-0000000000FF";
+const ENDED: &str = "00000000-0000-0000-0000-0000000000A5";
 
 /// A listing of the shown session and `OTHER`, each with its one pane.
 fn two_sessions() -> Script {
+    sessions_listing(&[(SESSION, PANE), (OTHER, "00000000-0000-0000-0000-0000000000B4")])
+}
+
+/// A listing of `sessions`, each with its one pane.
+fn sessions_listing(sessions: &[(&str, &str)]) -> Script {
     let session = |id: &str, pane: &str| {
         serde_json::json!({
             "id": id, "name": id, "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
@@ -29,7 +35,7 @@ fn two_sessions() -> Script {
     };
     let remote = serde_json::json!({
         "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
-        "sessions": [session(SESSION, PANE), session(OTHER, "00000000-0000-0000-0000-0000000000B4")],
+        "sessions": sessions.iter().map(|(id, pane)| session(id, pane)).collect::<Vec<_>>(),
         "presentation": 1,
     });
     Script::ok(&serde_json::json!({"ok": true, "result": {"remote": remote}}).to_string())
@@ -174,8 +180,9 @@ fn keys_typed_in_the_pane_reach_an_origin_that_speaks_them() {
 }
 
 #[test]
-fn a_link_finds_its_session_in_the_fresh_listing_an_end_meanwhile_keeps_from_being_kept() {
-    let mut fixture = Fixture::connected_with(vec![listing(true)]);
+fn a_link_opens_its_session_from_a_fresh_listing_an_end_crossed_without_the_ended_one() {
+    let ended = (ENDED, "00000000-0000-0000-0000-0000000000B5");
+    let mut fixture = Fixture::connected_with(vec![sessions_listing(&[(SESSION, PANE), ended])]);
     let pane = fixture.show();
     let opened = fixture.attach();
     fixture.attached();
@@ -189,7 +196,7 @@ fn a_link_finds_its_session_in_the_fresh_listing_an_end_meanwhile_keeps_from_bei
     fixture.transport.script_sequence(&tree, Vec::new());
     let close = ngterm_core::remote::ssh::control_tail(
         ngterm_core::remote::origin::OriginShell::Posix,
-        &ngterm_core::remote::origin_replies::end_session_arguments(SESSION),
+        &ngterm_core::remote::origin_replies::end_session_arguments(ENDED),
     );
     fixture
         .transport
@@ -201,13 +208,25 @@ fn a_link_finds_its_session_in_the_fresh_listing_an_end_meanwhile_keeps_from_bei
     });
     let relisting = fixture.opened(|opened| opened.command == tree);
     assert_eq!(
-        block_on(fixture.core.end_session(MACHINE.to_owned(), SESSION.to_owned())),
+        block_on(fixture.core.end_session(MACHINE.to_owned(), ENDED.to_owned())),
         Ok(())
     );
-    let fresh = two_sessions();
+    let fresh = sessions_listing(&[(SESSION, PANE), (OTHER, "00000000-0000-0000-0000-0000000000B4"), ended]);
     block_on(relisting.peer.data(fresh.stdout));
     block_on(relisting.peer.end(fresh.end));
 
     let found = tapped.join().unwrap().expect("the session the fresh listing holds");
     assert_eq!(found.id, OTHER);
+    assert_eq!(
+        block_on(fixture.core.attach_session(MACHINE.to_owned(), OTHER.to_owned())),
+        Ok(()),
+        "the app attaches the link's session by its id"
+    );
+    assert_eq!(
+        block_on(fixture.core.attach_session(MACHINE.to_owned(), ENDED.to_owned())),
+        Err(crate::MobileError::NotListed {
+            session_id: ENDED.to_owned()
+        }),
+        "the session ended while the listing was in flight stays ended"
+    );
 }

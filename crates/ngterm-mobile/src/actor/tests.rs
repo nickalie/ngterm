@@ -375,6 +375,7 @@ fn dropping_the_core_from_an_event_on_the_actor_does_not_deadlock() {
 const PARENT: &str = "00000000-0000-0000-0000-0000000000A1";
 const COMPANION: &str = "00000000-0000-0000-0000-0000000000A2";
 const OTHER: &str = "00000000-0000-0000-0000-0000000000A3";
+const THIRD: &str = "00000000-0000-0000-0000-0000000000A4";
 
 fn listing(sessions: &[(&str, Option<&str>)]) -> crate::transport::fake::Script {
     let sessions: Vec<serde_json::Value> = sessions
@@ -681,7 +682,7 @@ fn a_disconnect_ends_a_session_command_running_on_the_connection() {
 }
 
 #[test]
-fn a_listing_that_began_before_an_end_answers_but_is_neither_kept_nor_reported() {
+fn a_listing_that_began_before_an_end_is_kept_without_the_ended_session_and_an_older_one_is_not() {
     let transport = FakeTransport::new();
     let close = ngterm_core::remote::ssh::control_tail(
         ngterm_core::remote::origin::OriginShell::Posix,
@@ -719,15 +720,46 @@ fn a_listing_that_began_before_an_end_answers_but_is_neither_kept_nor_reported()
     block_on(opened.peer.end(old.end));
 
     let answered = block_on(first).expect("listed");
-    assert_eq!(ids(&answered), [PARENT, OTHER]);
-    // a later listing is kept and reported, and it is the first tree the app sees
-    transport.script(
-        &ngterm_core::remote::ssh::tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
-        listing(&[(OTHER, None)]),
+    assert_eq!(ids(&answered), [OTHER], "the end is applied again");
+    let (_, sessions) = next_tree(&events);
+    assert_eq!(ids(&sessions), [OTHER], "kept and reported without the ended session");
+    assert_eq!(
+        block_on(core.attach_session("m1".to_owned(), PARENT.to_owned())),
+        Err(MobileError::NotListed {
+            session_id: PARENT.to_owned()
+        })
     );
+    // an older listing than the one kept answers, and is neither kept nor reported
+    let tree = ngterm_core::remote::ssh::tree_tail(ngterm_core::remote::origin::OriginShell::Posix);
+    transport.script_sequence(&tree, Vec::new());
+    drop(transport.take_opened());
+    let stale = core.list_sessions("m1".to_owned());
+    let mut stale = std::pin::pin!(stale);
+    assert!(block_on(poll_once(stale.as_mut())).is_none());
+    let deadline = std::time::Instant::now() + WAIT;
+    let opened = loop {
+        if let Some(opened) = transport.take_opened().pop() {
+            break opened;
+        }
+        assert!(std::time::Instant::now() < deadline, "the listing never ran");
+        thread::yield_now();
+    };
+    transport.script(&tree, listing(&[(OTHER, None), (THIRD, None)]));
     block_on(core.list_sessions("m1".to_owned())).expect("listed again");
     let (_, sessions) = next_tree(&events);
-    assert_eq!(ids(&sessions), [OTHER]);
+    assert_eq!(ids(&sessions), [OTHER, THIRD]);
+    let old = listing(&[(OTHER, None)]);
+    block_on(opened.peer.data(old.stdout));
+    block_on(opened.peer.end(old.end));
+    assert_eq!(ids(&block_on(stale).expect("listed")), [OTHER]);
+    assert!(
+        events.recv_timeout(std::time::Duration::from_millis(200)).is_err(),
+        "not reported"
+    );
+    assert!(
+        block_on(core.attach_session("m1".to_owned(), THIRD.to_owned())).is_ok(),
+        "the newer listing stays"
+    );
 }
 
 /// A listing of `sessions` as the far side answers it.

@@ -323,8 +323,11 @@ struct Kept {
     /// Its last listing, whole (endpoint and panes included), for attaching its sessions, as the ends since left it;
     /// `None` until one is read on the connection.
     tree: Option<ControlRemoteTree>,
-    /// The ticket of the newest news: the listing kept, or the last end. A listing that began before it is stale.
+    /// The ticket of the listing kept. A listing that began before it is stale.
     as_of: u64,
+    /// The sessions ended since that listing began, with their tickets: a listing that began before an end and is
+    /// kept loses the session again.
+    ended: Vec<(u64, String)>,
 }
 
 /// A machine [`suspend`] set aside.
@@ -999,8 +1002,8 @@ fn remote(reason: String) -> MobileError {
 
 /// The sessions of `tree`, a listing of `machine_id` that began at ticket `began`, an app it went on without as last
 /// listed ([`sessions::skipped_kept`]). It is kept and reported as a
-/// [`MobileEvent::Tree`] only while its connection is still the machine's and nothing newer about the machine's
-/// sessions is known; a stale listing still answers its caller.
+/// [`MobileEvent::Tree`] only while its connection is still the machine's and no newer listing is kept; a stale listing
+/// still answers its caller. The sessions ended since it began are not in what it answers or keeps.
 fn listed<T: Transport>(
     state: &State<T>,
     link: &OnMachine<T::Connection>,
@@ -1008,36 +1011,34 @@ fn listed<T: Transport>(
     tree: ControlRemoteTree,
     began: u64,
 ) -> Vec<RemoteSession> {
-    let tree = with_skipped_app(state, &machine_id, tree);
-    keep_listed(state, link, machine_id, tree, began)
-}
-
-/// [`listed`] for a `tree` that already holds the app it went on without.
-fn keep_listed<T: Transport>(
-    state: &State<T>,
-    link: &OnMachine<T::Connection>,
-    machine_id: String,
-    tree: ControlRemoteTree,
-    began: u64,
-) -> Vec<RemoteSession> {
-    let sessions = sessions::listed_sessions(&tree);
-    let hint = not_live::hint(&tree);
-    if !state.is_current(&machine_id, &link.connection) {
-        return sessions;
-    }
+    let mut tree = with_skipped_app(state, &machine_id, tree);
+    let current = state.is_current(&machine_id, &link.connection);
     {
         let mut listings = state.listings.borrow_mut();
+        let ended = listings
+            .get(&machine_id)
+            .map(|kept| kept.ended.iter())
+            .into_iter()
+            .flatten();
+        for (_, session_id) in ended.filter(|(ticket, _)| *ticket > began) {
+            sessions::forget(&mut tree, session_id);
+        }
+        if !current {
+            return sessions::listed_sessions(&tree);
+        }
         let kept = listings.entry(machine_id.clone()).or_default();
         if kept.as_of > began {
-            return sessions;
+            return sessions::listed_sessions(&tree);
         }
-        kept.tree = Some(tree);
+        kept.ended.retain(|(ticket, _)| *ticket > began);
+        kept.tree = Some(tree.clone());
         kept.as_of = began;
     }
+    let sessions = sessions::listed_sessions(&tree);
     state.emit(MobileEvent::Tree {
         machine_id,
         sessions: sessions.clone(),
-        hint,
+        hint: not_live::hint(&tree),
     });
     sessions
 }
@@ -1050,19 +1051,6 @@ async fn list_sessions<T: Transport>(
     let began = state.ticket();
     let tree = sessions::list(&*link.connection, &link.host).await.map_err(remote)?;
     Ok(listed(&state, &link, machine_id, tree, began))
-}
-
-/// [`list_sessions`], answered with the tree it fetched, which a newer change on the machine can keep from being kept.
-async fn list_tree<T: Transport>(
-    state: Rc<State<T>>,
-    link: OnMachine<T::Connection>,
-    machine_id: String,
-) -> Result<ControlRemoteTree, MobileError> {
-    let began = state.ticket();
-    let tree = sessions::list(&*link.connection, &link.host).await.map_err(remote)?;
-    let tree = with_skipped_app(&state, &machine_id, tree);
-    keep_listed(&state, &link, machine_id, tree.clone(), began);
-    Ok(tree)
 }
 
 async fn create_session<T: Transport>(
@@ -1114,8 +1102,8 @@ async fn duplicate_session<T: Transport>(
     Ok(receipt)
 }
 
-/// Ends the session there; while the connection is still the machine's, a listing that began before is stale from now
-/// on, and the kept listing, if any, loses the session and is reported.
+/// Ends the session there; while the connection is still the machine's, the kept listing, if any, loses the session
+/// and is reported, and so does a listing that began before and is kept later.
 async fn end_session<T: Transport>(
     state: Rc<State<T>>,
     link: OnMachine<T::Connection>,
@@ -1133,7 +1121,7 @@ async fn end_session<T: Transport>(
     let listed = {
         let mut listings = state.listings.borrow_mut();
         let kept = listings.entry(machine_id.clone()).or_default();
-        kept.as_of = ticket;
+        kept.ended.push((ticket, session_id.clone()));
         kept.tree.as_mut().map(|tree| {
             sessions::forget(tree, &session_id);
             (sessions::listed_sessions(tree), not_live::hint(tree))
@@ -1205,7 +1193,7 @@ async fn tick<T: Transport>(state: Weak<State<T>>) {
 }
 
 /// The listed session `raw`, a link tapped in `pane`, names. A session link the machine's kept listing misses is
-/// looked for again in a fresh listing, in the tree that listing fetched even when it is not kept: a program can make the session after the last one (upstream's viewer keeps
+/// looked for again in a fresh listing: a program can make the session after the last one (upstream's viewer keeps
 /// its listing live, `WindowLibrary+SessionLink.swift`).
 fn session_link<T: Transport>(
     state: &Rc<State<T>>,
@@ -1220,14 +1208,12 @@ fn session_link<T: Transport>(
         return;
     }
     let (listed, listing) = oneshot::channel();
-    spawn_on_machine(state, pane.machine_id.clone(), listed, list_tree);
+    spawn_on_machine(state, pane.machine_id.clone(), listed, list_sessions);
     let state = Rc::clone(state);
     tokio::task::spawn_local(async move {
-        let target = match listing.await {
-            Ok(Ok(tree)) => sessions::session_link_target(&tree, &pane.session_id, &raw),
-            // a failed listing leaves the kept one, which misses the session
-            _ => kept_link_target(&state, &pane, &raw),
-        };
+        // a failed listing leaves the kept one, which misses the session
+        let _ = listing.await;
+        let target = kept_link_target(&state, &pane, &raw);
         noted_link(&pane, target.as_ref(), true);
         let _ = reply.send(Ok(target));
     });
