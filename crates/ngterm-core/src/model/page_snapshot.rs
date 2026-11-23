@@ -92,13 +92,15 @@ fn slot_snapshot(pane: Option<OverlayPane>) -> PageSlotSnapshot {
 
 /// A page the session's viewer holds, at the size its slot keeps and the visibility it was last asked for.
 fn viewer_page_snapshot(slot: &RemoteOverlaySlot, page: &RemotePage) -> Option<PageSnapshot> {
-    if !page.overlay.persisted() {
+    // the page as opened, so a grant held back from a presenter without links survives a restart
+    let opened = page.as_opened();
+    if !opened.persisted() {
         return None;
     }
-    let flags = page.overlay.flags;
+    let flags = opened.flags;
     Some(PageSnapshot {
         slot: slot_snapshot(slot.pane),
-        source: source_snapshot(&page.overlay)?,
+        source: source_snapshot(&opened)?,
         navigation: flags.navigation,
         javascript: flags.javascript,
         chromeless: flags.chromeless,

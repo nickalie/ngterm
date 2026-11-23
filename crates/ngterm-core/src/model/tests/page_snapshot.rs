@@ -1053,3 +1053,38 @@ fn a_markdown_link_page_round_trips_with_its_links_judged_again() {
     let (_, restored) = only_session(&back).html_overlays()[0];
     assert_eq!(restored.markdown_links, grant);
 }
+
+/// A viewer's link page shown on a presenter that does not follow links is written as opened, so it comes back parked
+/// with its navigation and its grant for a later presenter that follows links.
+#[test]
+fn a_viewer_link_page_shown_without_links_is_restored_with_its_grant() {
+    let files = Files::new();
+    let (mut store, session) = store_with_split();
+    let markdown = HtmlSource::Markdown {
+        path: files.path("notes.md"),
+    };
+    let navigation = HtmlPageFlags {
+        navigation: true,
+        ..HtmlPageFlags::default()
+    };
+    let grant = crate::html::markdown_page::link_grant(&files.path("notes.md"), "/nowhere");
+    assert!(grant.is_some());
+    let opened = HtmlOverlay::linked(markdown.clone(), navigation, grant.clone());
+    let mut shown = RemotePage::new(opened, "t".to_owned(), Instant::now());
+    shown.overlay = shown.overlay.without_links();
+    assert!(!shown.overlay.flags.navigation);
+    hand_over(&mut store, session, None, shown, OverlaySize::default());
+    let back = round_trip(&store);
+    let parked = only_session(&back)
+        .remote_overlays()
+        .slot(None)
+        .unwrap()
+        .page
+        .as_ref()
+        .unwrap();
+    assert!(parked.parked);
+    assert_eq!(parked.overlay.source, markdown);
+    let handed = parked.as_opened();
+    assert_eq!(handed.markdown_links, grant);
+    assert!(handed.flags.navigation);
+}
