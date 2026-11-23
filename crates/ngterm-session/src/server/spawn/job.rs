@@ -10,11 +10,7 @@
 //! `ngterm-session server <directory> --launchd-job <label>`.
 
 use std::ffi::OsString;
-use std::fs;
-use std::io::{self, Write as _};
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::thread;
 use std::time::{Duration, Instant};
 
 /// The first part of every job's label: ngterm's app id and what the job runs.
@@ -29,7 +25,11 @@ pub const LAUNCHCTL_BUDGET: Duration = Duration::from_secs(2);
 /// The first macOS release whose servers start as jobs.
 const FIRST_MAJOR: u32 = 27;
 
-const LAUNCHCTL: &str = "/bin/launchctl";
+#[cfg(not(target_os = "macos"))]
+const NO_LAUNCHD: &str = "launchd runs only on macOS";
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 /// How a `launchctl` call ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,72 +74,17 @@ impl Job {
         }
     }
 
-    /// The job's definition: interactive, run once at load, no environment of the client's (a session's travels in
-    /// its request).
-    ///
-    /// # Errors
-    ///
-    /// An argument is not UTF-8, which a property list cannot hold.
-    pub fn plist(&self) -> io::Result<Vec<u8>> {
-        let arguments = self
-            .arguments
-            .iter()
-            .map(|argument| {
-                argument
-                    .to_str()
-                    .map(|text| plist::Value::String(text.to_owned()))
-                    .ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            format!("{} is not UTF-8", argument.to_string_lossy()),
-                        )
-                    })
-            })
-            .collect::<io::Result<Vec<_>>>()?;
-        let definition = plist::Dictionary::from_iter([
-            ("Label", plist::Value::String(self.label.clone())),
-            ("ProgramArguments", plist::Value::Array(arguments)),
-            ("RunAtLoad", plist::Value::Boolean(true)),
-            ("KeepAlive", plist::Value::Boolean(false)),
-            ("ProcessType", plist::Value::String("Interactive".to_owned())),
-            ("AbandonProcessGroup", plist::Value::Boolean(true)),
-            ("Umask", plist::Value::Integer(self.umask.into())),
-        ]);
-        let mut xml = Vec::new();
-        plist::Value::Dictionary(definition)
-            .to_writer_xml(&mut xml)
-            .map_err(io::Error::other)?;
-        Ok(xml)
-    }
-
     /// Loads the job from a private plist in `directory`, removed once `launchctl` returns: launchd keeps the
-    /// definition it read.
+    /// definition it read. Only macOS has launchd.
     #[must_use]
     pub fn bootstrap(&self, directory: &Path, deadline: Instant) -> Outcome {
-        let path = directory.join(format!("{}.plist", self.label));
-        if let Err(error) = self.write_plist(&path) {
-            let _ = fs::remove_file(&path);
-            return Outcome::Failed(format!("plist: {error}"));
+        #[cfg(target_os = "macos")]
+        return macos::bootstrap(self, directory, deadline);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (directory, deadline);
+            Outcome::Failed(NO_LAUNCHD.to_owned())
         }
-        let outcome = launchctl(
-            &[
-                OsString::from("bootstrap"),
-                OsString::from(domain()),
-                path.as_os_str().to_owned(),
-            ],
-            deadline,
-        );
-        let _ = fs::remove_file(&path);
-        outcome
-    }
-
-    fn write_plist(&self, path: &Path) -> io::Result<()> {
-        let xml = self.plist()?;
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        options.open(path)?.write_all(&xml)
     }
 }
 
@@ -162,19 +107,32 @@ pub fn is_own(label: &str, directory: &Path) -> bool {
 /// Removes the job `label`, which ends its process when it still runs.
 #[must_use]
 pub fn bootout(label: &str, deadline: Instant) -> Outcome {
-    launchctl(
-        &[
-            OsString::from("bootout"),
-            OsString::from(format!("{}/{label}", domain())),
-        ],
-        deadline,
-    )
+    #[cfg(target_os = "macos")]
+    return macos::bootout(label, deadline);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (label, deadline);
+        Outcome::Failed(NO_LAUNCHD.to_owned())
+    }
+}
+
+/// This process's file mode creation mask, which a job's server keeps.
+#[must_use]
+pub fn current_umask() -> u32 {
+    #[cfg(target_os = "macos")]
+    return macos::current_umask();
+    #[cfg(not(target_os = "macos"))]
+    0o022
 }
 
 /// Whether this system starts servers as jobs: macOS 27 and later.
 #[must_use]
 pub fn supported() -> bool {
-    product_version()
+    #[cfg(target_os = "macos")]
+    let version = macos::product_version();
+    #[cfg(not(target_os = "macos"))]
+    let version: Option<String> = None;
+    version
         .as_deref()
         .and_then(major)
         .is_some_and(|major| major >= FIRST_MAJOR)
@@ -183,94 +141,6 @@ pub fn supported() -> bool {
 /// The major number of a product version such as `27.2.1`.
 fn major(version: &str) -> Option<u32> {
     version.split('.').next()?.parse().ok()
-}
-
-#[cfg(target_os = "macos")]
-fn product_version() -> Option<String> {
-    let mut buffer = [0_u8; 32];
-    let mut length = buffer.len();
-    // SAFETY: the name is NUL-terminated, the buffer is writable for `length` bytes, and no new value is set.
-    let result = unsafe {
-        libc::sysctlbyname(
-            c"kern.osproductversion".as_ptr(),
-            buffer.as_mut_ptr().cast(),
-            &raw mut length,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if result != 0 {
-        return None;
-    }
-    let text = buffer.get(..length)?;
-    let text = text.split(|byte| *byte == 0).next()?;
-    String::from_utf8(text.to_vec()).ok()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn product_version() -> Option<String> {
-    None
-}
-
-/// This process's file mode creation mask, which a job's server keeps.
-#[cfg(target_os = "macos")]
-#[must_use]
-pub fn current_umask() -> u32 {
-    // SAFETY: umask takes no pointers; the mask read is put back at once.
-    let previous = unsafe { libc::umask(0o022) };
-    // SAFETY: as above.
-    unsafe { libc::umask(previous) };
-    u32::from(previous)
-}
-
-#[cfg(not(target_os = "macos"))]
-#[must_use]
-pub fn current_umask() -> u32 {
-    0o022
-}
-
-/// The user's GUI domain.
-fn domain() -> String {
-    #[cfg(unix)]
-    let uid = rustix::process::getuid().as_raw();
-    #[cfg(not(unix))]
-    let uid = 0;
-    format!("gui/{uid}")
-}
-
-/// Runs `launchctl` with `arguments` until `deadline`; its exit status is the error number it prints.
-fn launchctl(arguments: &[OsString], deadline: Instant) -> Outcome {
-    run(Path::new(LAUNCHCTL), arguments, deadline)
-}
-
-/// Runs `program`, a `launchctl`, with `arguments` until `deadline`.
-fn run(program: &Path, arguments: &[OsString], deadline: Instant) -> Outcome {
-    let verb = arguments
-        .first()
-        .map(|verb| verb.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let mut child = match Command::new(program)
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(error) => return Outcome::Failed(format!("launchctl: {error}")),
-    };
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Outcome::Succeeded,
-            Ok(Some(status)) => return Outcome::Failed(format!("launchctl {verb} {status}")),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-            Ok(None) | Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Outcome::Uncertain;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -294,7 +164,7 @@ mod tests {
             prefix,
             format!(
                 "com.nickalie.ngterm.session-server.{}.",
-                ngterm_core::live::fnv1a64(b"/tmp/live")
+                ngterm_core::live::fnv1a64(std::path::absolute("/tmp/live").unwrap().to_string_lossy().as_bytes())
             )
         );
         assert_eq!(job.label, format!("{prefix}deadbeef"));
@@ -340,95 +210,16 @@ mod tests {
         assert!(!is_own("com.example.other.deadbeef", directory));
     }
 
-    #[test]
-    fn the_plist_defines_an_interactive_one_shot_job_without_an_environment() {
-        let job = job();
-        let value = plist::Value::from_reader_xml(job.plist().unwrap().as_slice()).unwrap();
-        let definition = value.as_dictionary().unwrap();
-        let mut keys: Vec<_> = definition.keys().map(String::as_str).collect();
-        keys.sort_unstable();
-        assert_eq!(
-            keys,
-            [
-                "AbandonProcessGroup",
-                "KeepAlive",
-                "Label",
-                "ProcessType",
-                "ProgramArguments",
-                "RunAtLoad",
-                "Umask"
-            ]
-        );
-        assert_eq!(definition["Label"].as_string(), Some(job.label.as_str()));
-        let arguments: Vec<_> = definition["ProgramArguments"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|argument| OsString::from(argument.as_string().unwrap()))
-            .collect();
-        assert_eq!(arguments, job.arguments);
-        assert_eq!(definition["RunAtLoad"].as_boolean(), Some(true));
-        assert_eq!(definition["KeepAlive"].as_boolean(), Some(false));
-        assert_eq!(definition["ProcessType"].as_string(), Some("Interactive"));
-        assert_eq!(definition["AbandonProcessGroup"].as_boolean(), Some(true));
-        assert_eq!(definition["Umask"].as_signed_integer(), Some(18));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_non_utf8_argument_has_no_plist() {
-        use std::os::unix::ffi::OsStrExt as _;
-        let directory = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/\xff"));
-        let error = Job::new(Path::new("/x"), directory, 0o022).plist().unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn an_unwritable_plist_fails_without_loading_anything() {
-        let root = tempfile::tempdir().unwrap();
-        let missing = root.path().join("missing");
-        let outcome = job().bootstrap(&missing, Instant::now() + LAUNCHCTL_BUDGET);
-        let Outcome::Failed(reason) = outcome else {
-            panic!("expected a failure, got {outcome:?}");
-        };
-        assert!(reason.starts_with("plist:"), "{reason}");
-        assert!(!missing.exists());
-    }
-
     #[cfg(not(target_os = "macos"))]
     #[test]
-    fn a_bootstrap_without_launchctl_fails_and_leaves_no_plist() {
+    fn only_macos_loads_or_removes_a_job() {
         let root = tempfile::tempdir().unwrap();
-        let outcome = job().bootstrap(root.path(), Instant::now() + LAUNCHCTL_BUDGET);
-        let Outcome::Failed(reason) = outcome else {
-            panic!("expected a failure, got {outcome:?}");
-        };
-        assert!(reason.starts_with("launchctl: "), "{reason}");
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn launchctl_s_exit_status_and_deadline_decide_the_outcome() {
-        let soon = || Instant::now() + LAUNCHCTL_BUDGET;
-        let shell = Path::new("/bin/sh");
-        let script = |body: &str| [OsString::from("-c"), OsString::from(body)];
-        assert_eq!(run(shell, &script("exit 0"), soon()), Outcome::Succeeded);
-        assert_eq!(
-            run(shell, &script("exit 5"), soon()),
-            Outcome::Failed("launchctl -c exit status: 5".to_owned())
-        );
-        let begun = Instant::now();
-        assert_eq!(
-            run(shell, &script("sleep 30"), Instant::now() + Duration::from_millis(100)),
-            Outcome::Uncertain
-        );
-        assert!(begun.elapsed() < Duration::from_secs(10));
-        let missing = run(Path::new("/nonexistent/launchctl"), &[], soon());
-        assert!(
-            matches!(&missing, Outcome::Failed(reason) if reason.starts_with("launchctl: ")),
-            "{missing:?}"
-        );
+        let deadline = Instant::now() + LAUNCHCTL_BUDGET;
+        let failed = Outcome::Failed(NO_LAUNCHD.to_owned());
+        assert_eq!(job().bootstrap(root.path(), deadline), failed);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+        assert_eq!(bootout(&job().label, deadline), failed);
+        assert_eq!(current_umask(), 0o022);
     }
 
     #[test]
