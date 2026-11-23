@@ -646,7 +646,8 @@ fn serve_control(stream: &mut Stream, shared: &Arc<Shared>) -> Result<(), Framin
     answered
 }
 
-/// Answers a retire request: the server stops now unless it holds a session, which the answer then names.
+/// Answers a retire request: the server stops now unless it holds a session, which the answer then names, and
+/// disconnects its clients.
 fn retire(stream: &mut Stream, shared: &Arc<Shared>) -> Result<(), FramingError> {
     // a creation that comes after the decision is refused by the lifecycle, its client reconnecting to the next server
     let retired = shared.lock().retire().map_err(|sessions| {
@@ -661,6 +662,8 @@ fn retire(stream: &mut Stream, shared: &Arc<Shared>) -> Result<(), FramingError>
     }
     let answered = write_control(stream, &Control::RetireResult(RetireResult(retired)));
     if stopping {
+        // its clients reconnect to the next server; on Windows their pipe instances would keep that server out
+        shared.disconnect_all();
         shared.changed.notify_all();
     }
     answered
