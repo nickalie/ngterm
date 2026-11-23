@@ -512,20 +512,13 @@ impl Pane {
                 pane = self.id.as_str()
             );
         })?;
-        let last_key = action.last_key();
-        let outcome = self
-            .ask(|pane, slot, reply| Command::PaneInput {
-                pane,
-                slot,
-                action,
-                reply,
-            })
-            .await;
-        // the user answered on the phone, as if typing there
-        if let Some(key) = outcome.as_ref().ok().and_then(|outcome| outcome.typed(last_key)) {
-            self.typed(key);
-        }
-        outcome
+        self.ask(|pane, slot, reply| Command::PaneInput {
+            pane,
+            slot,
+            action,
+            reply,
+        })
+        .await
     }
 
     /// Tells the pane's origin of a key the user typed, for its Badge reset rule; a handle with no core behind it tells

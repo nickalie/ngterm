@@ -91,8 +91,8 @@ Linux build unless it names another OS.
   machine's live sessions over ssh ([Android](#android), [iOS](#ios)); both also have a chat view of a pane running
   Claude Code or Codex. The origin serves the chat through the Rust-only `agent.*` commands (`ngtermctl
   agent`, capability `agent-chat`) and an opt-in `agent` kind on the presentation stream, with no desktop UI. Each key
-  typed on a phone, and the keys of a chat action that went (a prompt or an answer submits, Stop interrupts), reach
-  the origin as `pane.input`, this build's presentation kind, sent only to an origin that lists it; the origin clears
+  typed on a phone, and each key of a chat action that went (each counted as the same key typed there), reach the
+  origin as `pane.input`, this build's presentation kind, sent only to an origin that lists it; the origin clears
   the session's unseen badge by its own Badge reset rule, as for a key typed there.
 - Another extension beyond upstream, where every overlay is ephemeral: an HTML page overlay (`--html`, `--url`,
   `--image`, `--markdown`, session-wide or `--pane`, and link-click pages) lives until it is closed. A restart of the

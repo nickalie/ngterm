@@ -506,6 +506,26 @@ fn a_chat_action_tells_the_origin_of_its_keys_only_when_they_went() {
     inputs_until(&mut agents.stream.peer, |bytes, _| contains(bytes, submit.as_bytes()));
 }
 
+/// An approval's digit is told as plain typing, as the same digit typed there: it is no submit.
+#[test]
+fn an_approvals_key_tells_the_origin_what_the_same_key_typed_there_would() {
+    let mut agents = Agents::start_with("claude", "claude-44x36", timing(), vec![PANE_INPUT_KIND.to_owned()]);
+    agents.first_is("leader");
+    agents.show(&agents.first.peer, "permission");
+    let _chat = approval_chat(&mut agents, "claude-44x36");
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "Yes".to_owned())));
+    inputs_until(&mut agents.first.peer, |bytes, _| {
+        without_escapes(bytes).contains(&b'1')
+    });
+    let other = format!(r#""input":{{"pane":"{PANE}","key":"other"}}"#);
+    let (told, _) = inputs_until(&mut agents.stream.peer, |bytes, _| contains(bytes, other.as_bytes()));
+    agents.show(&agents.first.peer, "idle");
+    assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
+    let (more, _) = drained(&mut agents.stream.peer);
+    let all = [told, more].concat();
+    assert!(!contains(&all, b"\"submit\""), "{:?}", String::from_utf8_lossy(&all));
+}
+
 #[test]
 fn the_lead_lost_between_the_paste_and_its_enter_sends_no_enter() {
     let mut agents = Agents::start("claude", "claude-44x36");

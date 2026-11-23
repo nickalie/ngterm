@@ -1144,22 +1144,19 @@ fn both_agents_screens_take_a_bracketed_paste() {
 }
 
 #[test]
-fn an_actions_keys_mean_to_the_badge_rule_what_reached_the_program() {
+fn a_plans_key_means_to_the_badge_rule_what_the_same_key_typed_there_means() {
     use ngterm_core::model::StatusKeystroke::{Interrupt, Other, Submit};
-    let approval = Action::Approval(approval_of("touch picked.txt"), "Yes".to_owned());
-    let keys = [Action::Prompt("hi".to_owned()), Action::Interrupt, approval].map(|action| action.last_key());
-    assert_eq!(keys, [Submit, Interrupt, Submit]);
-    assert_eq!(AgentInputOutcome::Sent.typed(Interrupt), Some(Interrupt));
+    let keys = [
+        Key::Enter,
+        Key::Escape,
+        Key::Digit(1),
+        Key::Letter('y'),
+        Key::Tab,
+        Key::Down,
+        Key::Paste("hi\nthere".to_owned()),
+    ];
     assert_eq!(
-        AgentInputOutcome::Unconfirmed.typed(Submit),
-        Some(Other),
-        "only some keys may have gone"
+        keys.map(|key| key.badge_kind()),
+        [Submit, Interrupt, Other, Other, Other, Other, Other]
     );
-    for outcome in [
-        AgentInputOutcome::NotOnScreen,
-        AgentInputOutcome::DialogOpen,
-        AgentInputOutcome::LeadRefused,
-    ] {
-        assert_eq!(outcome.typed(Submit), None, "{outcome:?}");
-    }
 }

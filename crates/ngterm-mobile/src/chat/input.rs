@@ -113,16 +113,6 @@ pub enum AgentInputOutcome {
 }
 
 impl AgentInputOutcome {
-    /// What the keys of an action whose last key is `last` meant to the origin's Badge reset rule, by what reached the
-    /// program: all of them when it was sent, maybe only some when it is unconfirmed; `None` when nothing went.
-    pub(crate) fn typed(self, last: StatusKeystroke) -> Option<StatusKeystroke> {
-        match self {
-            Self::Sent => Some(last),
-            Self::Unconfirmed => Some(StatusKeystroke::Other),
-            Self::NotOnScreen | Self::DialogOpen | Self::LeadRefused => None,
-        }
-    }
-
     /// The outcome's name, for the log.
     #[must_use]
     pub fn class(self) -> &'static str {
@@ -192,14 +182,6 @@ impl Action {
         }
     }
 
-    /// What the action's last key means to the origin's Badge reset rule: Stop interrupts, every other action submits.
-    pub(crate) fn last_key(&self) -> StatusKeystroke {
-        match self {
-            Self::Interrupt => StatusKeystroke::Interrupt,
-            _ => StatusKeystroke::Submit,
-        }
-    }
-
     /// Refuses an action that can't be sent whatever the screen shows.
     ///
     /// # Errors
@@ -258,6 +240,16 @@ impl From<OptionKey> for Key {
 }
 
 impl Key {
+    /// What the key means to the origin's Badge reset rule, as the same key typed there: Enter submits, Escape
+    /// interrupts, a paste is plain typing as a desktop paste is.
+    pub(crate) fn badge_kind(&self) -> StatusKeystroke {
+        match self {
+            Self::Enter => StatusKeystroke::Submit,
+            Self::Escape => StatusKeystroke::Interrupt,
+            Self::Digit(_) | Self::Letter(_) | Self::Tab | Self::Down | Self::Paste(_) => StatusKeystroke::Other,
+        }
+    }
+
     /// Sends the key into `terminal`, encoded for the program's modes, while the program's screen is still the one
     /// read at `generation` ([`ngterm_term::ActiveScreen::generation`]); whether it went (`false`: the screen changed
     /// since, nothing went).

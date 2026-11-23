@@ -91,7 +91,7 @@ internal struct TerminalSessionLinkTests {
         #expect(clicks == [.press, .release, .press, .release])
     }
 
-    @Test("a tap after a single tap on a link, before its lookup ends, takes the place of the first tap's work")
+    @Test("a tap before a link's lookup ends takes the place of the first tap's work, except a click")
     internal func laterTapWins() async {
         var opened: [RemoteSession] = []
         view.onSessionLink = { opened.append($0) }
@@ -103,7 +103,21 @@ internal struct TerminalSessionLinkTests {
             await first?.value
         }
         #expect(opened.isEmpty)
-        #expect(clicks == [.press, .release, .press, .release], "only each second tap's own work")
+        #expect(
+            clicks == [.press, .release, .press, .release, .press, .release],
+            "each second tap's click, and the first tap's click on the link that names no session"
+        )
+    }
+
+    @Test("with no mouse tracking, a double tap on a link selects its word, and the first tap keeps it")
+    internal func laterTapSelects() async {
+        pane.tracking = false
+        view.onSessionLink = { _ in Issue.record("no session opens") }
+        let first = view.gestures.tap(at: point(2, 1), time: 10)
+        #expect(view.gestures.tap(at: point(2, 1), time: 10.1) == nil)
+        await first?.value
+        #expect(view.selection.isTouchSelection)
+        #expect(clicks.isEmpty)
     }
 
     @Test("a terminal with nowhere to open a link clicks on it")
@@ -146,4 +160,3 @@ internal struct TerminalSessionLinkTests {
         #expect(shown.colorSchemes.last == .light)
     }
 }
-

@@ -56,7 +56,8 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
     /// A tap at `point` at `time` (seconds of the system's uptime).
     ///
     /// A single tap on a hyperlinked cell asks the pane for the session its link names, and does the tap's own work
-    /// only when it names none; a later tap before the answer takes the place of both.
+    /// only when it names none; a later tap before the answer takes the place of both, except the click a program that
+    /// tracks the mouse gets for a link that names no session.
     @discardableResult
     public func tap(at point: CGPoint, time: TimeInterval) -> Task<Void, Never>? {
         let count = taps.click(at: point, time: time, reach: Self.tapReach)
@@ -71,12 +72,14 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         let generation = tapGeneration
         return Task { [weak self] in
             let target = try? await pane.sessionLink(at: cell)
-            guard let self, tapGeneration == generation else {
+            guard let self else {
                 return
             }
-            if let target {
+            let current = tapGeneration == generation
+            if current, let target {
                 open(target)
-            } else {
+            } else if target == nil, current || view.pointer.tracking {
+                // a program that tracks the mouse counts each click itself, so a later tap takes no click away
                 tapOwnWork(count, at: point)
             }
         }

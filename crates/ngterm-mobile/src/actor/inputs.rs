@@ -53,9 +53,10 @@ fn refused(reason: &str) -> PaneInputError {
     }
 }
 
-/// The pane an action is on: as the core names it, and the slot of the handle that asked for it.
+/// The pane an action is on: as the core names it, as the handle names it, and the slot of the handle that asked for it.
 struct On {
     key: ChatKey,
+    pane: PaneRef,
     slot: Arc<PaneSlot>,
 }
 
@@ -67,7 +68,14 @@ fn target<T: Transport>(
 ) -> Result<(On, Option<Agent>), PaneInputError> {
     let key = ChatKey::of(reference).map_err(|_| PaneInputError::Closed)?;
     let agent = state.chats.borrow().agent(&key).and_then(Agent::of);
-    Ok((On { key, slot }, agent))
+    Ok((
+        On {
+            key,
+            pane: reference.clone(),
+            slot,
+        },
+        agent,
+    ))
 }
 
 /// Where the pane stands, while it is the one the handle was given: a pane hidden since (and maybe shown again, with
@@ -416,7 +424,10 @@ fn look<T: Transport>(
             }
             for (at, key) in keys.iter().enumerate() {
                 match key.send_if(terminal, generation) {
-                    Ok(true) => {}
+                    // the user answered on the phone, as if typing there
+                    Ok(true) => {
+                        state.presentations.borrow_mut().typed(&on.pane, key.badge_kind());
+                    }
                     // the screen changed after the read: nothing of this step went, so it is weighed again
                     Ok(false) if at == 0 => {
                         *plan = before;
