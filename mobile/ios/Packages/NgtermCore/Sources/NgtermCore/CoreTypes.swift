@@ -71,6 +71,8 @@ public typealias MobileError = NgtermCoreBindings.MobileError
 public typealias MobileEvent = NgtermCoreBindings.MobileEvent
 /// Which clipboard a pane's program reads or writes.
 public typealias PaneClipboard = NgtermCoreBindings.PaneClipboard
+/// The app's appearance a pane's terminal reports to programs: light or dark.
+public typealias PaneColorScheme = NgtermCoreBindings.PaneColorScheme
 /// The colors a pane's terminal starts from: the view's theme.
 public typealias PaneColors = NgtermCoreBindings.PaneColors
 /// How a shown pane's attach ended.

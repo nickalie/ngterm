@@ -237,9 +237,9 @@ public final class SessionModel {
         }
     }
 
-    /// Opens `sessionId` of the same machine, which a session link tapped in a pane names, through `open`: attached
-    /// first when it is not.
+    /// Opens `sessionId`, which a session link tapped in a pane names, through `open`.
     ///
+    /// The session is of the same machine, and is attached first when it is not.
     /// A view gone meanwhile, or one that opened another session, opens nothing: the session stays attached in the
     /// lists. A failure to attach is the ``notice``.
     @discardableResult

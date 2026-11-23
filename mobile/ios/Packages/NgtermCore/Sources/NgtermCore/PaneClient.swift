@@ -53,13 +53,15 @@ public protocol PaneClient: AnyObject, Sendable {
     /// The view's theme: the colors the terminal starts from and a reset restores.
     func setColors(colors: PaneColors) throws
 
-    /// The app's appearance, light or dark: the terminal answers a program's color scheme query with it, and reports
-    /// each change to a program that asked for reports.
+    /// Gives the terminal the app's appearance, light or dark.
+    ///
+    /// The terminal answers a program's color scheme query with it, and reports each change to a program that asked.
     func setColorScheme(scheme: PaneColorScheme)
 
-    /// The listed session the session link at `at` names (`ngterm://session/<id>`, or `agterm://` in an agterm
-    /// origin's pane): what a tap on it opens; `nil` for any other cell.
-    func sessionLink(at: CellPoint) async throws -> RemoteSession?
+    /// The listed session that the session link at `point` names, which a tap on it opens.
+    ///
+    /// The link is `ngterm://session/<id>`, or `agterm://` in an agterm origin's pane; `nil` for any other cell.
+    func sessionLink(at point: CellPoint) async throws -> RemoteSession?
 
     /// The grid the view last gave the pane.
     func size() -> PaneSize

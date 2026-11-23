@@ -4,9 +4,10 @@ import Testing
 
 @testable import NgtermFeatures
 
-/// A session link tapped in the session view, on the fake core (mobile/android's `SessionViewModelTest`): the session
-/// it names opens, attached first when it is not; a view that moved on meanwhile opens nothing, and a failed attach
-/// says why.
+/// A session link tapped in the session view, on the fake core.
+///
+/// As mobile/android's `SessionViewModelTest`: the session it names opens, attached first when it is not; a view that
+/// moved on meanwhile opens nothing, and a failed attach says why.
 @MainActor
 @Suite("Session links")
 internal struct SessionLinkTests {

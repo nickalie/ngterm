@@ -94,8 +94,7 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
         TextSizeGiven(textSize)
     }
 
-    /// Takes the palette, the font, the app's appearance and the focus as they are now, and the text size when it is a
-    /// new one.
+    /// Takes the palette, the font, the appearance and the focus as they are now, and a new text size.
     public func updateUIView(_ view: TerminalView, context: Context) {
         view.palette = palette
         if context.coordinator.textSize != textSize {
@@ -114,7 +113,7 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
         view.onSelect = select
         view.onSwipe = swipe
         view.onSessionLink = sessionLink
-        view.colorScheme = dark ? .dark : .light
+        view.setAppearance(dark: dark)
         view.readsAloud = readsAloud
         view.keyboard.duringViewUpdate {
             view.drawsFocused = focused

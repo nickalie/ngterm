@@ -120,17 +120,8 @@ public final class TerminalView: UIView {
     public var onSelect: (@MainActor () -> Void)?
     /// Where a finger's sideways swipe goes (`true` forward: a swipe to the left); with none, a drag only scrolls.
     public var onSwipe: (@MainActor (Bool) -> Void)?
-    /// Where a tap on a session link goes, in place of the tap's own work: the session view opens the session it
-    /// names. With none, a link taps as any cell does.
+    /// Where a tap on a session link goes in place of the tap's own work; with none, a link taps as any cell does.
     public var onSessionLink: (@MainActor (RemoteSession) -> Void)?
-    /// The app's appearance, which the terminal reports to programs that ask (``PaneClient/setColorScheme(scheme:)``).
-    public var colorScheme = PaneColorScheme.light {
-        didSet {
-            if colorScheme != oldValue {
-                pane.setColorScheme(scheme: colorScheme)
-            }
-        }
-    }
     /// Whether VoiceOver hears its cursor's line as it changes (the selected pane's), at most once a second.
     public var readsAloud = false
     /// Whether SwiftUI puts it in its window, inside a view update: the handover waiting there is taken after that
