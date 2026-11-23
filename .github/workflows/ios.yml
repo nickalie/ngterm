@@ -22,8 +22,11 @@
 #   (Unit.coverage.txt and .json) is kept as `ios-coverage` on every run that wrote it;
 # - `ui`: the UI test plan, in the suite that the trigger selects (see "Suites" below). The full suite is
 #   scripts/build-ios.sh ui, a job per simulator, and the tablet's, the slower, in two shares of the test classes
-#   (--ui-shard, which makes the shares the whole plan). The smoke suite is scripts/build-ios.sh smoke, one job that
-#   runs the smoke set of the plan (build-ios.sh's UI_SMOKE_TESTS) on the phone and then on the tablet. In each suite,
+#   (--ui-shard, which makes the shares the whole plan). The smoke suite is scripts/build-ios.sh smoke, the smoke set
+#   of the plan (build-ios.sh's UI_SMOKE_TESTS), a job per simulator: a fresh simulator's first minutes start tens of
+#   widget and wallpaper extensions of 230-400 MB each, and the tablet's, after the phone's run on the same runner,
+#   took the 7 GB Mac to 13% free memory, 1 GB of swap and a 220-244 s stall, and the runner lost its job (main run
+#   45143684401, both attempts). In each suite,
 #   a UI test that fails runs once more, and each that passed on its retry is named with what failed it: a warning
 #   when XCTest gave up on the app, as it now and then does on these virtual Macs, and otherwise a flaky test that
 #   fails the job (build-ios.sh's report_retried_tests);
@@ -380,7 +383,10 @@ jobs:
           {"leg": "ui-phone", "args": "--device phone ui"},
           {"leg": "ui-tablet-1", "args": "--device tablet --ui-shard 1/2 ui"},
           {"leg": "ui-tablet-2", "args": "--device tablet --ui-shard 2/2 ui"}
-          ]' || '[{"leg": "ui-smoke", "args": "smoke"}]') }}
+          ]' || '[
+          {"leg": "ui-smoke-phone", "args": "--device phone smoke"},
+          {"leg": "ui-smoke-tablet", "args": "--device tablet smoke"}
+          ]') }}
     name: ${{ matrix.leg }}
     env:
       LEG: ${{ matrix.leg }}

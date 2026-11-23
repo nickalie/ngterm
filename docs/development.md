@@ -1702,7 +1702,7 @@ already holds changes no file, so the path-filtered workflows don't start on it.
 
   | Trigger | Suite | UI legs |
   |---|---|---|
-  | a push to main or `ci/**`, a pull request (path-filtered) | smoke | `ui-smoke` (`build-ios.sh smoke`: the smoke set on the phone, then on the tablet) |
+  | a push to main or `ci/**`, a pull request (path-filtered) | smoke | `ui-smoke-phone` and `ui-smoke-tablet` (`build-ios.sh smoke`: the smoke set, a job per simulator) |
   | each night on main (03:17 UTC), a run by hand, the release | full | `ui-phone`, `ui-tablet-1` and `ui-tablet-2` (`build-ios.sh ui`: the UI plan per simulator, the tablet's in two shares of its test classes) |
 
   The two suites have the same other jobs and the same gate: a UI test that passes only on its retry fails its
