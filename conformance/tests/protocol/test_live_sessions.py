@@ -26,7 +26,16 @@ import time
 
 import pytest
 from agterm_conformance.client import NoResponse
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session, session_ids
+from agterm_conformance.match import (
+    WINDOWS,
+    assert_absent,
+    assert_error,
+    assert_ok,
+    assert_subset,
+    find_session,
+    program_argv,
+    session_ids,
+)
 from agterm_conformance.plugin import Ctl
 from agterm_conformance.vocabulary import foundation_resolved
 from agterm_conformance.wait import wait_frame, wait_until
@@ -64,6 +73,11 @@ WAIT_OUTPUT_LOST = pytest.mark.upstream_bug(
 )
 # The line a `--wait` pane holds on once its command ended (Ghostty's `wait-after-command`).
 HELD_PROMPT = r"Process exited\. Press any key to close the terminal\."
+# A restart command any Live shell runs as a program of its own, and the foreground argv it shows: PowerShell's `cat`
+# is its own Get-Content, which starts no process.
+RESTART_COMMAND, RESTART_ARGV = (
+    ("ping -n 600 127.0.0.1", ["ping", "-n", "600", "127.0.0.1"]) if WINDOWS else ("cat", ["cat"])
+)
 _markers = itertools.count(1)
 
 
@@ -1232,7 +1246,7 @@ def test_a_restart_publishes_its_new_shell_as_a_respawn_to_a_presenter(live):
         wait_frame(stream.read, "hello", stream.send)
         respawns = wait_frame(stream.read, "snapshot", stream.send)["snapshot"]["respawns"]
         assert respawns["generations"] == {} and respawns["epoch"]
-        assert_ok(live.request("session.restart", sid, pane="left", command="cat"))
+        assert_ok(live.request("session.restart", sid, pane="left", command=RESTART_COMMAND))
         frame = wait_frame(stream.read, "pane.respawn", stream.send, timeout=30)
         assert frame["respawn"] == {"epoch": respawns["epoch"], "generations": {daemon: 1}}
     later = live.stream(live.vocabulary.command("live.present"), sid)
@@ -1241,7 +1255,7 @@ def test_a_restart_publishes_its_new_shell_as_a_respawn_to_a_presenter(live):
         wait_frame(later.read, "hello", later.send)
         snapshot = wait_frame(later.read, "snapshot", later.send)["snapshot"]
         assert snapshot["respawns"] == {"epoch": respawns["epoch"], "generations": {daemon: 1}}
-    live.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["cat"])
+    live.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) == RESTART_ARGV)
     assert_ok(live.request("session.close", sid))
     _gone(live, daemon)
 
