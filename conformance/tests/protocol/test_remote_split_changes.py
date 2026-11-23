@@ -43,10 +43,10 @@ def _split_on_the_viewer(viewer, local, origin, sid):
 
 
 def _mark(origin, sid, pane, marker):
-    # printed in two halves, so the echoed command line never matches
+    # typed in two halves, so only the output matches; unanchored, as zsh wraps the line in a narrow pane
     half = len(marker) // 2
     assert_ok(origin.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:half]} {marker[half:]}\r", pane=pane))
-    origin.wait_text(sid, rf"(?m)^{re.escape(marker)}\s*$", pane=pane)
+    origin.wait_text(sid, re.escape(marker), pane=pane)
 
 
 @pytest.mark.parametrize("remote_origin", ["instance", "headless"], indirect=True)
