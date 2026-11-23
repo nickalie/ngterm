@@ -103,6 +103,10 @@ fn opened_id(response: &Response) -> String {
 }
 
 fn pick(live: &mut Live) -> String {
+    pick_with(live, |_| {})
+}
+
+fn pick_with(live: &mut Live, edit: impl FnOnce(&mut Args)) -> String {
     let session = live.session;
     let response = live.fixture.send(
         Command::Pick(PickCmd::Open),
@@ -113,6 +117,7 @@ fn pick(live: &mut Live) -> String {
                 label: "Alpha".to_owned(),
                 ..PickItem::default()
             }]);
+            edit(a);
         }),
     );
     opened_id(&response)
@@ -251,6 +256,23 @@ fn a_pick_with_no_presenter_waits_and_returns_to_pending_when_refused_or_lost() 
     assert!(cancel.ok);
     live.fixture.core.commit();
     assert_eq!(next.last("pick.dismiss").unwrap()["pick"]["id"], json!(id));
+}
+
+#[test]
+fn a_followed_pick_a_lost_presenter_held_keeps_its_follow_for_the_next_one() {
+    let mut live = headless();
+    let (serial, presenter) = present(&mut live, &SUPPORTED_KINDS);
+    pick_with(&mut live, |a| a.follow = Some(true));
+    assert_eq!(presenter.last("pick.request").unwrap()["pick"]["follow"], json!(true));
+    live.fixture.core.presentation_closed(serial);
+    live.fixture.core.commit();
+    assert_eq!(states(&mut live), [held("pick", "unpresented")]);
+    let (_, next) = present(&mut live, &SUPPORTED_KINDS);
+    let handed = batch(&next);
+    let [Body::PickRequest(request)] = handed.as_slice() else {
+        panic!("{handed:?}")
+    };
+    assert_eq!(request.follow, Some(true));
 }
 
 #[test]
