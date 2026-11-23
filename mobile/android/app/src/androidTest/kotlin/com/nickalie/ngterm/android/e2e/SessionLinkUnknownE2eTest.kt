@@ -2,7 +2,6 @@ package com.nickalie.ngterm.android.e2e
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.ASK_WAIT_MS
-import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.SESSION
 import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.UNKNOWN
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -26,7 +25,7 @@ class SessionLinkUnknownE2eTest {
     @Test
     fun aTapOnALinkToASessionTheMachineDoesNotListStaysInThePane() =
         with(driver) {
-            openANewSession(SESSION)
+            openANewSession(session)
             run(
                 "printf '\\033[H\\033[2J'\n" +
                     "for i in 1 2 3 4; do printf '\\033]8;;ngterm://session/%s\\007%s\\033]8;;\\007\\n' " +
@@ -36,7 +35,7 @@ class SessionLinkUnknownE2eTest {
             )
             awaitTerminal("links-ready")
             tapTheTopLeftCell()
-            val moved = runCatching { compose.waitUntil(ASK_WAIT_MS) { nodes(more(SESSION)) == 0 } }.isSuccess
+            val moved = runCatching { compose.waitUntil(ASK_WAIT_MS) { nodes(more(session)) == 0 } }.isSuccess
             screenshot("unknown-tapped")
             assertTrue("a tap on an unknown session's link left the session", !moved)
             assertTrue(terminalText().contains("links-ready"))

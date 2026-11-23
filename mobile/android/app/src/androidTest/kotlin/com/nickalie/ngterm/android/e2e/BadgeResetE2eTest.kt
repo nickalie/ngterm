@@ -1,7 +1,6 @@
 package com.nickalie.ngterm.android.e2e
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.SESSION
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -23,16 +22,16 @@ class BadgeResetE2eTest {
     @Test
     fun aKeyTypedOnThePhoneClearsTheSessionsBadge() =
         with(driver) {
-            openANewSession(SESSION)
+            openANewSession(session)
             run(
                 "count() { ngtermctl tree --json | python3 -c 'import json,sys\n" +
                     "t=json.load(sys.stdin)[\"result\"][\"tree\"]\n" +
                     "print(sum(s.get(\"unseen\",0) for w in t[\"workspaces\"] for s in w[\"sessions\"]" +
-                    " if s[\"name\"]==sys.argv[1]))' $SESSION; }\n" +
+                    " if s[\"name\"]==sys.argv[1]))' $session; }\n" +
                     "id=\$(ngtermctl tree --json | python3 -c 'import json,sys\n" +
                     "t=json.load(sys.stdin)[\"result\"][\"tree\"]\n" +
                     "print(next(s[\"id\"] for w in t[\"workspaces\"] for s in w[\"sessions\"]" +
-                    " if s[\"name\"]==sys.argv[1]))' $SESSION)\n" +
+                    " if s[\"name\"]==sys.argv[1]))' $session)\n" +
                     "ngtermctl notify qa-badge --target \"\$id\" >/dev/null\n" +
                     "sleep 1\n" +
                     "echo \"badge-before=\$(count)\"\n" +

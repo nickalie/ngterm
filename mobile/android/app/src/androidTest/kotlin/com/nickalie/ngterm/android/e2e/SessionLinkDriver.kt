@@ -29,6 +29,7 @@ import org.junit.rules.RuleChain
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import java.io.File
+import java.util.UUID
 
 /**
  * What the session pane's end-to-end tests do as a person does on a phone, against a real ngterm machine: sign in
@@ -45,6 +46,11 @@ internal class SessionLinkDriver {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val arguments = InstrumentationRegistry.getArguments()
     val compose = createAndroidComposeRule<MainActivity>()
+
+    // the script's machine serves every test of a run: names of this test's own keep another test's sessions out
+    private val runId = UUID.randomUUID().toString().take(RUN_ID_LENGTH)
+    val session = "qa-links-work-$runId"
+    val linked = "qa-links-target-$runId"
 
     private val stack =
         object : ExternalResource() {
@@ -89,10 +95,10 @@ internal class SessionLinkDriver {
             .around(compose)
             .around(evidence)
 
-    // makes the session [LINKED] and covers the screen's top rows with a link to it
+    // makes the session [linked] and covers the screen's top rows with a link to it
     fun printALinkToANewSession() {
         run(
-            "id=\$(ngtermctl session new --no-select --name $LINKED)\n" +
+            "id=\$(ngtermctl session new --no-select --name $linked)\n" +
                 "printf '\\033[H\\033[2J'\n" +
                 "for i in 1 2 3 4; do printf '\\033]8;;ngterm://session/%s\\007%s\\033]8;;\\007\\n' \"\$id\" " +
                 "open-linked-session-link-here; done\n" +
@@ -218,6 +224,7 @@ internal class SessionLinkDriver {
 
     companion object {
         private const val TAG = "QaE2e"
+        private const val RUN_ID_LENGTH = 8
 
         /** The instrumentation arguments the script passes: the host, the machine's port, the user and key. */
         private const val HOST = "e2eHost"
@@ -226,8 +233,6 @@ internal class SessionLinkDriver {
         private const val KEY = "e2eKey"
 
         const val MACHINE = "qa-links"
-        const val SESSION = "qa-links-work"
-        const val LINKED = "qa-links-target"
         const val UNKNOWN = "0E2B7C1A-5D4F-4E3B-9A61-7C2D8F0B1A23"
 
         /** The color scheme reports of the light and the dark appearance, as the screen shows them without ESC. */

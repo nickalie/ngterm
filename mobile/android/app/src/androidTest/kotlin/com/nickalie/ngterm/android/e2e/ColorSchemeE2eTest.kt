@@ -3,7 +3,6 @@ package com.nickalie.ngterm.android.e2e
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.DARK
 import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.LIGHT
-import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.SESSION
 import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.SETTLE_MS
 import org.junit.Rule
 import org.junit.Test
@@ -27,7 +26,7 @@ class ColorSchemeE2eTest {
     @Test
     fun aProgramGetsTheAppsAppearanceAndItsFlip() =
         with(driver) {
-            openANewSession(SESSION)
+            openANewSession(session)
             run(
                 "stty raw -echo; printf '\\033[?996n'; r=\$(dd bs=1 count=9 2>/dev/null); stty sane\n" +
                     "printf '%s:%s\\n' asked \"\$r\" | tr -d '\\033'\n",

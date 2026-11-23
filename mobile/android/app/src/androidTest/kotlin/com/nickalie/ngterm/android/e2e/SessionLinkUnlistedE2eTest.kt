@@ -2,8 +2,6 @@ package com.nickalie.ngterm.android.e2e
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.CONNECT_WAIT_MS
-import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.LINKED
-import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.SESSION
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -26,10 +24,10 @@ class SessionLinkUnlistedE2eTest {
     @Test
     fun aTapOnALinkToASessionMadeAfterTheListingOpensIt() =
         with(driver) {
-            openANewSession(SESSION)
+            openANewSession(session)
             printALinkToANewSession()
             tapTheTopLeftCell()
-            val opened = runCatching { compose.waitUntil(CONNECT_WAIT_MS) { nodes(more(LINKED)) > 0 } }.isSuccess
+            val opened = runCatching { compose.waitUntil(CONNECT_WAIT_MS) { nodes(more(linked)) > 0 } }.isSuccess
             screenshot("link-unlisted-tap")
             assertTrue("a tap on a link to a session made after the listing did not open it", opened)
         }
