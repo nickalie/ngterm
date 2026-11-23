@@ -185,9 +185,10 @@ def test_a_followed_link_shows_its_pictures_from_the_origin_and_goes_forward_and
         assert ui.text("htmlOverlay.identity") == "guide.md"
         _shows_picture(ui, RED)
 
-        # a reload shows the changed file
+        # a reload of the shown page shows the changed file: a plain reload loads the original source (upstream's
+        # `HtmlOverlayRegistry.apply`)
         guide.write_text("![blue](pictures/blue.png)\n", encoding="utf-8")
-        assert_ok(remote_viewer.request("session.overlay.reload", local))
+        assert_ok(remote_viewer.request("session.overlay.reload", local, current=True))
         _shown(remote_viewer, local, "guide.md", canGoBack=True)
         _shows_picture(ui, BLUE)
         assert _pixels(ui, RED) < PICTURE_PIXELS
