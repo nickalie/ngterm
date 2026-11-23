@@ -73,6 +73,7 @@ mod text_wrap;
 mod theme;
 mod tint;
 mod viewer;
+mod viewer_input;
 mod window;
 mod workspace;
 

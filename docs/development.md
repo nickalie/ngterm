@@ -90,7 +90,9 @@ Linux build unless it names another OS.
 - Another extension beyond upstream, which has no mobile app: Android and iOS apps that view and drive another
   machine's live sessions over ssh ([Android](#android), [iOS](#ios)); both also have a chat view of a pane running
   Claude Code or Codex. The origin serves the chat through the Rust-only `agent.*` commands (`ngtermctl
-  agent`, capability `agent-chat`) and an opt-in `agent` kind on the presentation stream, with no desktop UI.
+  agent`, capability `agent-chat`) and an opt-in `agent` kind on the presentation stream, with no desktop UI. A key
+  typed on a phone reaches the origin as `pane.input`, this build's presentation kind, sent only to an origin that
+  lists it; the origin clears the session's unseen badge by its own Badge reset rule, as for a key typed there.
 - Another extension beyond upstream, where every overlay is ephemeral: an HTML page overlay (`--html`, `--url`,
   `--image`, `--markdown`, session-wide or `--pane`, and link-click pages) lives until it is closed. A restart of the
   app or the headless server brings back each page in the slot it held

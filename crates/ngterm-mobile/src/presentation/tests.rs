@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use ngterm_core::hud::HudSpec;
+use ngterm_core::model::StatusKeystroke;
 use ngterm_core::model::{AgentStatus, AskAlignment, AskStyle};
 use ngterm_core::remote::client::{PAGES_UNSUPPORTED, STALE_AFTER, viewer_kinds};
 use ngterm_core::remote::frames::{
@@ -15,7 +16,8 @@ use ngterm_core::remote::frames::{
     PresentationPage, PresentationPageChange, PresentationPageSource, PresentationRespawns, PresentationSnapshot,
     PresentationSound, PresentationStatus,
 };
-use ngterm_core::remote::hub::{AGENT_KIND, NO_OVERLAYS_KIND, STATUS_CHECKMARK_KIND};
+use ngterm_core::remote::frames::{PresentationInput, PresentationPane};
+use ngterm_core::remote::hub::{AGENT_KIND, NO_OVERLAYS_KIND, PANE_INPUT_KIND, STATUS_CHECKMARK_KIND};
 use ngterm_core::remote::ssh::present_tail;
 use ngterm_proto::request::AskButton;
 use uuid::Uuid;
@@ -1171,5 +1173,74 @@ fn a_status_shape_and_a_huds_spinner_reach_the_app_by_their_wire_names() {
             ("Deploying", Some("braille"), "bottom-right")
         );
         assert_eq!(shown.pane.as_deref(), Some(PANE));
+    });
+}
+
+/// The origin's hello listing `kinds`, a mirror's.
+fn hello(kinds: &[&str]) -> Body {
+    Body::Hello(PresentationHello {
+        version: frames::VERSION,
+        kinds: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
+        mode: PresentationMode::Mirror,
+    })
+}
+
+fn pane_ref(session: &str, pane: &str) -> PaneRef {
+    PaneRef {
+        machine_id: MACHINE.to_owned(),
+        session_id: session.to_owned(),
+        pane_id: pane.to_owned(),
+    }
+}
+
+fn input(key: StatusKeystroke) -> Body {
+    Body::Input(PresentationInput {
+        pane: PresentationPane::Identity(Uuid::parse_str(PANE).unwrap()),
+        key,
+    })
+}
+
+/// A key typed into a shown pane goes to an origin that speaks `pane.input`: the first plain key and the first submit,
+/// then nothing until a notification can raise the badge again, as nothing more could clear it.
+#[test]
+fn typed_keys_reach_an_origin_that_speaks_them_until_nothing_more_could_clear() {
+    use ngterm_core::model::StatusKeystroke::{Other, Submit};
+    local(async {
+        let mut harness = Harness::attached(Some(1)).await;
+        let pane = pane_ref(SESSION, PANE);
+        harness.deliver(hello(&["status"])).await;
+        harness.received().await;
+        assert!(
+            !harness.presentations.borrow_mut().typed(&pane, Other),
+            "an origin without the kind"
+        );
+
+        harness.deliver(hello(&["status", PANE_INPUT_KIND])).await;
+        harness.received().await;
+        let sent: Vec<bool> = [Other, Other, Submit, Other, Submit]
+            .into_iter()
+            .map(|key| harness.presentations.borrow_mut().typed(&pane, key))
+            .collect();
+        assert_eq!(sent, [true, false, true, false, false]);
+        assert_eq!(harness.received().await.bodies, [input(Other), input(Submit)]);
+
+        harness
+            .deliver(Body::Notify(PresentationNotify {
+                title: "done".to_owned(),
+                body: String::new(),
+                pane: None,
+                source: "control".to_owned(),
+            }))
+            .await;
+        assert!(harness.presentations.borrow_mut().typed(&pane, Other));
+        assert_eq!(harness.received().await.bodies, [input(Other)]);
+
+        let elsewhere = [
+            pane_ref("00000000-0000-0000-0000-0000000000FF", PANE),
+            pane_ref(SESSION, "left"),
+        ];
+        for pane in elsewhere {
+            assert!(!harness.presentations.borrow_mut().typed(&pane, Submit), "{pane:?}");
+        }
     });
 }

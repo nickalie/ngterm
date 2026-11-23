@@ -16,6 +16,7 @@ use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::model::{PaneAddress, SearchFollowUp, SearchReport, Session, StatusKeystroke, StatusPane};
+use crate::remote::frames::{PresentationInput, PresentationPane};
 
 /// How long a command waiting on the frontend sleeps between probes (upstream's 0.03 s main-actor polls).
 pub const POLL_INTERVAL: Duration = Duration::from_millis(30);
@@ -49,19 +50,38 @@ impl Core {
 
     /// Clears the unseen badge for real input in a main or split pane. Delivered banners stay visible.
     pub fn clear_badge_on_keystroke(&mut self, session: Uuid, token: &str, keystroke: StatusKeystroke) -> bool {
+        self.clear_badge(session, keystroke, |found| {
+            matches!(
+                found.pane_role_for_token(token),
+                Some(StatusPane::Left | StatusPane::Right)
+            )
+        })
+    }
+
+    /// Clears the unseen badge for a key a viewer typed into a main or split pane of `session`
+    /// ([`crate::remote::hub::PANE_INPUT_KIND`]), as for a key typed here.
+    pub(crate) fn clear_badge_on_viewer_input(&mut self, session: Uuid, input: PresentationInput) -> bool {
+        self.clear_badge(session, input.key, |found| match input.pane {
+            PresentationPane::Identity(pane) => found.pane_role_for_identity(pane).is_some(),
+            PresentationPane::Scratch => false,
+        })
+    }
+
+    fn clear_badge(
+        &mut self,
+        session: Uuid,
+        keystroke: StatusKeystroke,
+        in_pane: impl FnOnce(&Session) -> bool,
+    ) -> bool {
         if !self.settings().effective_badge_reset().clears_badge(keystroke) {
             return false;
         }
         let Some(store) = self.library_mut().store_for_session_mut(session) else {
             return false;
         };
-        let clears = store.session(session).is_some_and(|found| {
-            found.unseen_count > 0
-                && matches!(
-                    found.pane_role_for_token(token),
-                    Some(StatusPane::Left | StatusPane::Right)
-                )
-        });
+        let clears = store
+            .session(session)
+            .is_some_and(|found| found.unseen_count > 0 && in_pane(found));
         if clears {
             store.clear_unseen(session);
         }

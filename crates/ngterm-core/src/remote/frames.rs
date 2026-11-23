@@ -19,7 +19,8 @@ pub use super::pick::{PresentationPick, PresentationPickAnswer, PresentationPick
 use crate::html::HtmlLoadState;
 use crate::hud::{HudPosition, HudSpec, HudSpinner};
 use crate::model::{
-    AgentStatus, AskAlignment, AskChoiceForm, AskForm, AskInputForm, AskInputMode, AskStyle, PendingAsk, StatusShape,
+    AgentStatus, AskAlignment, AskChoiceForm, AskForm, AskInputForm, AskInputMode, AskStyle, PendingAsk,
+    StatusKeystroke, StatusShape,
 };
 use crate::pane_env::uuid_string;
 use crate::persist::settings::LinkOpenMode;
@@ -991,6 +992,54 @@ impl<'de> Deserialize<'de> for PresentationLinkClick {
     }
 }
 
+/// A key the user typed into one of the session's panes on a viewer ([`super::hub::PANE_INPUT_KIND`], this build's
+/// addition): the origin clears the session's unseen badge by its Badge reset rule, as for a key typed there. The key
+/// decodes leniently, an unknown one as plain typing, since a frame that fails to decode closes the whole stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresentationInput {
+    pub pane: PresentationPane,
+    pub key: StatusKeystroke,
+}
+
+#[derive(Serialize, Deserialize)]
+struct InputWire {
+    pane: PresentationPane,
+    #[serde(default)]
+    key: Option<Value>,
+}
+
+const INPUT_KEYS: [(StatusKeystroke, &str); 3] = [
+    (StatusKeystroke::Interrupt, "interrupt"),
+    (StatusKeystroke::Submit, "submit"),
+    (StatusKeystroke::Other, "other"),
+];
+
+impl Serialize for PresentationInput {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let key = INPUT_KEYS
+            .iter()
+            .find(|(key, _)| *key == self.key)
+            .map_or("other", |(_, raw)| raw);
+        InputWire {
+            pane: self.pane,
+            key: Some(Value::String(key.to_owned())),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PresentationInput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = InputWire::deserialize(deserializer)?;
+        let raw = wire.key.as_ref().and_then(Value::as_str);
+        let key = INPUT_KEYS
+            .iter()
+            .find(|(_, name)| Some(*name) == raw)
+            .map_or(StatusKeystroke::Other, |(key, _)| *key);
+        Ok(Self { pane: wire.pane, key })
+    }
+}
+
 /// The origin's answer to a forwarded click it did not open (upstream's `PresentationLinkRefusal`). An unknown reason
 /// decodes as [`RemoteLinkRefusal::NotOpened`], for the reason the click's mode decodes leniently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1131,6 +1180,8 @@ pub enum Body {
     LinkClick(PresentationLinkClick),
     /// The origin did not open a forwarded click.
     LinkRefused(PresentationLinkRefusal),
+    /// A viewer tells of a key typed into one of the session's panes ([`super::hub::PANE_INPUT_KIND`]).
+    Input(PresentationInput),
     /// A kind this build does not speak, kept with its place in the order.
     Unknown(String),
 }
@@ -1180,6 +1231,7 @@ impl Body {
             Self::Agent(_) => super::hub::AGENT_KIND,
             Self::LinkClick(_) => super::hub::LINK_CLICK_KIND,
             Self::LinkRefused(_) => "link.refused",
+            Self::Input(_) => super::hub::PANE_INPUT_KIND,
             Self::Unknown(kind) => kind,
         }
     }
@@ -1223,6 +1275,7 @@ impl Body {
             Self::Agent(agent) => entry("agent", serde_json::to_value(agent)),
             Self::LinkClick(click) => entry("link", serde_json::to_value(click)),
             Self::LinkRefused(refusal) => entry("link", serde_json::to_value(refusal)),
+            Self::Input(input) => entry("input", serde_json::to_value(input)),
             Self::Status(None)
             | Self::Context(None)
             | Self::Info(None)
@@ -1384,6 +1437,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "agent" => Body::Agent(required(object, "agent")?),
         super::hub::LINK_CLICK_KIND => Body::LinkClick(required(object, "link")?),
         "link.refused" => Body::LinkRefused(required(object, "link")?),
+        super::hub::PANE_INPUT_KIND => Body::Input(required(object, "input")?),
         other => Body::Unknown(other.to_owned()),
     })
 }
@@ -2406,6 +2460,50 @@ mod tests {
                 body: Body::Unknown("future.kind".to_owned())
             }
         );
+    }
+
+    /// A typed key travels as its pane and its kind of key, and an unknown or missing key reads as plain typing, so a
+    /// newer peer's value never closes the stream.
+    #[test]
+    fn a_typed_key_round_trips_and_decodes_leniently() {
+        let pane = Uuid::parse_str("0E2B7C1A-5D4F-4E3B-9A61-7C2D8F0B1A23").unwrap();
+        for key in [
+            StatusKeystroke::Interrupt,
+            StatusKeystroke::Submit,
+            StatusKeystroke::Other,
+        ] {
+            for pane in [PresentationPane::Identity(pane), PresentationPane::Scratch] {
+                let body = Body::Input(PresentationInput { pane, key });
+                let frame = PresentationFrame {
+                    generation: 1,
+                    rev: 2,
+                    body: body.clone(),
+                };
+                let line = encode(&frame).unwrap();
+                assert_eq!(decode(line.strip_suffix(b"\n").unwrap()).unwrap().body, body);
+            }
+        }
+        let value = serde_json::to_value(PresentationInput {
+            pane: PresentationPane::Identity(pane),
+            key: StatusKeystroke::Submit,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            json!({"pane": "0E2B7C1A-5D4F-4E3B-9A61-7C2D8F0B1A23", "key": "submit"})
+        );
+        for key in [r#","key":"someday""#, "", r#","key":7"#] {
+            let line = format!(r#"{{"kind":"pane.input","gen":1,"rev":2,"input":{{"pane":"scratch"{key}}}}}"#);
+            assert_eq!(
+                decode(line.as_bytes()).unwrap().body,
+                Body::Input(PresentationInput {
+                    pane: PresentationPane::Scratch,
+                    key: StatusKeystroke::Other,
+                }),
+                "{key}"
+            );
+        }
+        assert!(decode(br#"{"kind":"pane.input","gen":1,"rev":2,"input":{"pane":"x"}}"#).is_err());
     }
 
     /// Upstream's `aLinkClickWithAnUnknownModeDecodesAsOverlay` and

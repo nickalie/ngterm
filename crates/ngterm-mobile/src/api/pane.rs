@@ -18,6 +18,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::{mpsc, oneshot};
 
 use ngterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
+use ngterm_core::interrupt;
+use ngterm_core::model::StatusKeystroke;
 use ngterm_term::{
     ClipboardLocation, ColorScheme, GridPoint, GridSize, KeyInput, ModSides, MouseAction, MouseButton, MouseInput,
     Paste, PasteSource, Rgb, SelectionText, ThemeColors, Wake, Wheel, WheelInput,
@@ -519,6 +521,20 @@ impl Pane {
         .await
     }
 
+    /// Tells the pane's origin of a key the user typed, for its Badge reset rule; a handle with no core behind it tells
+    /// nobody.
+    fn typed(&self, key: StatusKeystroke) {
+        if let Some((pane, commands)) = &self.actions
+            && let Some(commands) = commands.upgrade()
+        {
+            // an actor that is gone has no origin left to tell
+            let _ = commands.send(Command::Typed {
+                pane: pane.clone(),
+                key,
+            });
+        }
+    }
+
     /// The terminal input of `kind` goes to; with none, the input is dropped, which the log says.
     fn current(&self, kind: &'static str) -> Result<Arc<ngterm_term::Pane>, PaneInputError> {
         self.slot.current().inspect_err(|_| {
@@ -535,6 +551,34 @@ impl Pane {
 
 fn mods(bits: u8) -> Mods {
     Mods::from_bits_truncate(bits)
+}
+
+/// What `key` means to the origin's Badge reset rule (`ngterm-core`'s [`interrupt::classify`]): a submit is Enter with no
+/// modifier, the locks aside.
+fn key_kind(key: &PaneKey) -> StatusKeystroke {
+    let physical = match key.key.as_str() {
+        "escape" => interrupt::Key::Escape,
+        "enter" => interrupt::Key::Return,
+        "numpad_enter" => interrupt::Key::KeypadEnter,
+        "key_c" => interrupt::Key::C,
+        _ => interrupt::Key::Other,
+    };
+    let held = mods(key.mods);
+    let modifiers = [
+        (Mods::SHIFT, interrupt::KeyModifiers::SHIFT),
+        (Mods::CTRL, interrupt::KeyModifiers::CONTROL),
+        (Mods::ALT, interrupt::KeyModifiers::OPTION),
+        (Mods::SUPER, interrupt::KeyModifiers::COMMAND),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| held.contains(*bit))
+    .fold(interrupt::KeyModifiers::NONE, |all, (_, modifier)| all | modifier);
+    let character = key
+        .unshifted
+        .as_deref()
+        .or(Some(key.text.as_str()))
+        .filter(|text| !text.is_empty());
+    interrupt::classify(physical, character, modifiers)
 }
 
 /// Whether `input` is a Left arrow with no modifier (the locks aside) for a screen where Claude Code would take it to
@@ -655,6 +699,9 @@ impl Pane {
         if !matches!(sent, Ok(false)) {
             self.slot.delivered(&self.id, "key", Delivery::of(&sent));
         }
+        if matches!(sent, Ok(true)) {
+            self.typed(key_kind(&key));
+        }
         sent
     }
 
@@ -671,6 +718,9 @@ impl Pane {
         let sent = self.current("text")?.type_text(&text).map_err(PaneInputError::from);
         if !matches!(sent, Ok(false)) {
             self.slot.delivered(&self.id, "text", Delivery::of(&sent));
+        }
+        if matches!(sent, Ok(true)) {
+            self.typed(interrupt::classify_text(&text));
         }
         sent
     }

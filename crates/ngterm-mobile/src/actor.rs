@@ -56,6 +56,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle, ThreadId};
 use std::time::Duration;
 
+use ngterm_core::model::StatusKeystroke;
 use ngterm_core::remote::not_live;
 use ngterm_core::remote::peer::origin_pane_identity as pane_identity;
 use ngterm_proto::{ControlRemoteTree, RemotePeer};
@@ -188,6 +189,11 @@ pub(crate) enum Command {
         pane: PaneRef,
         slot: Arc<PaneSlot>,
         reply: oneshot::Sender<Result<Vec<String>, PaneInputError>>,
+    },
+    /// A key the user typed into a shown pane, for its origin's Badge reset rule ([`crate::presentation`]).
+    Typed {
+        pane: PaneRef,
+        key: StatusKeystroke,
     },
     /// The listed session a session link tapped in a shown pane names ([`Pane::session_link`]).
     SessionLink {
@@ -479,6 +485,9 @@ async fn run<T: Transport>(
                     .presentations
                     .borrow_mut()
                     .answer_ask(&machine_id, &session_id, &ask_id, reply);
+            }
+            Command::Typed { pane, key } => {
+                state.presentations.borrow_mut().typed(&pane, key);
             }
             Command::SessionLink { pane, raw, reply } => {
                 let _ = reply.send(Ok(session_link(&state, &pane, &raw)));
