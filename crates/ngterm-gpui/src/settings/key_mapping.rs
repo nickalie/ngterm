@@ -1,4 +1,4 @@
-//! Key Mapping: the keyboard layout held while a terminal has the keyboard (`crate::input_source`), the config
+//! Key Mapping: the keyboard layout held while ngterm has the keyboard (`crate::input_source`), the config
 //! directory holding `keymap.conf` and `hooks.conf` (Choose…, and Use Default while one is set), and each file's
 //! diagnostics with its Reload (upstream's `KeyMappingSettingsView`).
 

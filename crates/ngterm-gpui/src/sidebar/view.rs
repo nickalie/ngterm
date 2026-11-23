@@ -361,7 +361,7 @@ impl Sidebar {
                 .debug_selector(|| "edit-field".to_owned())
                 .on_action(cx.listener(|this, _: &Escape, _, cx| this.finish_rename(false, cx)))
                 // a press anywhere else commits, as the field losing the keyboard does: the disclosure, the hover "+"
-                // and the rows take no focus, and the list they reshape would otherwise cancel the edit
+                // and the rows take no focus, so no blur commits
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.finish_rename(true, cx)))
                 .child(
                     Input::new(&editing.input)

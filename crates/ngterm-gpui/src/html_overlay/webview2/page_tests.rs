@@ -474,6 +474,24 @@ fn a_layer_the_app_draws_and_a_failure_hide_the_native_window(cx: &mut TestAppCo
     );
 }
 
+#[gpui_kit::test]
+fn a_replica_awaiting_its_first_content_hides_the_native_window(cx: &mut TestAppContext) {
+    let mut driven = driven(&url_overlay());
+    let (_element, cx) = mounted(&driven, cx);
+    driven.overlay.replica_of = Some(uuid::Uuid::new_v4());
+    driven.overlay.load_state = HtmlLoadState::Loading;
+    driven.overlay.content_shown = false;
+    cx.update(|_, cx| driven.show(cx));
+    cx.run_until_parked();
+    assert!(
+        !driven.page.wanted().visible,
+        "the loading indicator is drawn where the page would be"
+    );
+    driven.overlay.content_shown = true;
+    cx.update(|_, cx| driven.show(cx));
+    assert!(driven.page.wanted().visible, "the first content shows the page");
+}
+
 #[test]
 fn a_page_with_no_web_view_is_not_placed() {
     fake_native::install();

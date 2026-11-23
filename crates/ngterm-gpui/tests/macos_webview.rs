@@ -94,9 +94,9 @@ mod smoke {
             let _: () = unsafe { msg_send![run_loop,runUntilDate:date] };
         }
     }
-    /// The keyboard-layout lock's page half (upstream's `testPageAndItsSubviewsHoldTheLock`): the delegate reports the
-    /// page holding the keyboard while the first responder is the web view or a field inside it, and losing it when
-    /// the first responder moves outside, which is what `page_holds_keyboard` and the lock's refresh read.
+    /// The delegate reports the page holding the keyboard while the first responder is the web view or a field inside
+    /// it, and losing it when the first responder moves outside, which is what `page_holds_keyboard` (the keymap's
+    /// page-key routing) reads.
     fn focus_follows_the_first_responder(window: &AnyObject, page: &AnyObject) {
         // SAFETY: main thread; the window and the web view are live, the text view is retained until the end.
         let field: Retained<AnyObject> = unsafe { msg_send![class!(NSTextView), new] };

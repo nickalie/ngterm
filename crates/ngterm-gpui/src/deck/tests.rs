@@ -539,8 +539,7 @@ fn a_shown_split_lays_both_panes_out_at_the_ratio_and_focus_follows_the_model(cx
 }
 
 /// Upstream's `TerminalDeckTests` and `SplitRatioAccessorTests` for #995: switching to or from a left/right split
-/// session leaves both panes' grids alone, as every page lays out at the deck's own bounds, shown or not, whatever the
-/// toolbar above it (the compact one included).
+/// session leaves both panes' grids alone, as every page lays out at the deck's own bounds, shown or not.
 #[gpui_kit::test]
 fn switching_to_and_from_a_left_right_split_keeps_both_panes_grids(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();

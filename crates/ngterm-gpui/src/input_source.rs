@@ -166,7 +166,7 @@ impl Performer {
         changed
     }
 
-    /// Brings the selection in line with the lock, a terminal or a page holding the keyboard or not (`held`).
+    /// Brings the selection in line with the lock, an ngterm window active while ngterm is the active app or not (`held`).
     fn reconcile(&mut self, held: bool) {
         if self.stopped || (self.target.is_none() && self.lock.baseline().is_none()) {
             return;
@@ -232,7 +232,7 @@ pub fn init(poster: Poster, cx: &mut App) {
 /// Installs the performer over the backend `probe` makes on first use (a test's fake).
 pub fn install(probe: Box<dyn FnOnce() -> Probe>, poster: Option<Poster>, cx: &mut App) {
     let layout_change = cx.on_keyboard_layout_change(request_refresh);
-    // a removed window drops its terminals unseen by their focus listeners: the one holding the keyboard may be gone
+    // a removed window reports no deactivation
     let window_closed = cx.on_window_closed(|cx, _| request_refresh(cx));
     cx.set_global(Performer {
         source: Some(Source::Pending(probe)),
@@ -276,8 +276,7 @@ fn probe(compositor: &'static str) -> Probe {
     }
 }
 
-/// Re-evaluates on the next main-loop turn: a focus listener runs before every view has seen the move, and a window's
-/// activation and another's deactivation come as two events.
+/// Re-evaluates on the next main-loop turn: one window's activation and another's deactivation come as two events.
 pub fn request_refresh(cx: &mut App) {
     let Some(performer) = cx.try_global::<Performer>() else {
         return;

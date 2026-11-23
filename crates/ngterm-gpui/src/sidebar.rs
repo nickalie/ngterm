@@ -11,7 +11,7 @@
 //! RULE: the handlers never touch the model. They read the snapshot the last sync took ([`context`]) and post a
 //! [`SidebarAction`] for the window to the main loop; what needs a dialog, the clipboard or the rename field happens
 //! here first. A workspace-row click opens or folds the row after the double-click interval, so a double-click renames
-//! without a toggle in between.
+//! without a toggle in between; a click on the row's icon or disclosure folds it at once and never renames.
 
 mod context;
 mod drag;
@@ -522,8 +522,8 @@ impl Sidebar {
     }
 
     /// Opens or folds workspace row `id`, or parent row `id`'s companions, persisted (a user toggle: the disclosure,
-    /// a workspace row click, or the row menu's Collapse Workspace / Expand Workspace). A parent row follows at once,
-    /// the fold persisting through the store (upstream's `parentExpansionChanged`).
+    /// a workspace row or icon click, or the row menu's Collapse Workspace / Expand Workspace). The row, workspace or
+    /// parent, follows at once, the fold persisting through the store (upstream's `parentExpansionChanged`).
     pub fn toggle(&mut self, id: Uuid) {
         let Some(row) = self.rows.iter_mut().find(|row| row.id == id) else {
             return;

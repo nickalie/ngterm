@@ -133,8 +133,8 @@ pub(super) struct KeyState {
     queued: Vec<KeyStroke>,
     /// The focus last reported to the program; `None` before the first report.
     reported: Option<bool>,
-    /// Whether the view held its active window's keyboard when last seen, for the keyboard-layout lock
-    /// (`crate::input_source`), which re-evaluates on each change.
+    /// Whether the view held its active window's keyboard when last seen: a change drops a pending dead key and
+    /// refreshes the IME coordinates.
     held: Option<bool>,
     /// The focused view's last laid-out candidate rectangle, including element origin and metrics.
     ime_bounds: Option<Bounds<Pixels>>,

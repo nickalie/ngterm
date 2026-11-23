@@ -18,8 +18,8 @@ use ngterm_wpe_client::{
 };
 
 use super::PageView;
+use crate::html_overlay::registry;
 use crate::html_overlay::testing::{self, Call, Recorder};
-use crate::html_overlay::{panel, registry};
 
 /// The window's content: a stand-in popover (a strip on top that closes on any press outside it) over the page.
 struct Root {
@@ -278,8 +278,6 @@ fn the_page_and_its_strip_carry_upstreams_accessibility_ids(cx: &mut TestAppCont
     assert!(text.size.height > one_line, "wrapped onto more lines: {text:?}");
 }
 
-/// A page waiting for the engine: its area shows the download, then why there is none with a retry, and neither hides
-/// the strip above it.
 /// Upstream's `HtmlOverlayView.loading` (#949): a page shown here for another machine draws the loading indicator until
 /// its first load finishes, naming the machine, and never again on a later load.
 #[gpui_kit::test]
@@ -306,9 +304,18 @@ fn a_replica_shows_the_loading_indicator_until_its_first_load(cx: &mut TestAppCo
         cx.debug_bounds("htmlOverlay.loading").is_some(),
         "the first load shows it"
     );
+    cx.activate_a11y();
+    let tree = cx.a11y_tree_update().expect("the page's accessibility tree");
+    let status: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == gpui_kit::accesskit::Role::Status)
+        .filter_map(|(_, node)| node.label())
+        .collect();
     assert_eq!(
-        panel::loading_text(&replica, Some("build-box")),
-        "Loading index.html from build-box"
+        status,
+        ["Loading index.html from build-box"],
+        "the drawn indicator names the machine"
     );
     replica.load_state = ngterm_core::html::HtmlLoadState::Loaded;
     replica.content_shown = true;
@@ -322,6 +329,8 @@ fn a_replica_shows_the_loading_indicator_until_its_first_load(cx: &mut TestAppCo
     );
 }
 
+/// A page waiting for the engine: its area shows the download, then why there is none with a retry, and neither hides
+/// the strip above it.
 #[gpui_kit::test]
 fn a_waiting_page_shows_the_download_and_a_failure_with_its_retry(cx: &mut TestAppContext) {
     use crate::html_overlay::engine_wait::{Unavailable, Wait};
