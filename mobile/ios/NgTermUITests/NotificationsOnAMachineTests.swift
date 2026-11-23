@@ -11,7 +11,8 @@ import XCTest
 ///
 /// A banner is read from SpringBoard. What stays up is read from the system's delivered list of the app, in the
 /// simulator's files on the Mac.
-/// A phone leaves the session for the machines; an iPad shows the session beside them, so it opens another session.
+/// A phone leaves the session for the machines; an iPad shows the session beside them, so it goes to another session,
+/// made before the first post: the post's delay must not run while a session is made.
 /// The machine is a private `ngterm-headless` behind a private `sshd`, which `scripts/test-ios-e2e.sh` starts. Without
 /// a machine the test is skipped.
 internal final class NotificationsOnAMachineTests: XCTestCase {
@@ -65,6 +66,7 @@ internal final class NotificationsOnAMachineTests: XCTestCase {
         signIn(with: machine, in: app)
         addMachine(machine, in: app)
         openANewSession(Self.session, allowing: true, in: app)
+        makeTheOtherSession(in: app)
 
         // a notice of the earlier run goes when Notices is turned off
         post("ngtermctl notify qa-ntc-one --title QA", in: app)
@@ -312,16 +314,23 @@ internal final class NotificationsOnAMachineTests: XCTestCase {
         }
     }
 
-    // the session off the screen: a phone goes back to the machines; an iPad opens the other session in its place
+    // on an iPad, the other session made and the session on screen again, so that leaving it later is one tap
+    @MainActor
+    private func makeTheOtherSession(in app: XCUIApplication) {
+        guard Self.isPad else {
+            return
+        }
+        openANewSession(Self.other, allowing: false, in: app)
+        enterTheSession(in: app)
+    }
+
+    // the session off the screen: a phone goes back to the machines; an iPad shows the other session in its place
     @MainActor
     private func leaveTheSession(in app: XCUIApplication) {
         if Self.isPad {
             let row = app.descendants(matching: .any)["session-\(Self.other)"].firstMatch
-            if row.exists {
-                row.tap()
-            } else {
-                openANewSession(Self.other, allowing: false, in: app)
-            }
+            FakeApp.expect(row, "the other session's row")
+            row.tap()
             FakeApp.expect(app.descendants(matching: .any)["session-title"].firstMatch, "the other session")
             return
         }
