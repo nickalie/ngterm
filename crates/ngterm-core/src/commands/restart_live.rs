@@ -349,6 +349,8 @@ fn await_new_shell(
         return failure(format!("the old shell ended (pid {old}) and no new one was observed"));
     };
     core.live.leaders.borrow_mut().note_lifecycle_change();
+    // the kill ended every viewer's attach on its exit prompt: the respawn attaches them to the new shell
+    core.publish_respawn(job.session, job.daemon.clone());
     let pane = job.pane.as_str();
     let note = replayed
         .as_ref()

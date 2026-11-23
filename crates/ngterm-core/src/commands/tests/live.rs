@@ -1083,6 +1083,49 @@ fn a_restart_ends_the_old_shell_and_rebuilds_the_pane_on_its_daemon() {
     assert!(live.core().live.claimed_exits.is_empty());
 }
 
+/// The restart kills the daemon each viewer is attached to, so the viewer's attach ends on its exit prompt; the
+/// restart's new shell is published as a respawn, which attaches the viewer again.
+#[test]
+fn a_restart_publishes_the_new_shell_as_a_respawn_to_the_viewers() {
+    use super::remote::{OLDER_KINDS, subscribe_listing};
+
+    let mut live = live();
+    let daemon = daemon_name(live.left);
+    live.host.set_record(&daemon, Some(1), Some(100), None);
+    let session = live.session;
+    let (_, viewer) = subscribe_listing(live.core(), session, "mirror", &OLDER_KINDS);
+    let epoch = viewer.last("snapshot").unwrap()["snapshot"]["respawns"]["epoch"].clone();
+    let request = Request {
+        cmd: Command::Session(SessionCmd::Restart),
+        target: Some(wire(session)),
+        args: Some(args(|a| {
+            (a.pane, a.command) = (Some("left".to_owned()), Some("cat".to_owned()));
+        })),
+    };
+    let dispatched = live.core().begin(&request);
+    let host = Arc::clone(&live.host);
+    let response = drive(live.core(), dispatched, |core, _| {
+        if !core.take_pane_replacements().is_empty() {
+            host.set_record(&daemon, Some(1), Some(200), None);
+        }
+    });
+    assert_eq!(result(&response)["restart"]["newPid"], 200);
+    live.core().commit();
+
+    let frames = viewer.frames("pane.respawn");
+    assert_eq!(frames.len(), 1, "{:?}", viewer.kinds());
+    assert_eq!(
+        frames[0]["respawn"],
+        json!({"epoch": epoch, "generations": {&daemon: 1}})
+    );
+    let (_, later) = subscribe_listing(live.core(), session, "mirror", &OLDER_KINDS);
+    assert_eq!(
+        later.last("snapshot").unwrap()["snapshot"]["respawns"]["generations"],
+        json!({daemon: 1}),
+        "a viewer that connects after the restart learns of it from its snapshot"
+    );
+}
+
 /// A host whose kill waits for the test to release it, as a real HUP handler can wait for the app's control reply.
 struct BlockedKillHost {
     inner: Arc<FakeSessionHost>,

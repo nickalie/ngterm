@@ -1213,6 +1213,39 @@ def test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter(live):
     live.wait_tree(lambda tree: not {sid, companion} & set(session_ids(tree)))
 
 
+@LIVE_IN_ANY_SHELL
+@pytest.mark.upstream_bug(
+    "restart-publishes-no-respawn",
+    reason="restartSessionPane (ControlServer+Restart.swift) kills the daemon every viewer attaches to and starts "
+    "the new shell under the same name, but never calls ownerRespawned, so a viewer stays on its exit prompt",
+)
+@pytest.mark.covers("live.present", "session.restart", streams=("live.present",))
+def test_a_restart_publishes_its_new_shell_as_a_respawn_to_a_presenter(live):
+    """A restart ends the attach of each viewer of the pane; the origin publishes the new shell as `pane.respawn`, so
+    the viewer attaches to it again instead of a detach and a new attach."""
+    sid = _live_session(live)
+    daemon = _entries(live, sid)["left"]["daemon"]
+    stream = live.stream(live.vocabulary.command("live.present"), sid)
+    assert stream.reply.ok, stream.reply.raw
+    with stream:
+        stream.send(_hello("mirror"))
+        wait_frame(stream.read, "hello", stream.send)
+        respawns = wait_frame(stream.read, "snapshot", stream.send)["snapshot"]["respawns"]
+        assert respawns["generations"] == {} and respawns["epoch"]
+        assert_ok(live.request("session.restart", sid, pane="left", command="cat"))
+        frame = wait_frame(stream.read, "pane.respawn", stream.send, timeout=30)
+        assert frame["respawn"] == {"epoch": respawns["epoch"], "generations": {daemon: 1}}
+    later = live.stream(live.vocabulary.command("live.present"), sid)
+    with later:
+        later.send(_hello("mirror"))
+        wait_frame(later.read, "hello", later.send)
+        snapshot = wait_frame(later.read, "snapshot", later.send)["snapshot"]
+        assert snapshot["respawns"] == {"epoch": respawns["epoch"], "generations": {daemon: 1}}
+    live.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["cat"])
+    assert_ok(live.request("session.close", sid))
+    _gone(live, daemon)
+
+
 # -- pages handed to a presenter
 
 PAGE_KINDS = ["page.request", "page.rejected", "page.close", "page.closed", "page.command", "page.state"]

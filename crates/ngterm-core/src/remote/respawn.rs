@@ -275,18 +275,23 @@ impl Core {
                 WaitEnd::Leader(pid) => self.restore.table().is_none_or(|table| table.stat(pid).is_some()),
                 WaitEnd::TimedOut => false,
             };
-            if !alive {
-                continue;
+            if alive {
+                self.publish_respawn(watch.session, watch.daemon);
             }
-            let counts = self.remote.respawns.generations.entry(watch.session).or_default();
-            let generation = counts.get(&watch.daemon).copied().unwrap_or_default() + 1;
-            counts.insert(watch.daemon.clone(), generation);
-            let respawns = PresentationRespawns {
-                epoch: self.remote.respawns.epoch.clone(),
-                generations: BTreeMap::from([(watch.daemon, generation)]),
-            };
-            self.remote.hub.publish(&Body::Respawn(respawns), watch.session);
         }
+        self.run_hub_events();
+    }
+
+    /// Counts a new shell under `daemon`'s name for `session` and tells the session's viewers.
+    pub(crate) fn publish_respawn(&mut self, session: Uuid, daemon: String) {
+        let counts = self.remote.respawns.generations.entry(session).or_default();
+        let generation = counts.get(&daemon).copied().unwrap_or_default() + 1;
+        counts.insert(daemon.clone(), generation);
+        let respawns = PresentationRespawns {
+            epoch: self.remote.respawns.epoch.clone(),
+            generations: BTreeMap::from([(daemon, generation)]),
+        };
+        self.remote.hub.publish(&Body::Respawn(respawns), session);
         self.run_hub_events();
     }
 
