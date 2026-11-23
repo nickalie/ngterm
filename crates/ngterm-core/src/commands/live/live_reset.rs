@@ -6,7 +6,8 @@
 //!
 //! Linux has no responsibility API to tell a daemon's supervising process (upstream's `LiveAttributionProbe` over
 //! `responsibility_get_pid_responsible_for_pid`) and no session host, so every leader attributes as unknown: a reset
-//! offers the daemons that predate the recorded session server build, never an "unsupervised" one.
+//! offers the daemons that predate the recorded session server build, never an "unsupervised" one. On macOS it also
+//! offers those on a session server of an earlier login (`staleHost`, which the server's listing tells).
 
 use std::collections::BTreeSet;
 use std::thread;
@@ -127,7 +128,11 @@ impl Core {
     /// The first [`ResetRefusal`] that applies.
     pub fn prepare_live_reset(&self) -> Result<ResetPrompt, ResetRefusal> {
         let selection = self.checked_live_reset_selection()?;
-        let (title, body) = dialog_text(selection.session_count(), selection.outdated_session_count());
+        let (title, body) = dialog_text(
+            selection.session_count(),
+            selection.outdated_session_count(),
+            selection.stale_host_session_count(),
+        );
         Ok(ResetPrompt { title, body })
     }
 
@@ -266,14 +271,16 @@ pub(crate) fn reset(core: &mut Core, args: &Args) -> Outcome {
         .checked_live_reset_selection()
         .map_err(|refusal| ControlError::rejected(refusal.message()))?;
     let outdated = selection.outdated_session_count();
+    let stale_host = selection.stale_host_session_count();
     let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
     let status = ControlLiveResetStatus {
         sessions: count(selection.session_count()),
         panes: count(selection.targets.len()),
         pending: true,
         outdated: (outdated > 0).then(|| count(outdated)),
+        stale_host: (stale_host > 0).then(|| count(stale_host)),
     };
-    let (_, body) = dialog_text(selection.session_count(), outdated);
+    let (_, body) = dialog_text(selection.session_count(), outdated, stale_host);
     core.live.reset.pending = Some(selection);
     core.request_live_quit(LiveQuit { relaunch: true });
     Ok(ControlResult {

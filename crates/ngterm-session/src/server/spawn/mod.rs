@@ -29,6 +29,13 @@
 //! the server's clients (`attempts.rs`). Another client process asking again is answered at once by the server, which
 //! does not run a handoff it failed again and disconnects nobody for it ([`crate::server::handoff`]).
 //!
+//! # Logins
+//!
+//! A server of an earlier login than the client's ([`crate::login`], macOS only) that holds no session is asked, on a
+//! control connection, to retire, and the client starts its own: sessions it would create in the earlier login fail
+//! there. One that holds sessions is connected to as it is, once per call, and its sessions' panes read as on an
+//! earlier host (`crate::host`).
+//!
 //! # Private images on Windows
 //!
 //! A running executable cannot be replaced on Windows, so a server never runs from the staged binary there: each start
@@ -68,7 +75,7 @@ use std::time::{Duration, Instant};
 use crate::endpoint::{Endpoint, Stream, is_connection_closed_error};
 use crate::protocol::{
     CAPABILITY_HANDOFF_REQUEST, Control, ControlError, ErrorCode, FramingError, HandoffRequest, HandoffResult, Hello,
-    PROTOCOL_VERSION, Role, Welcome, read_frame, write_control,
+    PROTOCOL_VERSION, RetireResult, Role, Welcome, read_frame, write_control,
 };
 
 use super::{CAPABILITY_DETACHED, EXIT_STOPPED, EXIT_TAKEN, HANDSHAKE_TIMEOUT};
@@ -104,6 +111,9 @@ pub struct StartOptions {
     pub build: Option<String>,
     /// How long a handoff's answer is waited for.
     pub handoff_timeout: Duration,
+    /// The client's login session ([`crate::login::current`]): a server of an earlier one is retired when it holds no
+    /// session.
+    pub login: Option<i64>,
 }
 
 impl StartOptions {
@@ -117,6 +127,7 @@ impl StartOptions {
             executable,
             timeout: READY_TIMEOUT,
             handoff_timeout: HANDOFF_TIMEOUT,
+            login: crate::login::current(),
         }
     }
 }
@@ -253,6 +264,26 @@ pub enum StartError {
 ///
 /// Every [`StartError`]; a [`StartError::Refused`] carries the server's welcome.
 pub fn connect_or_start(endpoint: &Endpoint, hello: &Hello, options: &StartOptions) -> Result<Connected, StartError> {
+    let mut retired = None;
+    loop {
+        let connected = of_any_build(endpoint, hello, options)?;
+        let pid = connected.welcome.pid;
+        if retired == Some(pid) || !crate::login::is_earlier(connected.welcome.login, options.login) {
+            return Ok(connected);
+        }
+        // a retired server takes no connection after its decision, so a later look finds the next server; one that
+        // refused is taken as it is
+        drop(connected.stream);
+        match request_retire(endpoint, options, pid) {
+            Ok(()) => tracing::info!(pid, "retired a live session server of an earlier login"),
+            Err(reason) => tracing::warn!(pid, %reason, "a live session server of an earlier login stays"),
+        }
+        retired = Some(pid);
+    }
+}
+
+/// [`connect_or_start`] without the login check.
+fn of_any_build(endpoint: &Endpoint, hello: &Hello, options: &StartOptions) -> Result<Connected, StartError> {
     let Some(build) = options.build.as_deref() else {
         return start(endpoint, hello, options);
     };
@@ -441,6 +472,37 @@ fn request_handoff(endpoint: &Endpoint, options: &StartOptions, build: &str) -> 
     match answer {
         Control::HandoffResult(HandoffResult(result)) => result.map_err(|error| error.message),
         other => Err(format!("the server answered the handoff request with {other:?}")),
+    }
+}
+
+/// Ask the server of `endpoint`, on a control connection, to retire when it is still the one of `pid`: it stops when
+/// it holds no session.
+///
+/// # Errors
+///
+/// It holds a session, predates the request (it closes the connection), another server serves now, or it could not be
+/// asked, with the reason.
+fn request_retire(endpoint: &Endpoint, options: &StartOptions, pid: u32) -> Result<(), String> {
+    let hello = Hello {
+        role: Role::Control,
+        build: options.build.clone().unwrap_or_default(),
+        capabilities: Vec::new(),
+    };
+    let deadline = Instant::now() + options.timeout;
+    let mut stream = match probe(endpoint, &hello, deadline) {
+        Probe::Ready(stream, welcome) if welcome.pid == pid => stream,
+        Probe::Ready(_, welcome) => return Err(format!("another server serves now (pid {})", welcome.pid)),
+        Probe::Busy(reason) | Probe::Absent(reason) => return Err(format!("no server to ask: {reason}")),
+        Probe::Failed(error) => return Err(error.to_string()),
+    };
+    write_control(&mut stream, &Control::RetireRequest)
+        .map_err(|err| format!("the retire request could not be sent: {err}"))?;
+    let answer = exchange_within(stream, HANDSHAKE_TIMEOUT, |stream| read_frame(stream)?.control())
+        .map_err(|err| format!("the server did not answer the retire request: {err}"))?
+        .1;
+    match answer {
+        Control::RetireResult(RetireResult(result)) => result.map_err(|error| error.message),
+        other => Err(format!("the server answered the retire request with {other:?}")),
     }
 }
 
@@ -1372,6 +1434,7 @@ mod tests {
             capabilities: Vec::new(),
             pid: 1,
             error: None,
+            login: None,
         };
         assert_eq!(
             attempt("old".to_owned(), "new", &welcome("new"), Err("lost".to_owned())),

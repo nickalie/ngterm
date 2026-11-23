@@ -35,6 +35,7 @@ fn record(pane: Uuid, leader: Option<i32>, created: Option<u64>) -> LiveSessionR
         clients: Some(0),
         leader_pid: leader,
         created_at: created,
+        earlier_host: false,
     }
 }
 
@@ -493,7 +494,7 @@ fn the_dialog_counts_sessions_and_names_those_that_predate_the_update() {
         (1, "1 live session will be reset."),
         (2, "2 live sessions will be reset."),
     ] {
-        let (title, body) = dialog_text(count, 0);
+        let (title, body) = dialog_text(count, 0, 0);
         assert_eq!(title, "Reset Live Sessions?");
         assert!(body.starts_with(opening));
         assert!(body.contains("quits and reopens itself"));
@@ -521,10 +522,144 @@ fn the_dialog_counts_sessions_and_names_those_that_predate_the_update() {
             "3 live sessions will be reset. 2 of them predate the last Live sessions update",
         ),
     ] {
-        let (_, body) = dialog_text(sessions, outdated);
+        let (_, body) = dialog_text(sessions, outdated, 0);
         assert!(body.starts_with(sentence), "{body}");
         assert!(body.contains("will be recreated on the current one. Ngterm quits and reopens itself"));
     }
+}
+
+#[test]
+fn the_dialog_names_the_sessions_on_a_server_of_an_earlier_login() {
+    for (sessions, stale, sentence) in [
+        (
+            1,
+            1,
+            "1 live session will be reset. It runs under a session server from an earlier login",
+        ),
+        (
+            3,
+            3,
+            "3 live sessions will be reset. They all run under a session server from an earlier login",
+        ),
+        (
+            3,
+            1,
+            "3 live sessions will be reset. 1 of them runs under a session server from an earlier login",
+        ),
+        (
+            3,
+            2,
+            "3 live sessions will be reset. 2 of them run under a session server from an earlier login",
+        ),
+    ] {
+        let (_, body) = dialog_text(sessions, 0, stale);
+        assert!(body.starts_with(sentence), "{body}");
+        assert!(body.contains("earlier login and will be moved to the current one. Ngterm quits and reopens itself"));
+    }
+    let (_, body) = dialog_text(3, 1, 2);
+    assert!(
+        body.starts_with(
+            "3 live sessions will be reset. 1 of them predates the last Live sessions update and will be recreated on \
+             the current one. 2 of them run under a session server from an earlier login and will be moved to the \
+             current one. Ngterm quits"
+        ),
+        "{body}"
+    );
+}
+
+#[test]
+fn the_stale_host_session_count_counts_a_split_session_once() {
+    let selection = Selection {
+        targets: vec![
+            target(PANE_A, SESSION_A, 10, Reason::StaleHost),
+            target(PANE_A_SPLIT, SESSION_A, 11, Reason::StaleHost),
+            target(PANE_B, SESSION_B, 12, Reason::Unsupervised),
+        ],
+        inventory_complete: true,
+    };
+    assert_eq!(selection.stale_host_session_count(), 1);
+    assert_eq!(selection.outdated_session_count(), 0);
+}
+
+fn on_earlier_host(pane: Uuid, leader: i32, created: u64, earlier: bool) -> LiveSessionRecord {
+    LiveSessionRecord {
+        earlier_host: earlier,
+        ..record(pane, Some(leader), Some(created))
+    }
+}
+
+/// Upstream's `selectTakesASupervisedPaneOnAnEarlierHostAsStaleHost` and `selectPrefersOutdatedOverStaleHost`. The
+/// session server's listing places a pane here, every leader attributing as unknown.
+#[test]
+fn select_takes_a_pane_on_a_server_of_an_earlier_login_as_stale_host() {
+    let claims = walk(vec![claim(PANE_A, PaneRole::Left, SESSION_A)], true);
+    for (attribution, earlier, reason) in [
+        (Attribution::Unknown, true, Some(Reason::StaleHost)),
+        (Attribution::Unknown, false, None),
+        (Attribution::Orphaned, true, Some(Reason::Unsupervised)),
+    ] {
+        let records = [on_earlier_host(PANE_A, 10, CUTOFF, earlier)];
+        let selection = select(&claims, &records, Some(CUTOFF), always(attribution));
+        let expected: Vec<Target> = reason
+            .map(|reason| target(PANE_A, SESSION_A, 10, reason))
+            .into_iter()
+            .collect();
+        assert_eq!(selection.targets, expected, "{attribution:?} earlier {earlier}");
+    }
+    let records = [on_earlier_host(PANE_A, 10, CUTOFF - 1, true)];
+    let selection = select(&claims, &records, Some(CUTOFF), always(Attribution::Unknown));
+    assert_eq!(selection.targets, [target(PANE_A, SESSION_A, 10, Reason::Outdated)]);
+}
+
+/// Upstream's `narrowKillsAStaleHostTargetStillOnAnEarlierHostOrOrphanedSince`.
+#[test]
+fn narrow_kills_a_stale_host_target_still_on_an_earlier_server_or_orphaned_since() {
+    let stale = target(PANE_A, SESSION_A, 10, Reason::StaleHost);
+    for (attribution, earlier, disposition) in [
+        (Attribution::Unknown, true, Disposition::Kill),
+        (Attribution::Unknown, false, Disposition::Skipped),
+        (Attribution::Orphaned, false, Disposition::Kill),
+        (Attribution::App, false, Disposition::Skipped),
+    ] {
+        let records = [on_earlier_host(PANE_A, 10, CUTOFF, earlier)];
+        let narrowed = narrow(
+            &marker(vec![stale.clone()]),
+            Some(&claimed(&[PANE_A])),
+            Some(&records),
+            Some(CUTOFF),
+            always(attribution),
+        );
+        assert_eq!(
+            narrowed.dispositions.get(&stale),
+            Some(&disposition),
+            "{attribution:?} earlier {earlier}"
+        );
+    }
+}
+
+/// Upstream's `markerStoreRoundTripsATargetWithItsReason` and `markerStoreStillConsumesAVersionTwoMarker`.
+#[test]
+fn the_marker_store_round_trips_a_stale_host_target_and_still_consumes_version_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MarkerStore::new(dir.path());
+    let written = Marker::new(
+        vec![target(PANE_A, SESSION_A, 10, Reason::StaleHost)],
+        SystemTime::UNIX_EPOCH,
+    );
+    store.write(&written).unwrap();
+    let consumed = store.consume().unwrap().unwrap();
+    assert_eq!(consumed.version, 3);
+    assert_eq!(consumed, written);
+    store.remove_consumed();
+    let v2 = format!(
+        r#"{{"version":2,"createdAt":0,"targets":[{{"paneIdentity":"{}","sessionID":"{}","daemon":"{}","leaderPID":10,"reason":"outdated"}}]}}"#,
+        crate::pane_env::uuid_string(PANE_A),
+        crate::pane_env::uuid_string(SESSION_A),
+        daemon_name(PANE_A)
+    );
+    fs::write(dir.path().join(MARKER_FILE_NAME), v2).unwrap();
+    let consumed = store.consume().unwrap().unwrap();
+    assert_eq!(consumed.targets, [target(PANE_A, SESSION_A, 10, Reason::Outdated)]);
 }
 
 #[test]
@@ -560,7 +695,7 @@ fn the_marker_store_writes_then_consumes_once() {
 
 #[test]
 fn the_marker_store_removes_an_invalid_marker_and_reports_it() {
-    for contents in ["not json", r#"{"version":3,"createdAt":0,"targets":[]}"#] {
+    for contents in ["not json", r#"{"version":4,"createdAt":0,"targets":[]}"#] {
         let dir = tempfile::tempdir().unwrap();
         let store = MarkerStore::new(dir.path());
         fs::write(dir.path().join(MARKER_FILE_NAME), contents).unwrap();
@@ -591,7 +726,7 @@ fn the_marker_is_written_as_upstream_encodes_it() {
     let marker = marker(vec![target(PANE_A, SESSION_A, 10, Reason::Outdated)]);
     assert_eq!(
         serde_json::to_value(&marker).unwrap(),
-        serde_json::json!({"version": 2, "createdAt": 0.0, "targets": [{
+        serde_json::json!({"version": 3, "createdAt": 0.0, "targets": [{
             "paneIdentity": crate::pane_env::uuid_string(PANE_A),
             "sessionID": crate::pane_env::uuid_string(SESSION_A),
             "daemon": daemon_name(PANE_A), "leaderPID": 10, "reason": "outdated"}]})

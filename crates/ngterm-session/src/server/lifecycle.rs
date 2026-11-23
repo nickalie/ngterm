@@ -44,6 +44,8 @@ pub enum StopReason {
     Idle,
     /// It handed its sessions over to a server of another build (`crate::server::handoff`).
     HandedOver,
+    /// A client of a later login asked it to stop while it held no session (`crate::login`).
+    Retired,
 }
 
 impl fmt::Display for StopReason {
@@ -51,6 +53,7 @@ impl fmt::Display for StopReason {
         match self {
             Self::Idle => f.write_str("no session and no client left"),
             Self::HandedOver => f.write_str("its sessions were handed over to another server"),
+            Self::Retired => f.write_str("a client of a later login retired it"),
         }
     }
 }
@@ -148,6 +151,24 @@ impl Lifecycle {
         if self.stopped.is_none() {
             self.stopped = Some(StopReason::HandedOver);
         }
+    }
+
+    /// A client of a later login asks the server to stop: it stops now when it holds no session, whatever clients it
+    /// has (they reconnect to the next server), and the decision holds. `Err` with the sessions it holds otherwise. A
+    /// server that has already decided to stop answers `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// The number of sessions it holds, when it holds any: it does not stop.
+    pub fn retire(&mut self) -> Result<(), usize> {
+        if self.stopped.is_some() {
+            return Ok(());
+        }
+        if self.sessions > 0 {
+            return Err(self.sessions);
+        }
+        self.stopped = Some(StopReason::Retired);
+        Ok(())
     }
 
     /// Whether the server has decided to stop.
@@ -292,6 +313,29 @@ mod tests {
             StopReason::HandedOver.to_string(),
             "its sessions were handed over to another server"
         );
+    }
+
+    #[test]
+    fn a_retire_stops_a_server_without_sessions_whatever_its_clients() {
+        let start = Instant::now();
+        let mut lifecycle = started(start);
+        assert!(lifecycle.client_connected());
+        assert!(lifecycle.session_started());
+        assert!(lifecycle.session_started());
+        assert_eq!(lifecycle.retire(), Err(2));
+        assert_eq!(lifecycle.stopped(), None);
+        lifecycle.session_ended(start);
+        lifecycle.session_ended(start);
+        assert_eq!(lifecycle.retire(), Ok(()));
+        assert_eq!(lifecycle.poll(start), Some(StopReason::Retired));
+        assert!(!lifecycle.session_started());
+        assert!(!lifecycle.client_connected());
+        // a retire after another decision leaves it
+        let mut handed = started(start);
+        handed.hand_over();
+        assert_eq!(handed.retire(), Ok(()));
+        assert_eq!(handed.stopped(), Some(StopReason::HandedOver));
+        assert_eq!(StopReason::Retired.to_string(), "a client of a later login retired it");
     }
 
     #[test]

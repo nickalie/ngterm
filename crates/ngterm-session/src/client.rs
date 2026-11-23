@@ -205,12 +205,22 @@ impl Client {
     ///
     /// Connecting or the call failed; [`ClientError::Api`] for the server's refusal of the request.
     pub fn call(&self, request: ApiRequest) -> Result<Option<ApiResponse>, ClientError> {
+        Ok(self.call_welcomed(request)?.map(|(_, response)| response))
+    }
+
+    /// [`Client::call`], with the welcome of the server that answered.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::call`].
+    pub fn call_welcomed(&self, request: ApiRequest) -> Result<Option<(Welcome, ApiResponse)>, ClientError> {
         let deadline = Instant::now() + within(&request, self.timeout);
         let Some(mut api) = self.api()? else {
             return Ok(None);
         };
         let left = deadline.saturating_duration_since(Instant::now()).max(MIN_WAIT);
-        api.call_within(request, left).map(Some)
+        let response = api.call_within(request, left)?;
+        Ok(Some((api.welcome, response)))
     }
 
     /// An update: asks the namespace's running server, when it is of another build than `options` expects, to hand

@@ -422,6 +422,7 @@ impl FakeSessionHost {
                 clients: Some(1),
                 leader_pid: None,
                 created_at: None,
+                earlier_host: false,
             },
             screen: screen.into(),
             scrollback: String::new(),
@@ -445,6 +446,7 @@ impl FakeSessionHost {
                 clients: None,
                 leader_pid: None,
                 created_at: None,
+                earlier_host: false,
             },
             screen: String::new(),
             scrollback: String::new(),
@@ -455,7 +457,15 @@ impl FakeSessionHost {
             clients,
             leader_pid,
             created_at,
+            earlier_host: false,
         };
+    }
+
+    /// Marks the daemon `name` as running under a session host of an earlier login, or not.
+    pub fn set_earlier_host(&self, name: &str, earlier: bool) {
+        if let Some(session) = lock(&self.sessions).get_mut(name) {
+            session.record.earlier_host = earlier;
+        }
     }
 
     /// Sets the scrollback [`SessionHost::screen`] adds before the screen when asked for everything.

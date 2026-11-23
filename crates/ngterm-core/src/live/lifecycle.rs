@@ -96,6 +96,7 @@ mod tests {
             clients,
             leader_pid,
             created_at,
+            earlier_host: false,
         }
     }
 

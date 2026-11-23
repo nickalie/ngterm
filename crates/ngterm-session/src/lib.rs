@@ -16,6 +16,7 @@
 //!   need; and it hands every session over to a server of another build without ending them (its update handoff,
 //!   [`server::handoff`]);
 //! - [`build_id`]: the build a server reports and a client expects, the hash of the staged binary;
+//! - [`login`]: the login session a server runs in, which tells a server left from an earlier macOS login;
 //! - [`launch`]: what a live launch reads of this host (the session host executable, its build id, the login shell,
 //!   the Ghostty resources, the namespace's state directory) and the wrap configuration of a pane over it;
 //! - [`procfs`]: the Linux process table's files (`stat`, `cmdline`), which the job table and the process table read;
@@ -46,6 +47,7 @@ pub mod endpoint;
 pub mod host;
 pub mod job;
 pub mod launch;
+pub mod login;
 pub mod process_table;
 pub mod procfs;
 pub mod protocol;

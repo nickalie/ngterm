@@ -77,6 +77,11 @@ fn format_session(session: &ControlSessionNode) -> String {
 /// What follows the cwd: the split pane's own cwd, the title, live attribution and the presentation state.
 fn session_suffix(session: &ControlSessionNode) -> String {
     let labelled = |label: &str, value: Option<&String>| value.map(|value| format!("  {label}: {value}"));
+    // upstream's suffix for a pane on a session host of an earlier login
+    let attributed = |label: &str, value: Option<&String>, stale: Option<bool>| {
+        let earlier = if stale == Some(true) { " (earlier helper)" } else { "" };
+        labelled(label, value).map(|text| text + earlier)
+    };
     let split_cwd = session.split_cwd.as_ref().filter(|cwd| **cwd != session.cwd);
     let scratch_cwd = session.scratch_cwd.as_ref().filter(|cwd| **cwd != session.cwd);
     let presentation = session.presentation.as_ref().map(|presentation| {
@@ -109,8 +114,16 @@ fn session_suffix(session: &ControlSessionNode) -> String {
         labelled("split cwd", split_cwd),
         labelled("scratch cwd", scratch_cwd),
         labelled("title", session.title.as_ref()),
-        labelled("live attribution", session.live_attribution.as_ref()),
-        labelled("split live attribution", session.split_live_attribution.as_ref()),
+        attributed(
+            "live attribution",
+            session.live_attribution.as_ref(),
+            session.live_host_stale,
+        ),
+        attributed(
+            "split live attribution",
+            session.split_live_attribution.as_ref(),
+            session.split_live_host_stale,
+        ),
         presentation,
         presenters,
     ]
@@ -198,6 +211,21 @@ mod tests {
                 "    s  [s]  /w  split cwd: /x  title: t  live attribution: app  split live attribution: unknown  \
                  presentation: failed, presenter (boom)  presented remotely  mirrored by: 2"
             )
+        );
+    }
+
+    #[test]
+    fn an_attribution_on_an_earlier_host_says_so() {
+        let node = session(
+            "s",
+            json!({"liveAttribution": "unknown", "liveHostStale": true, "splitLiveAttribution": "unknown",
+                   "splitLiveHostStale": false}),
+        );
+        let rendered = format_tree(&tree(json!({"workspaces": [{"id": "W", "name": "w", "active": false,
+                                                                 "sessions": [node]}]})));
+        assert_eq!(
+            rendered.lines().nth(1),
+            Some("    s  [s]  /w  live attribution: unknown (earlier helper)  split live attribution: unknown")
         );
     }
 

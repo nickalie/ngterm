@@ -83,12 +83,14 @@ fn the_listing_asks_only_for_the_list_and_keeps_every_field() -> TestResult {
                 clients: Some(2),
                 leader_pid: Some(41),
                 created_at: Some(1_700_000_000),
+                earlier_host: false,
             },
             LiveSessionRecord {
                 name: "ngterm-ended".to_owned(),
                 clients: Some(0),
                 leader_pid: None,
                 created_at: Some(7),
+                earlier_host: false,
             }
         ]
     );
@@ -515,6 +517,59 @@ fn the_host_lists_reads_types_into_and_kills_a_real_session() -> TestResult {
     );
     drop(host);
     assert_eq!(server.stopped()?, StopReason::Idle);
+    Ok(())
+}
+
+/// Upstream #972 on macOS: the sessions of a server left from an earlier login are marked, and a client of a later
+/// login retires that server once it holds no session, starting its own (the login is set here, since one test
+/// process has one).
+#[test]
+fn a_server_of_an_earlier_login_marks_its_sessions_and_is_retired_once_it_holds_none() -> TestResult {
+    use ngterm_session::endpoint::Endpoint;
+    use ngterm_session::protocol::{Hello, Role};
+    use ngterm_session::server::spawn::{StartOptions, connect_or_start};
+
+    let (earlier, later) = (Some(100_001), Some(100_002));
+    let server = Server::start_in(earlier)?;
+    create_detached(&server, NAME, shell())?;
+    let marked = |login| -> TestResult<bool> {
+        let records = host(server.directory())?.with_login(login).list()?;
+        Ok(records.iter().any(|record| record.name == NAME && record.earlier_host))
+    };
+    assert!(marked(later)?, "a later login sees an earlier host");
+    assert!(!marked(earlier)?, "its own login does not");
+    assert!(!marked(None)?, "an unknown login never does");
+
+    let endpoint = Endpoint::new(server.directory());
+    let hello = Hello {
+        role: Role::Api,
+        build: "client-test".to_owned(),
+        capabilities: Vec::new(),
+    };
+    let options = StartOptions {
+        build: None,
+        login: later,
+        ..StartOptions::new(support::exe())
+    };
+    let held = connect_or_start(&endpoint, &hello, &options)?;
+    assert_eq!(
+        held.welcome.pid,
+        std::process::id(),
+        "a server that holds a session stays"
+    );
+    assert!(held.spawned.is_empty());
+    drop(held);
+
+    assert_eq!(host(server.directory())?.kill(NAME, true), KillOutcome::Killed);
+    let fresh = connect_or_start(&endpoint, &hello, &options)?;
+    assert_ne!(
+        fresh.welcome.pid,
+        std::process::id(),
+        "the empty earlier server was retired"
+    );
+    assert_eq!(fresh.started_here().map(|started| started.pid), Some(fresh.welcome.pid));
+    drop(fresh);
+    assert_eq!(server.stopped()?, StopReason::Retired);
     Ok(())
 }
 

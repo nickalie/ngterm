@@ -12,8 +12,9 @@ use ngterm_session::protocol::{
     AttachRequest, AttachServerMessage, CAPABILITY_HANDOFF_REQUEST, ColorScheme, Control, ControlError, DelegatedReply,
     DelegatedRequest, ErrorCode, ExitStatus, Frame, FrameKind, FramingError, GridSize, HEADER_LEN, HandoffRequest,
     HandoffResult, Hello, JobProcess, KillOutcome, KillResult, LeadRole, MAGIC, MAX_CONTROL_SIZE, MAX_FRAME_SIZE,
-    MAX_MESSAGE_SIZE, Managed, PROTOCOL_VERSION, ReplyMetadata, Rgb, Role, Screen, SessionRecord, SessionSpec, Welcome,
-    check_hello, encode_control, encode_message, read_frame, welcome, write_control, write_message,
+    MAX_MESSAGE_SIZE, Managed, PROTOCOL_VERSION, ReplyMetadata, RetireResult, Rgb, Role, Screen, SessionRecord,
+    SessionSpec, Welcome, check_hello, encode_control, encode_message, read_frame, welcome, write_control,
+    write_message,
 };
 use serde::de::DeserializeOwned;
 use serde::ser::SerializeTuple;
@@ -362,6 +363,7 @@ fn every_control_operation_round_trips() {
         capabilities: vec![CAPABILITY_HANDOFF_REQUEST.into()],
         pid: 77,
         error: None,
+        login: Some(100_004),
     }))
     .unwrap();
     roundtrip_control(&Control::Welcome(Welcome {
@@ -369,6 +371,7 @@ fn every_control_operation_round_trips() {
         capabilities: Vec::new(),
         pid: 77,
         error: Some(ControlError::new(ErrorCode::ProtocolMismatch, "mismatch")),
+        login: None,
     }))
     .unwrap();
     roundtrip_control(&Control::HandoffRequest(HandoffRequest {
@@ -412,7 +415,7 @@ fn the_frame_header_is_frozen() {
 
 #[test]
 fn the_control_operations_are_frozen() {
-    let cases: [(Control, &str); 4] = [
+    let cases: [(Control, &str); 8] = [
         (
             Control::Hello(Hello {
                 role: Role::Control,
@@ -427,6 +430,7 @@ fn the_control_operations_are_frozen() {
                 capabilities: vec![CAPABILITY_HANDOFF_REQUEST.into()],
                 pid: 7,
                 error: Some(ControlError::new(ErrorCode::ProtocolMismatch, "m")),
+                login: None,
             }),
             r#"{"op":"welcome.v1","build":"b","capabilities":["handoff.request.v1"],"pid":7,"error":{"code":"protocol_mismatch","message":"m"}}"#,
         ),
@@ -441,6 +445,25 @@ fn the_control_operations_are_frozen() {
         (
             Control::HandoffResult(HandoffResult(Err(ControlError::new(ErrorCode::HandoffFailed, "m")))),
             r#"{"op":"handoff.result.v1","ok":false,"error":{"code":"handoff_failed","message":"m"}}"#,
+        ),
+        (
+            Control::Welcome(Welcome {
+                build: "b".into(),
+                capabilities: Vec::new(),
+                pid: 7,
+                error: None,
+                login: Some(100_004),
+            }),
+            r#"{"op":"welcome.v1","build":"b","capabilities":[],"pid":7,"login":100004}"#,
+        ),
+        (Control::RetireRequest, r#"{"op":"retire.request.v1"}"#),
+        (
+            Control::RetireResult(RetireResult(Ok(()))),
+            r#"{"op":"retire.result.v1","ok":true}"#,
+        ),
+        (
+            Control::RetireResult(RetireResult(Err(ControlError::new(ErrorCode::Busy, "m")))),
+            r#"{"op":"retire.result.v1","ok":false,"error":{"code":"busy","message":"m"}}"#,
         ),
     ];
     for (control, json) in cases {
@@ -1028,6 +1051,7 @@ fn the_api_replies_are_the_session_hosts_types_field_for_field() {
             clients: Some(2),
             leader_pid: Some(4242),
             created_at: Some(1_760_000_000),
+            earlier_host: false,
         }
     );
     // the session-gone outcome is the host's stale socket: the kill that killed nothing

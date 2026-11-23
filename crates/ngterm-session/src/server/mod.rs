@@ -71,8 +71,8 @@ use std::time::{Duration, Instant};
 use crate::endpoint::{self, Endpoint, Listener, Stream};
 use crate::job::Sweeper;
 use crate::protocol::{
-    CAPABILITY_HANDOFF_REQUEST, Control, ControlError, ErrorCode, FramingError, HandoffResult, Role, Welcome,
-    read_frame, welcome, write_control,
+    CAPABILITY_HANDOFF_REQUEST, Control, ControlError, ErrorCode, FramingError, HandoffResult, Hello, RetireResult,
+    Role, Welcome, read_frame, welcome, write_control,
 };
 use clients::ResyncBudget;
 use handoff::Support;
@@ -117,6 +117,8 @@ pub struct ServerConfig {
     pub resync_budget: ResyncBudget,
     /// Whether it hands its sessions over when asked ([`Support::of_this_host`]).
     pub handoff: Support,
+    /// The login session its welcome reports ([`crate::login::current`]).
+    pub login: Option<i64>,
 }
 
 impl Default for ServerConfig {
@@ -127,6 +129,7 @@ impl Default for ServerConfig {
             client_queue_limit: clients::DEFAULT_QUEUE_LIMIT,
             resync_budget: ResyncBudget::default(),
             handoff: Support::of_this_host(),
+            login: crate::login::current(),
         }
     }
 }
@@ -313,10 +316,21 @@ fn capabilities(handoff: &Support) -> Vec<String> {
     capabilities
 }
 
-/// The build and capabilities every welcome carries.
+/// The build, capabilities and login every welcome carries.
 struct Identity {
     build: String,
     capabilities: Vec<String>,
+    login: Option<i64>,
+}
+
+impl Identity {
+    /// The welcome for `hello`, sent in a frame of protocol `client`.
+    fn welcome(&self, hello: &Hello, client: u32) -> Welcome {
+        Welcome {
+            login: self.login,
+            ..welcome(hello, client, &self.build, &self.capabilities)
+        }
+    }
 }
 
 /// The state the coordinator, the accept loop and the connections share.
@@ -392,6 +406,7 @@ impl Shared {
             identity: Identity {
                 build: config.build.clone(),
                 capabilities: capabilities(&config.handoff),
+                login: config.login,
             },
             panes: Panes::new(),
             jobs: Sweeper::live(),
@@ -564,10 +579,7 @@ fn serve_connection(mut stream: Stream, shared: &Arc<Shared>, generation: u64) -
     set_recv_timeout(&stream, Some(HANDSHAKE_TIMEOUT));
     let frame = read_frame(&mut stream)?;
     let (welcome, role) = match frame.control() {
-        Ok(Control::Hello(hello)) => (
-            welcome(&hello, frame.protocol, &identity.build, &identity.capabilities),
-            hello.role,
-        ),
+        Ok(Control::Hello(hello)) => (identity.welcome(&hello, frame.protocol), hello.role),
         Ok(_) => (
             refusal(
                 identity,
@@ -604,27 +616,51 @@ fn refusal(identity: &Identity, error: ControlError) -> Welcome {
         capabilities: identity.capabilities.clone(),
         pid: std::process::id(),
         error: Some(error),
+        login: identity.login,
     }
 }
 
 /// A control connection: it holds the server until the client closes it. A handoff request runs the handoff
 /// ([`handoff`]) and is answered with its outcome; once it committed, the server stops (its sessions are the
 /// replacement's). A server that does not hand over ([`ServerConfig::handoff`]) answers it failed with the reason.
-/// Anything else closes the connection.
+/// A retire request stops the server when it holds no session ([`Lifecycle::retire`]). Anything else closes the
+/// connection.
 fn serve_control(stream: &mut Stream, shared: &Arc<Shared>) -> Result<(), FramingError> {
     let frame = match read_frame(stream) {
         Ok(frame) => frame,
         Err(FramingError::Closed) => return Ok(()),
         Err(error) => return Err(error),
     };
-    let Control::HandoffRequest(request) = frame.control()? else {
-        return Ok(());
+    let request = match frame.control()? {
+        Control::HandoffRequest(request) => request,
+        Control::RetireRequest => return retire(stream, shared),
+        _ => return Ok(()),
     };
     let result = handoff::export(shared, &request);
     let committed = result.is_ok();
     let answered = write_control(stream, &Control::HandoffResult(HandoffResult(result)));
     if committed {
         shared.lock().hand_over();
+        shared.changed.notify_all();
+    }
+    answered
+}
+
+/// Answers a retire request: the server stops now unless it holds a session, which the answer then names.
+fn retire(stream: &mut Stream, shared: &Arc<Shared>) -> Result<(), FramingError> {
+    // a creation that comes after the decision is refused by the lifecycle, its client reconnecting to the next server
+    let retired = shared.lock().retire().map_err(|sessions| {
+        ControlError::new(
+            ErrorCode::Busy,
+            format!("the ngterm-session server holds {sessions} live session(s) and does not retire"),
+        )
+    });
+    let stopping = retired.is_ok();
+    if stopping {
+        tracing::info!("retired by a client of a later login");
+    }
+    let answered = write_control(stream, &Control::RetireResult(RetireResult(retired)));
+    if stopping {
         shared.changed.notify_all();
     }
     answered
@@ -669,12 +705,13 @@ pub fn working_directory(directory: &Path) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Hello, PROTOCOL_VERSION};
+    use crate::protocol::PROTOCOL_VERSION;
 
     fn identity() -> Identity {
         Identity {
             build: "test-build".to_owned(),
             capabilities: vec![CAPABILITY_DETACHED.to_owned()],
+            login: Some(100_007),
         }
     }
 
@@ -687,7 +724,7 @@ mod tests {
     }
 
     fn welcome_for(hello: &Hello, protocol: u32, identity: &Identity) -> Welcome {
-        welcome(hello, protocol, &identity.build, &identity.capabilities)
+        identity.welcome(hello, protocol)
     }
 
     #[test]
@@ -697,6 +734,7 @@ mod tests {
         assert_eq!(welcome.build, "test-build");
         assert_eq!(welcome.capabilities, [CAPABILITY_DETACHED]);
         assert_eq!(welcome.pid, std::process::id());
+        assert_eq!(welcome.login, Some(100_007));
     }
 
     #[test]

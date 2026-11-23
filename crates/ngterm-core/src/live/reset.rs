@@ -80,6 +80,8 @@ pub enum Reason {
     Unsupervised,
     /// Its daemon was created before this state directory's recorded session server build change.
     Outdated,
+    /// Its daemon runs under a session server of an earlier login ([`LiveSessionRecord::earlier_host`]).
+    StaleHost,
 }
 
 /// One pane confirmed for reset, with the leader observed at confirmation so the next launch can tell the same daemon
@@ -109,9 +111,10 @@ pub struct Marker {
 }
 
 impl Marker {
-    pub const CURRENT_VERSION: i64 = 2;
+    /// Version 3 added [`Reason::StaleHost`], so a build that predates it discards such a marker.
+    pub const CURRENT_VERSION: i64 = 3;
     /// What [`MarkerStore::consume`] accepts: a reset confirmed under the previous version still runs after an update.
-    pub const SUPPORTED_VERSIONS: [i64; 2] = [1, 2];
+    pub const SUPPORTED_VERSIONS: [i64; 3] = [1, 2, 3];
 
     /// A current-version marker of `targets`, created at `created_at`.
     #[must_use]
@@ -148,9 +151,19 @@ impl Selection {
     /// Distinct sessions among the outdated targets.
     #[must_use]
     pub fn outdated_session_count(&self) -> usize {
+        self.session_count_of(Reason::Outdated)
+    }
+
+    /// Distinct sessions among the targets on a session server of an earlier login.
+    #[must_use]
+    pub fn stale_host_session_count(&self) -> usize {
+        self.session_count_of(Reason::StaleHost)
+    }
+
+    fn session_count_of(&self, reason: Reason) -> usize {
         self.targets
             .iter()
-            .filter(|target| target.reason == Reason::Outdated)
+            .filter(|target| target.reason == reason)
             .map(|target| target.session_id)
             .collect::<BTreeSet<_>>()
             .len()
@@ -158,8 +171,10 @@ impl Selection {
 }
 
 /// The panes to offer: one created before `outdated_before` as outdated whatever its attribution, else an orphaned or
-/// app-attributed one as unsupervised; a pane without a readable leader is never offered. `None` cutoff selects no
-/// outdated pane. `classify` attributes a daemon's leader.
+/// app-attributed one as unsupervised, else one on a session server of an earlier login as stale host; a pane without a
+/// readable leader is never offered. `None` cutoff selects no outdated pane. `classify` attributes a daemon's leader.
+/// Upstream offers a stale-host pane only when its leader attributes to its host; here the session server is the
+/// parent of every session it lists, so its listing places the pane.
 #[must_use]
 pub fn select(
     claims: &ClaimWalk,
@@ -169,6 +184,7 @@ pub fn select(
 ) -> Selection {
     let leaders = leaders(records);
     let created = created_times(records);
+    let stale = earlier_hosts(records);
     let mut seen = BTreeSet::new();
     let mut conflicted = false;
     let mut targets = Vec::new();
@@ -185,6 +201,8 @@ pub fn select(
             Reason::Outdated
         } else if matches!(classify(&name, leader), Attribution::Orphaned | Attribution::App) {
             Reason::Unsupervised
+        } else if stale.contains(&name) {
+            Reason::StaleHost
         } else {
             continue;
         };
@@ -206,6 +224,14 @@ pub fn select(
 #[must_use]
 pub fn is_outdated(created: Option<u64>, cutoff: Option<u64>) -> bool {
     matches!((created, cutoff), (Some(created), Some(cutoff)) if created < cutoff)
+}
+
+fn earlier_hosts(records: &[LiveSessionRecord]) -> BTreeSet<String> {
+    records
+        .iter()
+        .filter(|record| record.earlier_host)
+        .map(|record| record.name.clone())
+        .collect()
 }
 
 fn created_times(records: &[LiveSessionRecord]) -> BTreeMap<String, u64> {
@@ -249,8 +275,9 @@ impl Narrowed {
     }
 }
 
-/// Re-checks `marker`: an outdated target still created before `outdated_before`, and an unsupervised one still
-/// orphaned, are killed when still claimed and listed with the same leader; a target whose daemon is gone is `gone`;
+/// Re-checks `marker`: an outdated target still created before `outdated_before`, an unsupervised one still orphaned,
+/// and a stale-host one still on a session server of an earlier login (or orphaned), are killed when still claimed and
+/// listed with the same leader; a target whose daemon is gone is `gone`;
 /// everything else is skipped. Without a listing or the claims nothing is killed (`records == None` is an inventory
 /// failure).
 #[must_use]
@@ -286,6 +313,9 @@ pub fn narrow(
                     && match target.reason {
                         Reason::Outdated => is_outdated(record.created_at, outdated_before),
                         Reason::Unsupervised => classify(&target.daemon, target.leader_pid) == Attribution::Orphaned,
+                        Reason::StaleHost => {
+                            record.earlier_host || classify(&target.daemon, target.leader_pid) == Attribution::Orphaned
+                        }
                     };
                 if qualifies {
                     Disposition::Kill
@@ -396,17 +426,18 @@ pub const CONSUMED_FILE_NAME: &str = "live-reset.consumed.json";
 
 /// The confirmation dialog's title and body.
 #[must_use]
-pub fn dialog_text(session_count: usize, outdated_sessions: usize) -> (String, String) {
+pub fn dialog_text(session_count: usize, outdated_sessions: usize, stale_host_sessions: usize) -> (String, String) {
     let noun = if session_count == 1 {
         "live session"
     } else {
         "live sessions"
     };
     let body = format!(
-        "{session_count} {noun} will be reset. {}Ngterm quits and reopens itself right away with your sessions and \
-         layout. Commands that were running in those sessions are started again where possible; other work running \
-         in them stops, and agent conversations may need to be resumed by hand.",
-        outdated_sentence(outdated_sessions, session_count)
+        "{session_count} {noun} will be reset. {}{}Ngterm quits and reopens itself right away with your sessions \
+         and layout. Commands that were running in those sessions are started again where possible; other work \
+         running in them stops, and agent conversations may need to be resumed by hand.",
+        outdated_sentence(outdated_sessions, session_count),
+        stale_host_sentence(stale_host_sessions, session_count)
     );
     ("Reset Live Sessions?".to_owned(), body)
 }
@@ -421,6 +452,21 @@ fn outdated_sentence(outdated: usize, total: usize) -> String {
         (true, false, _) => "They all predate ".to_owned(),
         (false, _, true) => "1 of them predates ".to_owned(),
         (false, _, false) => format!("{outdated} of them predate "),
+    };
+    head + tail
+}
+
+/// Upstream's `staleHostSentence`, naming the session server where upstream names its helper.
+fn stale_host_sentence(stale: usize, total: usize) -> String {
+    if stale == 0 {
+        return String::new();
+    }
+    let tail = "under a session server from an earlier login and will be moved to the current one. ";
+    let head = match (stale == total, total == 1, stale == 1) {
+        (true, true, _) => "It runs ".to_owned(),
+        (true, false, _) => "They all run ".to_owned(),
+        (false, _, true) => "1 of them runs ".to_owned(),
+        (false, _, false) => format!("{stale} of them run "),
     };
     head + tail
 }

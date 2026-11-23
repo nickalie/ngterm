@@ -449,6 +449,9 @@ pub struct ControlLiveResetStatus {
     /// How many of `sessions` predate the recorded live-session build change; omitted when none.
     #[serde(default)]
     pub outdated: Option<u32>,
+    /// How many of `sessions` run under a session server of an earlier login; omitted when none.
+    #[serde(default)]
+    pub stale_host: Option<u32>,
 }
 
 /// What a successful `session.restart` proves: the pane's shell was replaced (upstream's `ControlRestartReceipt`). The

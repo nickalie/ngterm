@@ -256,6 +256,11 @@ impl Server {
     /// A server that stops 100 ms after its last session ended and its last client left, once the test lets it
     /// ([`Server::stopped`]); returned once it answers.
     pub fn start() -> TestResult<Self> {
+        Self::start_in(ServerConfig::default().login)
+    }
+
+    /// [`Server::start`], the server reporting the login session `login`.
+    pub fn start_in(login: Option<i64>) -> TestResult<Self> {
         let (root, directory) = namespace()?;
         let config = ServerConfig {
             build: "client-test".to_owned(),
@@ -263,6 +268,7 @@ impl Server {
                 startup: PATIENCE,
                 idle: Duration::from_millis(100),
             },
+            login,
             ..ServerConfig::default()
         };
         let serving = directory.clone();

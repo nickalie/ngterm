@@ -963,6 +963,12 @@ panes keep a PTY of their own, and an instance with live sessions off starts no 
   with their terminals: the PTYs pass to the new server (descriptors on Linux and macOS; on Windows the ConPTY handles,
   only on the Windows builds the handoff was proven on). A failed handoff rolls back, the sessions stay with the old
   server, and the app offers the Live sessions reset.
+- An earlier login (macOS): a forced logout ends the app but can leave its detached server, whose new sessions then
+  fail in the dead login (upstream's #971). Each welcome carries the audit session id of the GUI login the server
+  runs in; a client of another GUI login asks a server that holds no session to retire, and starts its own. A process
+  outside a GUI login (an ssh login) reports none, so an attach over ssh never retires the app's server. A server that still holds sessions stays
+  until they end: the tree reports their panes `liveHostStale`, and the Live sessions reset ends them as `staleHost`
+  and reopens them under the current login. Linux and Windows have no such failure, and report no login.
 - Versions: a connection opens with a JSON control frame whose operations are stable (a new field is optional,
   unknown ones are ignored), then speaks postcard messages of one protocol version (`PROTOCOL_VERSION` in
   `crates/ngterm-session/src/protocol.rs`, which lists each bump: 5 since the Kitty clipboard's lazy attach paste

@@ -580,6 +580,30 @@ mod owner {
         assert_eq!(client.wait()?, 0);
         Ok(())
     }
+
+    /// Upstream zmx patch 0006: a DA query a new session's program writes at once, while the attach that creates it
+    /// still waits for its outer terminal's probe, gets one answer, not a second one from the outer terminal.
+    #[test]
+    fn a_device_attributes_query_at_a_new_sessions_start_gets_one_answer() -> TestResult {
+        let namespace = Namespace::new()?;
+        let script = "stty raw -echo min 0 time 5; printf '\\033[c\\033[>c'; sleep 2; \
+                      r=$(dd bs=4096 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); \
+                      stty sane; printf 'REPLY0:%s\\r\\nDONE\\r\\n' \"$r\"; sleep 600";
+        let client = namespace.attach(&["first-da", "/bin/sh", "-c", script], &[], &Answers::basic())?;
+        client.expect("DONE");
+        let answers = reply(&client, 0);
+        let shown = String::from_utf8_lossy(&answers).into_owned();
+        assert_eq!(escapes(&answers), 2, "one answer per query: {shown:?}");
+        assert!(shown.starts_with("\x1b[?62;22;52c\x1b[>"), "{shown:?}");
+        assert!(
+            !shown.contains("\x1b[?62;22c"),
+            "the outer terminal answered too: {shown:?}"
+        );
+        let output = String::from_utf8_lossy(&client.output()).into_owned();
+        // the attach's own probe writes a DA1, so the program's DA2 tells whether its queries reached the outer terminal
+        assert!(!output.contains("\x1b[>c"), "the query reached the outer terminal");
+        Ok(())
+    }
 }
 
 /// A scripted server for the reattach tests: the first attach is sent a snapshot and output, then its connection ends

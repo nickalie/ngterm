@@ -522,6 +522,32 @@ Session and End Session, then the loopback page forward, then attached rows comi
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
 
+### The session host (upstream v0.42.1 and v0.42.2)
+
+Upstream starts a new `agterm-session-host` for each helper build and login (#972) and, on macOS 27 and later, as a
+launchd job (#987). This build has one session server per namespace, and its update handoff already moves every
+session to a new build, so no server is left behind by an update. What remains is a server left from an earlier macOS
+login:
+
+- Its welcome carries the server's login (the audit session id of a GUI login; none outside one, an ssh login
+  included); a client of another GUI login asks a server that holds no session to retire (`retire.request.v1`) and
+  starts its own. One that holds sessions stays until they end, so new
+  panes join it until then, where upstream starts them under a new host at once: a second server beside it would
+  need a second endpoint for one namespace.
+- `liveHostStale`/`splitLiveHostStale` are true beside the attribution of a pane on such a server; the Live sessions
+  reset selects it as `staleHost` (marker version 3) whatever its attribution, which is always `unknown` here, since
+  the server is the parent of every session it lists. The dialog names "a session server from an earlier login"
+  where upstream names "a helper from an earlier agterm version or login"; `ngtermctl tree` prints upstream's
+  ` (earlier helper)` suffix.
+- Linux and Windows report no login, so no server there is ever of an earlier one and the two fields are never
+  set: no forced logout leaves a server there whose new sessions fail. The suite starts one build in one login, so
+  the fields stay exempted in `catalog.yaml` on every OS.
+- zmx patch `0006-single-da-answer`: a new session's DA query gets one answer by construction, since the server
+  answers every query and the attach client's filter drops each one from the output (`server::replies`,
+  `attach_tty::filter`; `tests/cli.rs` `a_device_attributes_query_at_a_new_sessions_start_gets_one_answer`).
+  `0005-detached-create` has nothing to port: a session is created by an attach request with no terminal through
+  the client library, and its exit comes in the attach stream, not in an exit file.
+
 ## Other strings of the build's own
 
 Outside the `live` group, where the build does a thing differently from upstream and upstream's text would name what

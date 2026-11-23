@@ -267,6 +267,7 @@ mod tests {
             clients,
             leader_pid,
             created_at: None,
+            earlier_host: false,
         }
     }
 

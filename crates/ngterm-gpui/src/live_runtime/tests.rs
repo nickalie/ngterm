@@ -118,7 +118,7 @@ fn a_confirmed_reset_quits_at_once_and_the_quit_arms_the_marker() {
     let Some(ResetAlert::Confirm(prompt)) = work.live_reset else {
         panic!("no confirmation: {:?}", work.live_reset);
     };
-    let (title, body) = ngterm_core::live::reset::dialog_text(1, 1);
+    let (title, body) = ngterm_core::live::reset::dialog_text(1, 1, 0);
     assert_eq!((prompt.title, prompt.body), (title, body));
     assert!(!work.quit, "nothing quits before the answer");
     state.confirm_live_reset();

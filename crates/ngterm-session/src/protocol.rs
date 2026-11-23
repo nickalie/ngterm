@@ -51,7 +51,9 @@
 //! - [`Role::Control`] is accepted whatever the client's protocol, so a new build can ask a server of an older one to
 //!   hand its sessions over: `hello(control) → welcome → handoff.request.v1 → handoff.result.v1`. A welcome always
 //!   carries the server's build id and capabilities, a refusal's included; [`CAPABILITY_HANDOFF_REQUEST`] says the
-//!   server takes the request.
+//!   server takes the request. The same role retires a server of an earlier login that holds no session:
+//!   `hello(control) → welcome → retire.request.v1 → retire.result.v1` (a server that predates it closes instead).
+//!   A welcome carries the server's login where the OS has one ([`crate::login`]).
 //!
 //! A [`HandoffResult`] that is `ok` means the handoff committed; a failure means it failed before its commit. A
 //! connection that ends before the result leaves the outcome unknown: the client reconnects and reads the server's
@@ -563,6 +565,13 @@ pub enum Control {
     /// The outcome of a handoff request.
     #[serde(rename = "handoff.result.v1")]
     HandoffResult(HandoffResult),
+    /// On a control connection: stop now, if the server holds no session (a client of a later login retires a server
+    /// of an earlier one, [`crate::login`]).
+    #[serde(rename = "retire.request.v1")]
+    RetireRequest,
+    /// The outcome of a retire request: `Ok` once the server decided to stop.
+    #[serde(rename = "retire.result.v1")]
+    RetireResult(RetireResult),
     /// An operation of a newer version. The server answers it with [`ErrorCode::UnknownOp`] and closes.
     #[serde(other, skip_serializing)]
     Unknown,
@@ -604,6 +613,10 @@ pub struct Welcome {
     /// Set when the server refuses the connection; it closes after sending the welcome.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<ControlError>,
+    /// The login session the server runs in ([`crate::login`]); `None` where the OS has none to tell, and from a
+    /// server that predates the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<i64>,
 }
 
 /// Why the server refused a control operation.
@@ -643,6 +656,8 @@ pub enum ErrorCode {
     UnsupportedRole,
     /// The handoff failed before its commit; the old server keeps serving.
     HandoffFailed,
+    /// The server holds a session, so it does not retire.
+    Busy,
     /// A code of a newer version.
     #[serde(other)]
     Other,
@@ -663,6 +678,26 @@ pub struct HandoffRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "HandoffResultWire", into = "HandoffResultWire")]
 pub struct HandoffResult(pub Result<(), ControlError>);
+
+/// The outcome of a retire request: `Ok` once the server decided to stop, an error when it holds a session. Its wire is
+/// a [`HandoffResult`]'s.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "HandoffResultWire", into = "HandoffResultWire")]
+pub struct RetireResult(pub Result<(), ControlError>);
+
+impl TryFrom<HandoffResultWire> for RetireResult {
+    type Error = String;
+
+    fn try_from(wire: HandoffResultWire) -> Result<Self, Self::Error> {
+        HandoffResult::try_from(wire).map(|result| Self(result.0))
+    }
+}
+
+impl From<RetireResult> for HandoffResultWire {
+    fn from(result: RetireResult) -> Self {
+        HandoffResult(result.0).into()
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct HandoffResultWire {
@@ -742,6 +777,7 @@ pub fn welcome(hello: &Hello, client: u32, build: &str, capabilities: &[String])
         capabilities: capabilities.to_vec(),
         pid: std::process::id(),
         error: check_hello(hello.role, client).err(),
+        login: None,
     }
 }
 
@@ -885,6 +921,8 @@ impl From<SessionRecord> for ngterm_host::LiveSessionRecord {
             clients: Some(record.clients),
             leader_pid: record.leader_pid,
             created_at: Some(record.created_at),
+            // the server's welcome tells, not the record (`host::ServerHost`)
+            earlier_host: false,
         }
     }
 }

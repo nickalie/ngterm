@@ -22,6 +22,9 @@
 //!   `could not read the live session screen of <name>`, `commands::surface`'s and `commands::typing`'s read and typing
 //!   refusals, `commands::restart_live`'s kill outcomes), which the suite asserts through its vocabulary
 //!   (`conformance/agterm_conformance/vocabulary.py`); only the fakes' own test reads a fake's text.
+//! - **An earlier login.** A listing marks every session [`LiveSessionRecord::earlier_host`] when the server's welcome
+//!   names a login other than this process's ([`crate::login`], macOS only): the tree's `liveHostStale` and the reset's
+//!   `staleHost` read it.
 //! - **Sessions named before the rename.** A server from before the build's rename whose update handoff failed still
 //!   holds the panes' sessions as `agterm-<id>` (`ngterm_core::live::LEGACY_NAME_PREFIX`). The host lists such a
 //!   session under the name its pane claims, `ngterm-<id>`, when no session of that name runs beside it
@@ -51,6 +54,8 @@ pub struct ServerHost {
     executable: PathBuf,
     client: Client,
     sweeper: Sweeper,
+    /// This process's login session ([`crate::login`]), which the server's is compared with.
+    login: Option<i64>,
 }
 
 impl ServerHost {
@@ -61,7 +66,15 @@ impl ServerHost {
             executable: executable.into(),
             client: Client::new(directory),
             sweeper: Sweeper::live(),
+            login: crate::login::current(),
         }
+    }
+
+    /// This host taking `login` as this process's login session.
+    #[must_use]
+    pub fn with_login(mut self, login: Option<i64>) -> Self {
+        self.login = login;
+        self
     }
 
     /// This host with every call bounded by `timeout`.
@@ -176,12 +189,22 @@ fn failed(operation: &str, name: Option<&str>, error: &ClientError) -> HostError
     HostError(format!("live session {operation} failed: {error}"))
 }
 
-/// Every session of `client`'s namespace; none without a server.
-fn list_through(client: &Client) -> Result<Vec<LiveSessionRecord>, HostError> {
-    match client.call(ApiRequest::List) {
+/// Every session of `client`'s namespace, each marked [`LiveSessionRecord::earlier_host`] when the server's login is
+/// earlier than `login`; none without a server.
+fn list_through(client: &Client, login: Option<i64>) -> Result<Vec<LiveSessionRecord>, HostError> {
+    let listed = client
+        .call_welcomed(ApiRequest::List)
+        .map(|answer| answer.map(|(welcome, reply)| (reply, crate::login::is_earlier(welcome.login, login))));
+    match listed {
         Ok(None) => Ok(Vec::new()),
-        Ok(Some(ApiResponse::Sessions(sessions))) => Ok(as_claimed(sessions)),
-        Ok(Some(other)) => Err(failed("list", None, &unexpected("a list", &other))),
+        Ok(Some((ApiResponse::Sessions(sessions), earlier))) => {
+            let mut records = as_claimed(sessions);
+            for record in &mut records {
+                record.earlier_host = earlier;
+            }
+            Ok(records)
+        }
+        Ok(Some((other, _))) => Err(failed("list", None, &unexpected("a list", &other))),
         Err(error) => Err(failed("list", None, &error)),
     }
 }
@@ -192,12 +215,12 @@ impl SessionHost for ServerHost {
     }
 
     fn list(&self) -> Result<Vec<LiveSessionRecord>, HostError> {
-        list_through(&self.client)
+        list_through(&self.client, self.login)
     }
 
     /// The listing on a client bounded by `timeout`, connecting included.
     fn list_within(&self, timeout: Duration) -> Result<Vec<LiveSessionRecord>, HostError> {
-        list_through(&self.client.clone().with_timeout(timeout))
+        list_through(&self.client.clone().with_timeout(timeout), self.login)
     }
 
     /// One session killed; without a server, or without a session of that name, nothing was left to kill.

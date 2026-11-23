@@ -140,6 +140,9 @@ pub struct LiveSessionRecord {
     pub leader_pid: Option<i32>,
     /// When the daemon started, in whole seconds since the Unix epoch.
     pub created_at: Option<u64>,
+    /// The daemon runs under a session host of an earlier login than this process's (upstream's `staleHost`
+    /// placement): new sessions there fail on macOS, and a reset moves it to the current one.
+    pub earlier_host: bool,
 }
 
 /// A daemon's own terminal as the host reads it (upstream's `ZmxScreen`): its grid, the cursor and the text.

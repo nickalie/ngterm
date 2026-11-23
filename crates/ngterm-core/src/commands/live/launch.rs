@@ -210,8 +210,8 @@ impl Core {
 
 impl Core {
     /// Fills the tree's live read-back projected from `store` (upstream's `buildTree` live parts): a fresh listing of
-    /// the leaders whenever a local pane is wrapped, each backed pane's attribution, each pane's lead, and the reset
-    /// read-back at the top level.
+    /// the leaders whenever a local pane is wrapped, each backed pane's attribution and whether its session server is
+    /// of an earlier login, each pane's lead, and the reset read-back at the top level.
     pub(crate) fn project_live(&self, store: &crate::model::AppStore, tree: &mut ngterm_proto::ControlTree) {
         tree.live_reset = super::readback(self.live.reset.pending.as_ref(), self.live.reset.last.as_ref());
         // a dormant pane counts by the daemon it attaches to once woken; an empty slot (a split hidden since the
@@ -222,8 +222,16 @@ impl Core {
             session.remote_host().is_none() && (backed(session, StatusPane::Left) || backed(session, StatusPane::Right))
         });
         let mut listed = false;
+        let mut stale = BTreeSet::new();
         if wrapped && let Some(host) = self.live.host() {
-            let snapshot = host.list().ok().map(|records| leaders(&records));
+            let records = host.list().ok();
+            stale = records
+                .iter()
+                .flatten()
+                .filter(|record| record.earlier_host)
+                .map(|record| record.name.clone())
+                .collect();
+            let snapshot = records.map(|records| leaders(&records));
             listed = snapshot.is_some();
             self.live.leaders.borrow_mut().accept(snapshot);
         }
@@ -239,6 +247,20 @@ impl Core {
                     |role| backed(session, role).then(|| <&str>::from(super::live_reset::LINUX_ATTRIBUTION).to_owned());
                 node.live_attribution = attribution(StatusPane::Left);
                 node.split_live_attribution = session.split.exists.then(|| attribution(StatusPane::Right)).flatten();
+                // upstream's `liveHostStale`: only beside an attribution, and omitted unless true
+                let on_earlier_host = |identity: Option<uuid::Uuid>| {
+                    identity
+                        .is_some_and(|identity| stale.contains(&daemon_name(identity)))
+                        .then_some(true)
+                };
+                node.live_host_stale = node
+                    .live_attribution
+                    .as_ref()
+                    .and_then(|_| on_earlier_host(Some(session.pane_identity)));
+                node.split_live_host_stale = node
+                    .split_live_attribution
+                    .as_ref()
+                    .and_then(|_| on_earlier_host(session.split_pane_identity));
             }
             for surface in node.surfaces.iter_mut().flatten() {
                 surface.lead = surface

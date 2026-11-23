@@ -764,6 +764,36 @@ fn a_pane_with_no_terminal_gets_no_live_attribution() {
     assert_eq!(tree_attribution(&mut live, session), (None, unknown), "hidden primary");
 }
 
+/// Upstream's `liveHostStale` and `splitLiveHostStale` (#972): set beside the attribution of a pane whose session
+/// server is of an earlier login, omitted otherwise.
+#[test]
+fn a_pane_on_a_server_of_an_earlier_login_reports_its_host_stale() {
+    let mut live = live();
+    let session = live.session;
+    let split = live.split();
+    mount_realized(&mut live, session, StatusPane::Left, true);
+    for pane in [live.left, split] {
+        live.host.set_record(&daemon_name(pane), Some(1), Some(100), Some(50));
+    }
+    let stale = |live: &mut Live| {
+        let tree = live.core().tree(None).unwrap();
+        let node = tree
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.sessions)
+            .find(|node| node.id == uuid_string(session))
+            .unwrap();
+        (node.live_host_stale, node.split_live_host_stale)
+    };
+    assert_eq!(stale(&mut live), (None, None));
+    live.host.set_earlier_host(&daemon_name(live.left), true);
+    assert_eq!(stale(&mut live), (Some(true), None));
+    live.host.set_earlier_host(&daemon_name(split), true);
+    assert_eq!(stale(&mut live), (Some(true), Some(true)));
+    live.host.fail_list("down");
+    assert_eq!(stale(&mut live), (None, None), "no listing, no claim");
+}
+
 #[test]
 fn a_hidden_unrealized_split_takes_the_primarys_backing() {
     for backed in [true, false] {
@@ -2137,7 +2167,7 @@ fn a_confirmed_reset_holds_the_outdated_panes_quits_and_arms_the_marker() {
     live.host
         .set_record(&daemon_name(live.left), Some(1), Some(100), Some(50));
     let response = live.send(LiveCmd::Reset, None, |a| a.force = Some(true));
-    let body = crate::live::reset::dialog_text(1, 1).1;
+    let body = crate::live::reset::dialog_text(1, 1, 0).1;
     assert_eq!(
         result(&response),
         json!({"text": body, "liveReset": {"sessions": 1, "panes": 1, "pending": true, "outdated": 1}})
@@ -2160,6 +2190,35 @@ fn a_confirmed_reset_holds_the_outdated_panes_quits_and_arms_the_marker() {
     assert!(!marker.exists());
     assert!(host.kills().is_empty());
     assert_eq!(next.core().live.reset.last.clone().unwrap().panes.skipped, 1);
+}
+
+/// Upstream's `ControlServerLiveResetTests` stale-host case: a pane on a session server of an earlier login is reset as
+/// `staleHost`, counted in the reply, and killed at the next launch while its server is still of an earlier login.
+#[test]
+fn a_confirmed_reset_moves_the_panes_on_a_server_of_an_earlier_login() {
+    let mut live = live();
+    live.core().save_restore_mode(RestoreMode::Live);
+    let daemon = daemon_name(live.left);
+    live.host.set_record(&daemon, Some(1), Some(100), Some(50));
+    live.host.set_earlier_host(&daemon, true);
+    let response = live.send(LiveCmd::Reset, None, |a| a.force = Some(true));
+    let body = crate::live::reset::dialog_text(1, 0, 1).1;
+    assert!(
+        body.contains("It runs under a session server from an earlier login"),
+        "{body}"
+    );
+    assert_eq!(
+        result(&response),
+        json!({"text": body, "liveReset": {"sessions": 1, "panes": 1, "pending": true, "staleHost": 1}})
+    );
+    assert!(live.core().arm_live_reset_on_quit());
+    live.core()
+        .set_process_table(Box::new(FakeProcessTable::default()), None);
+    live.core().live.reset.consume_budget = std::time::Duration::from_millis(50);
+    let host = Arc::clone(&live.host);
+    live.core().consume_live_reset(host.as_ref());
+    assert_eq!(host.kills(), [(daemon, true)]);
+    assert_eq!(live.core().live.reset.last.clone().unwrap().panes.killed, 1);
 }
 
 #[test]

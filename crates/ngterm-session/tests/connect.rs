@@ -199,6 +199,7 @@ fn serve(mut stream: Stream, endpoint: &Endpoint, script: &Script, seen: &Mutex<
         capabilities,
         pid: std::process::id(),
         error: refusal.map(|code| ControlError::new(code, "refused by the fake")),
+        login: None,
     };
     if write_control(&mut stream, &Control::Welcome(welcome)).is_err() || refusal.is_some() {
         return;
@@ -239,6 +240,7 @@ fn expecting_new(executable: &Path, timeout: Duration) -> StartOptions {
         timeout,
         build: Some("new".to_owned()),
         handoff_timeout: PATIENCE,
+        login: None,
     }
 }
 
@@ -608,6 +610,7 @@ fn a_server_that_exits_before_it_is_ready_fails_the_start_or_is_started_again() 
         timeout,
         build: None,
         handoff_timeout: PATIENCE,
+        login: None,
     };
     let failing = script_executable(root.path(), "exit 1")?;
     let found = connect_or_start(&endpoint, &hello(Role::Api), &options(failing, PATIENCE));
@@ -657,6 +660,7 @@ fn a_server_started_here_that_is_not_detached_is_stopped() -> TestResult {
         timeout: PATIENCE,
         build: None,
         handoff_timeout: PATIENCE,
+        login: None,
     };
     let starting = {
         let endpoint = endpoint.clone();
@@ -683,6 +687,7 @@ fn a_server_started_here_that_is_not_detached_is_stopped() -> TestResult {
             capabilities: Vec::new(),
             pid,
             error: None,
+            login: None,
         };
         write_control(&mut stream, &Control::Welcome(welcome)).unwrap();
         // held until the client goes
