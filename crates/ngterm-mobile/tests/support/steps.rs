@@ -205,10 +205,11 @@ pub(crate) fn restart(world: &World, client: &mut Client, session: &str, pane: &
 }
 
 /// Restarts the session's left pane (`command`, or the pane's program again) and waits for the phone to see the old
-/// shell exit and to attach the new one by itself.
+/// shell exit, to attach the new one by itself, and for that attach's own role: a role-less `PaneLead`, then a role.
+/// The old attach's role says nothing of the new one.
 fn restart_and_follow(world: &World, client: &mut Client, session: &str, command: Option<&str>) {
     client.drain();
-    let (exited, attached) = (client.seen.exited, client.seen.attached);
+    let (exited, attached, roles) = (client.seen.exited, client.seen.attached, client.seen.roles.len());
     let mut arguments = vec!["session", "restart", "--target", session, "--pane", "left"];
     if let Some(command) = command {
         arguments.extend(["--command", command]);
@@ -219,11 +220,17 @@ fn restart_and_follow(world: &World, client: &mut Client, session: &str, command
         .unwrap_or_else(|error| panic!("restart the pane with {command:?}: {error}"));
     client.wait("the old shell's exit", |seen| seen.exited > exited);
     client.wait("the pane attached to the new shell", |seen| seen.attached > attached);
+    client.wait("the new attach's role", |seen| {
+        let fresh = &seen.roles[roles..];
+        fresh
+            .iter()
+            .position(Option::is_none)
+            .is_some_and(|at| fresh[at..].iter().any(Option::is_some))
+    });
 }
 
 /// Takes control of the pane when the machine's own attach leads it, then types `line` and Enter.
 fn type_after_restart(client: &mut Client, session: &str, pane: &str, line: &str) {
-    client.settle(SETTLE);
     if client.seen.role != Some(PaneRole::Leader) {
         client.take_lead(session, pane);
     }

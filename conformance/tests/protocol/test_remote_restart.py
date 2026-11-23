@@ -26,27 +26,22 @@ def _attach(viewer, host, sid, pane):
     local = assert_ok(viewer.request(viewer.vocabulary.command("live.attach"), sid, host=host))["id"]
     viewer.wait_tree(lambda tree: find_session(tree, local).get("realized"))
     viewer.wait_mounted(local, pane)
+    viewer.wait_tree(lambda tree: _lead(tree, local, pane) == "leader")
     return local
 
 
-def _drive(viewer, local, pane):
-    """Takes the pane's lead once the viewer's attach to the new shell reports one: the origin's own new attach can
-    hold it after a restart."""
-    viewer.wait_tree(lambda tree: _lead(tree, local, pane) is not None)
-    if _lead(viewer.tree(), local, pane) != "leader":
-        assert_ok(viewer.request("session.lead", local, pane=pane))
-        viewer.wait_tree(lambda tree: _lead(tree, local, pane) == "leader")
-
-
-def _type_on_the_viewer(viewer, local, pane, line):
-    _drive(viewer, local, pane)
-    assert_ok(viewer.request("session.type", local, text=f"{line}\n", pane=pane))
+def _follow_restart(viewer, local, pane):
+    """Waits for the viewer's attach to the new shell, then takes the pane's lead. The origin's new attach leads the
+    new shell and the viewer's attach claims nothing, so it follows: a state the viewer's leading attach before the
+    restart cannot report."""
+    viewer.wait_tree(lambda tree: _lead(tree, local, pane) == "follower")
+    assert_ok(viewer.request("session.lead", local, pane=pane))
+    viewer.wait_tree(lambda tree: _lead(tree, local, pane) == "leader")
 
 
 def _lead(tree, local, pane):
     surfaces = find_session(tree, local)["surfaces"]
-    kind = "left" if pane == "left" else "right"
-    return next(surface.get("lead") for surface in surfaces if surface["kind"] == kind)
+    return next(surface.get("lead") for surface in surfaces if surface["kind"] == pane)
 
 
 @pytest.mark.parametrize("pane", ["left", "right"])
@@ -71,14 +66,15 @@ def test_an_attached_pane_follows_a_restart_on_its_origin(remote_origin, remote_
             origin.wait_tree(lambda tree: _foreground(tree, sid, pane) == [REPLAYED])
             assert_ok(origin.request("session.restart", sid, pane=pane))
             origin.wait_tree(lambda tree: _foreground(tree, sid, pane) == [REPLAYED])
-            _type_on_the_viewer(remote_viewer, local, pane, ECHOED)
+            _follow_restart(remote_viewer, local, pane)
+            assert_ok(remote_viewer.request("session.type", local, text=f"{ECHOED}\n", pane=pane))
             # the terminal echoes the line, and the replayed program prints it again
             origin.wait_text(sid, rf"(?m)^{ECHOED}\n{ECHOED}$", pane=pane)
         else:
             assert_ok(origin.request("session.restart", sid, pane=pane, command=RESTARTED))
-            _drive(remote_viewer, local, pane)
+            _follow_restart(remote_viewer, local, pane)
             remote_viewer.wait_text(local, r"(?m)^restarted-7$", pane=pane)
-            _type_on_the_viewer(remote_viewer, local, pane, TYPED)
+            assert_ok(remote_viewer.request("session.type", local, text=f"{TYPED}\n", pane=pane))
             origin.wait_text(sid, r"(?m)^after-restart$", pane=pane)
             remote_viewer.wait_text(local, r"(?m)^after-restart$", pane=pane)
         assert find_session(remote_viewer.tree(), local)["remoteSessionID"] == sid, "the viewer's row was replaced"
