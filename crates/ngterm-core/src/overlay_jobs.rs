@@ -414,7 +414,7 @@ mod tests {
         );
         assert_eq!(jobs.claim(&job, Some("a"), no_hook()), None);
         assert!(jobs.offer(&job, 3, Some("b".to_owned())));
-        advance(&clock, LAUNCH_WINDOW - Duration::from_secs(1));
+        advance(&clock, LAUNCH_WINDOW.saturating_sub(Duration::from_secs(1)));
         assert_eq!(jobs.claim(&job, Some("b"), no_hook()), Some(context()));
         assert!(!jobs.withdraw(&job), "a claimed job keeps its helper");
     }

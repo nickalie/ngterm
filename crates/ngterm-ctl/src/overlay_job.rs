@@ -1124,7 +1124,7 @@ mod tests {
         let (origin, helper) = ngterm_server::endpoint::pair().unwrap();
         drop(origin);
         assert_eq!(
-            runner(helper, DEFAULT_GRACE).claim("job").unwrap_err(),
+            runner(helper, DEFAULT_GRACE).claim("job", None).unwrap_err(),
             "could not send the request"
         );
     }
@@ -1151,6 +1151,20 @@ mod tests {
             };
             assert!(error.contains(&format!("PROBE_RESULT:{result:?}")), "{error}");
         }
+        let launch = OverlayJobFrame::Context {
+            context: context("exit 0"),
+        };
+        let reply = format!("{OK_REPLY}\n{}", String::from_utf8(launch.line().unwrap()).unwrap());
+        let (_, requests) = run_command(
+            &["session", "overlay", "run-job", "job", "--token", "t1"],
+            b"",
+            &[],
+            &[&reply],
+        );
+        assert_eq!(
+            requests,
+            [serde_json::json!({"cmd":"session.overlay.job.run","target":"job","args":{"token":"t1"}})]
+        );
         let (output, _) = run_command(
             &["session", "overlay", "run-job", "job"],
             b"",

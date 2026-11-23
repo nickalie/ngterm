@@ -4124,12 +4124,13 @@ terminal, and reports how it ended. It is not meant to be run by hand. A job
 that cannot be claimed exits 1 having launched nothing, one whose program
 cannot be launched exits 127, and otherwise it exits with the program's status.
 
-USAGE: ngtermctl session overlay run-job <job> [--socket <socket>] [--json]
+USAGE: ngtermctl session overlay run-job <job> [--token <token>] [--socket <socket>] [--json]
 
 ARGUMENTS:
   <job>                   The job id the other Mac was handed.
 
 OPTIONS:
+  --token <token>         The offer token the other Mac was handed with the job.
   --socket <socket>       Override the control socket path.
   --json                  Print the raw JSON response.
   -h, --help              Show help information.

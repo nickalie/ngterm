@@ -642,6 +642,7 @@ fn an_overlay_is_refused_and_its_closes_change_nothing() {
                 background_color: None,
                 follow: false,
                 wait: true,
+                token: None,
             }))
             .await;
         harness

@@ -500,19 +500,7 @@ pub(crate) fn open_remote_overlay(
     if pane.is_none() && hud {
         store.close_hud(session);
     }
-    let token = (presented
-        && core
-            .remote
-            .hub
-            .surface_supports(Surface::Overlays, JOB_TOKEN_KIND, session))
-    .then(|| uuid_string(Uuid::new_v4()));
-    let job = if presented {
-        let job = core.jobs.jobs.register(session, pane, owner, context, token.clone());
-        core.arm_job_launch_expiry();
-        job
-    } else {
-        core.jobs.jobs.register_unpresented(session, pane, context)
-    };
+    let (job, token) = register_remote_job(core, session, pane, owner, context, presented);
     let size = (request.program.size_percent)
         .filter(|_| pane.is_none())
         .map(|percent| percent.clamp(1, 100));
@@ -550,18 +538,52 @@ pub(crate) fn open_remote_overlay(
         );
     }
     if presented {
-        let sent = core.presentable_points(Surface::Overlays, session, points);
-        let overlay = PresentationOverlay {
-            width: sent.width,
-            height: sent.height,
-            token,
-            ..held
-        };
-        core.remote
-            .hub
-            .send_to_surface(Surface::Overlays, Body::OverlayRequest(overlay), session);
+        send_remote_overlay(core, session, points, held, token);
     }
     RemoteOverlayOpen::Opened
+}
+
+/// Asks `session`'s presenter to show `held` at the size it can draw, with its offer token.
+fn send_remote_overlay(
+    core: &mut Core,
+    session: Uuid,
+    points: OverlayPointSize,
+    held: PresentationOverlay,
+    token: Option<String>,
+) {
+    let sent = core.presentable_points(Surface::Overlays, session, points);
+    let overlay = PresentationOverlay {
+        width: sent.width,
+        height: sent.height,
+        token,
+        ..held
+    };
+    core.remote
+        .hub
+        .send_to_surface(Surface::Overlays, Body::OverlayRequest(overlay), session);
+}
+
+/// Registers the job of a remote overlay: a presented one under the presenter's generation, with an offer token when
+/// it lists [`JOB_TOKEN_KIND`]; an unpresented one held for the next presenter.
+fn register_remote_job(
+    core: &mut Core,
+    session: Uuid,
+    pane: Option<OverlayPane>,
+    owner: i64,
+    context: OverlayLaunchContext,
+    presented: bool,
+) -> (String, Option<String>) {
+    if !presented {
+        return (core.jobs.jobs.register_unpresented(session, pane, context), None);
+    }
+    let token = core
+        .remote
+        .hub
+        .surface_supports(Surface::Overlays, JOB_TOKEN_KIND, session)
+        .then(|| uuid_string(Uuid::new_v4()));
+    let job = core.jobs.jobs.register(session, pane, owner, context, token.clone());
+    core.arm_job_launch_expiry();
+    (job, token)
 }
 
 impl Core {

@@ -407,14 +407,19 @@ fn a_job_stream_delivers_context_and_reports_the_helpers_exit() {
         json!({"command":"exit 7"}),
     ));
     assert!(opened.response.ok, "{opened:?}");
-    let job = lines.last("overlay.request")["overlay"]["job"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let request = lines.last("overlay.request")["overlay"].clone();
+    let token = request["token"].as_str().map(str::to_owned);
+    assert!(
+        token.is_some(),
+        "a presenter listing job.token gets the job's offer token: {request}"
+    );
     let reply = state.handle_request(&Request {
         cmd: Command::Session(SessionCmd::OverlayJobRun),
-        target: Some(job),
-        args: None,
+        target: request["job"].as_str().map(str::to_owned),
+        args: Some(ngterm_proto::Args {
+            token,
+            ..ngterm_proto::Args::default()
+        }),
     });
     assert!(reply.response.ok, "{reply:?}");
     let (server, mut client) = ngterm_server::endpoint::pair().unwrap();

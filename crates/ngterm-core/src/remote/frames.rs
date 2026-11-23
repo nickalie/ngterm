@@ -1389,6 +1389,10 @@ pub fn encode(frame: &PresentationFrame) -> Result<Vec<u8>, FrameError> {
     Ok(line)
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "a `map_err` callback takes the error by value"
+)]
 fn malformed(error: serde_json::Error) -> FrameError {
     FrameError::Malformed(error.to_string())
 }
@@ -1671,37 +1675,6 @@ mod tests {
             Body::AskResolve(answer("a1", None, None, None)),
             Body::AskRejected(reference()),
             Body::AskDismiss(reference()),
-            Body::OverlayRequest(PresentationOverlay {
-                width: None,
-                height: None,
-                job: "j1".to_owned(),
-                pane: Some(pane()),
-                size_percent: Some(60),
-                background_color: Some("#102030".to_owned()),
-                follow: true,
-                wait: true,
-                token: Some("t1".to_owned()),
-            }),
-            Body::OverlayRequest(PresentationOverlay {
-                width: None,
-                height: None,
-                job: "j1".to_owned(),
-                pane: None,
-                size_percent: None,
-                background_color: None,
-                follow: false,
-                wait: false,
-                token: None,
-            }),
-            Body::PendingChunk(PresentationPendingChunk {
-                index: 0,
-                data: "W10=".to_owned(),
-            }),
-            Body::PendingCommit,
-            Body::OverlayRejected(change(None)),
-            Body::OverlayClose(change(None)),
-            Body::OverlayResize(change(Some(40))),
-            Body::OverlayClosed(change(None)),
             Body::Context(Some("PR #517".to_owned())),
             Body::Context(None),
             Body::Snapshot(PresentationSnapshot {
@@ -1741,9 +1714,47 @@ mod tests {
             Body::AskResolve(answer("a1", Some("y"), Some("é \"q\"\nb"), None)),
         ]
         .into_iter()
+        .chain(overlay_bodies())
         .chain(link_bodies())
         .chain(page_bodies())
         .collect()
+    }
+
+    /// The program overlays handed to the presenter, and the pending set a headless origin offers it.
+    fn overlay_bodies() -> Vec<Body> {
+        vec![
+            Body::OverlayRequest(PresentationOverlay {
+                width: None,
+                height: None,
+                job: "j1".to_owned(),
+                pane: Some(pane()),
+                size_percent: Some(60),
+                background_color: Some("#102030".to_owned()),
+                follow: true,
+                wait: true,
+                token: Some("t1".to_owned()),
+            }),
+            Body::OverlayRequest(PresentationOverlay {
+                width: None,
+                height: None,
+                job: "j1".to_owned(),
+                pane: None,
+                size_percent: None,
+                background_color: None,
+                follow: false,
+                wait: false,
+                token: None,
+            }),
+            Body::PendingChunk(PresentationPendingChunk {
+                index: 0,
+                data: "W10=".to_owned(),
+            }),
+            Body::PendingCommit,
+            Body::OverlayRejected(change(None)),
+            Body::OverlayClose(change(None)),
+            Body::OverlayResize(change(Some(40))),
+            Body::OverlayClosed(change(None)),
+        ]
     }
 
     fn link_bodies() -> [Body; 2] {
