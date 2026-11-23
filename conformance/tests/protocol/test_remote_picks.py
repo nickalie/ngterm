@@ -44,10 +44,6 @@ def _presented(origin, viewer, host):
     return sid, local
 
 
-def _pick(ctl, sid):
-    return ctl.wait_tree(lambda tree: find_session(tree, sid).get("pick"))
-
-
 def _replica(viewer, local, pick_id):
     viewer.wait_tree(lambda tree: find_session(tree, local).get("pick") == {"id": pick_id, "replica": True})
     assert viewer.tree()["tree"]["pickPending"] == pick_id
@@ -89,7 +85,8 @@ def test_a_session_pick_shows_on_the_viewer_and_ends_from_either_side(remote_ori
     _no_pick(remote_viewer, local)
     assert_absent(remote_viewer.tree()["tree"], "pickPending")
 
-    pick_id = _open(origin, sid, timeout=1)
+    # the replica must show on the viewer before the origin's deadline takes it down
+    pick_id = _open(origin, sid, timeout=5)
     _replica(remote_viewer, local, pick_id)
     _ends_cancelled(origin, pick_id)
     _no_pick(remote_viewer, local)
