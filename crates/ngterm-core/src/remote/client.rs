@@ -37,20 +37,18 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 /// page (`pages`: the web views are built in and can run), and with them the content and document pages
 /// ([`PAGE_CONTENT_KIND`], [`PAGE_DOCUMENT_KIND`]), the loopback forward ([`super::page_tunnel::TUNNEL_KIND`]), a
 /// headless origin's page companions ([`COMPANION_PAGE_KIND`]) and the page detach ([`PAGE_DETACHED_KIND`]), the last
-/// three extensions of this build, and forwarded clicks ([`LINK_CLICK_KIND`]), whose pages come back as handed-over ones. Upstream's hello lists them all; an origin a viewer
+/// three extensions of this build, forwarded clicks ([`LINK_CLICK_KIND`]), whose pages come back as handed-over ones,
+/// and a Markdown page's links ([`PAGE_LINKS_KIND`]). Upstream's hello lists them all; an origin a viewer
 /// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
 /// once. `status.shapes` ([`super::hub::STATUS_SHAPES_KIND`]) is always listed: desktop and both mobile apps draw
 /// every shape it names. `status.checkmark` ([`super::hub::STATUS_CHECKMARK_KIND`]) is always listed too: desktop
-/// and both mobile apps draw the checkmark. A Markdown page's links ([`PAGE_LINKS_KIND`]) are not listed yet: an
-/// origin hands this build's presenter a Markdown page without them. The pick kinds ([`PICK_KINDS`]) and the held
-/// kinds ([`HELD_KINDS`]) are left out: a viewer that shows handed-over picks or takes what a headless origin held adds
-/// them ([`PresentationClient::set_shows_picks`], [`PresentationClient::set_takes_held`]).
+/// and both mobile apps draw the checkmark. The pick kinds ([`PICK_KINDS`]) and the held kinds ([`HELD_KINDS`]) are
+/// left out: a viewer that shows handed-over picks or takes what a headless origin held adds them
+/// ([`PresentationClient::set_shows_picks`], [`PresentationClient::set_takes_held`]).
 #[must_use]
 pub fn viewer_kinds(pages: bool) -> Vec<String> {
     SUPPORTED_KINDS
         .iter()
-        // listed once this build's presenter loads a link page from the machine that opened it
-        .filter(|kind| **kind != PAGE_LINKS_KIND)
         .filter(|kind| !PICK_KINDS.contains(kind) && !HELD_KINDS.contains(kind))
         .filter(|kind| {
             pages
@@ -62,6 +60,7 @@ pub fn viewer_kinds(pages: bool) -> Vec<String> {
                         COMPANION_PAGE_KIND,
                         PAGE_DETACHED_KIND,
                         LINK_CLICK_KIND,
+                        PAGE_LINKS_KIND,
                     ]
                     .contains(kind))
         })
@@ -798,11 +797,10 @@ mod tests {
                 .all(|kind| showing.iter().any(|listed| listed == kind)),
             "a viewer that shows pages builds content and document pages"
         );
-        assert!(
-            [true, false]
-                .iter()
-                .all(|pages| !viewer_kinds(*pages).iter().any(|kind| kind == PAGE_LINKS_KIND)),
-            "this build's presenter loads no link page from its origin yet"
+        assert_eq!(
+            [true, false].map(|pages| viewer_kinds(pages).iter().any(|kind| kind == PAGE_LINKS_KIND)),
+            [true, false],
+            "a presenter that shows pages follows a Markdown page's links"
         );
         // desktop Attach Remote shows no agent chat, so it never asks for the agent kind; every viewer (desktop, both
         // mobile apps) draws the eleven status shapes `status.shapes` names, so each lists it
@@ -914,11 +912,7 @@ mod tests {
         expected.extend(PICK_KINDS.map(str::to_owned));
         expected.extend(HELD_KINDS.map(str::to_owned));
         assert_eq!(hello.kinds, expected);
-        assert_eq!(
-            hello.kinds.len(),
-            SUPPORTED_KINDS.len() - 1,
-            "every kind but a Markdown page's links"
-        );
+        assert_eq!(hello.kinds.len(), SUPPORTED_KINDS.len(), "every kind");
         harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Presenter);
         let request = PresentationPage {
             width: None,

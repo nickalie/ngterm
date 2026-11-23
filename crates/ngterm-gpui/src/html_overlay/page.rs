@@ -834,8 +834,14 @@ impl Page {
                 Ok(html) => Load::Html { html, base_uri: None },
                 Err(error) => return self.fail(error.to_string()),
             },
-            // a replica's files come from the machine that opened it: an HTML file read through the replica scheme,
-            // any other page built here from its fetched bytes
+            // a replica's files come from the machine that opened it: an HTML file or a link page's Markdown files read
+            // through the replica scheme, any other page built here from its fetched bytes
+            HtmlSource::Replica { .. } if let Some(grant) = links => {
+                match ngterm_core::html::replica_link_url(self.id, &grant.path) {
+                    Some(url) => Load::Uri(url.into()),
+                    None => return self.fail(errors::REMOTE_FILE.to_owned()),
+                }
+            }
             HtmlSource::Replica {
                 path,
                 content: ReplicaContent::Html,
@@ -1410,6 +1416,73 @@ mod tests {
         model.drain();
         let shown = model.overlay().current.clone().unwrap();
         assert!(shown.page.ends_with("guide.md") && shown.can_go_back, "{shown:?}");
+        assert_eq!(model.overlay().identity(), "guide.md");
+
+        source.reload_revision += 1;
+        source.reload_target = HtmlReloadTarget::Current;
+        cx.update(|cx| page.apply(&source, true, cx));
+        assert_eq!(web.recorder.take(), [Call::Reload]);
+    }
+
+    /// Upstream's `testAReplicaLinkPageFollowsALinkWithHistoryReloadAndThemeRefresh` and
+    /// `testAReplicaLinkPageKeepsItsDocumentWhenTheOriginCannotServeALink` on WPE: a Markdown page shown for another
+    /// machine with a link grant loads the grant's file through the replica scheme, reports the files it shows by
+    /// that machine's paths, keeps its file when a link cannot be read there, and reloads what it shows with the
+    /// engine's own reload.
+    #[gpui_kit::test]
+    fn a_replica_link_page_loads_the_origins_files_through_the_replica_scheme(cx: &mut TestAppContext) {
+        let grant = ngterm_core::html::markdown_page::MarkdownLinkGrant {
+            path: "/nowhere/docs/README.md".to_owned(),
+            root: "/nowhere/docs".to_owned(),
+        };
+        let flags = ngterm_core::html::HtmlPageFlags {
+            navigation: true,
+            ..ngterm_core::html::HtmlPageFlags::default()
+        };
+        let replica = HtmlSource::Replica {
+            path: grant.path.clone(),
+            content: ReplicaContent::Markdown,
+        };
+        let mut source = HtmlOverlay::linked(replica, flags, Some(grant.clone()));
+        assert!(!source.text_loaded());
+        let address = |path: &str| -> String { ngterm_core::html::replica_link_url(source.id, path).unwrap().into() };
+        let (readme, guide) = (address(&grant.path), address("/nowhere/docs/sub/guide.md"));
+        let (page, web, mut model) = model_page(&source);
+        source.reload_revision += 1;
+        cx.update(|cx| page.apply(&source, true, cx));
+        assert!(web.recorder.take().contains(&Call::Load(Load::Uri(readme.clone()))));
+
+        cx.update(|cx| {
+            progress(&page, ngterm_wpe_client::LoadEvent::Started, cx);
+            shows(&page, &readme, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Committed, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Finished, cx);
+        });
+        model.drain();
+        assert_eq!(
+            model.overlay().current.as_ref().map(|shown| shown.page.clone()),
+            Some(grant.path.clone())
+        );
+        cx.update(|cx| {
+            progress(&page, ngterm_wpe_client::LoadEvent::Started, cx);
+            shows(&page, &guide, cx);
+            failed(&page, guide.clone(), cx);
+        });
+        model.drain();
+        assert_eq!(model.overlay().load_state, HtmlLoadState::Loaded);
+        assert_eq!(model.overlay().load_error, None);
+        assert_eq!(
+            model.overlay().current.as_ref().map(|shown| shown.page.clone()),
+            Some(grant.path.clone())
+        );
+
+        cx.update(|cx| {
+            progress(&page, ngterm_wpe_client::LoadEvent::Started, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Committed, cx);
+        });
+        model.drain();
+        let shown = model.overlay().current.clone().unwrap();
+        assert_eq!(shown.page, "/nowhere/docs/sub/guide.md");
         assert_eq!(model.overlay().identity(), "guide.md");
 
         source.reload_revision += 1;

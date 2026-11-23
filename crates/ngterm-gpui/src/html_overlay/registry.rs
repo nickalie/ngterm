@@ -213,20 +213,27 @@ pub(super) fn read_replica_document(id: Uuid, generation: u64, path: String, con
         return;
     };
     std::thread::spawn(move || {
-        let mut read = |file: &str, limit: usize, failures: ContentFailures| {
-            let unreadable = failures.unreadable.clone();
-            let (answer, answered) = std::sync::mpsc::channel();
-            if reads
-                .send_blocking((id, file.to_owned(), limit, failures, answer))
-                .is_err()
-            {
-                return Err(unreadable);
-            }
-            answered.recv().unwrap_or(Err(unreadable))
-        };
-        let result = super::documents::build_replica(&path, content, &mut read);
+        let result = super::documents::build_replica(&path, content, &mut origin_reader(id, &reads));
         let _ = documents.send_blocking((id, generation, result));
     });
+}
+
+/// A worker's blocking read of replica `id`'s origin files, each handed to the main thread through `reads` and waited for.
+fn origin_reader(
+    id: Uuid,
+    reads: &async_channel::Sender<ReplicaRead>,
+) -> impl FnMut(&str, usize, ContentFailures) -> Result<Vec<u8>, String> + '_ {
+    move |file: &str, limit: usize, failures: ContentFailures| {
+        let unreadable = failures.unreadable.clone();
+        let (answer, answered) = std::sync::mpsc::channel();
+        if reads
+            .send_blocking((id, file.to_owned(), limit, failures, answer))
+            .is_err()
+        {
+            return Err(unreadable);
+        }
+        answered.recv().unwrap_or(Err(unreadable))
+    }
 }
 
 /// Hands a content replica's read to its link; without one it fails as unreadable.
@@ -1181,13 +1188,19 @@ pub fn answer_resource(token: SchemeToken, result: Result<PageResource, String>)
 /// A read of the replica scheme (upstream's `HtmlPageSchemeHandler`): served only for the replica page whose id the
 /// address names as its host, from the file of that path on the machine that opened it; a read naming another page,
 /// or from a page that is no replica, fails without reaching that machine. A Markdown link page's read is served
-/// from this machine's file through its link grant instead ([`serve_linked`]), which judges the file again.
+/// from this machine's file through its link grant instead ([`serve_linked`]), which judges the file again, and one
+/// shown for another machine from that machine's file ([`serve_replica_linked`]), which that machine judges.
 fn serve_replica(request: &SchemeRequest) {
     let page = request.view.and_then(page_of_view);
-    if let Some(grant) = page.as_ref().and_then(|page| page.overlay().markdown_links) {
-        let path = page
-            .as_ref()
-            .and_then(|page| policy::markdown_link_read(&request.uri, page.id()));
+    if let Some((page, grant)) = page
+        .as_ref()
+        .and_then(|page| Some((page, page.overlay().markdown_links?)))
+    {
+        if matches!(page.overlay().source, HtmlSource::Replica { .. }) {
+            let path = policy::replica_link_read(&request.uri, page.id(), &grant);
+            return serve_replica_linked(request.token, page.id(), path);
+        }
+        let path = policy::markdown_link_read(&request.uri, page.id());
         return serve_linked(request.token, path, grant);
     }
     let path = page.as_ref().and_then(|page| {
@@ -1239,6 +1252,35 @@ fn serve_linked(token: SchemeToken, path: Option<String>, grant: ngterm_core::ht
             mime_type: "text/html; charset=utf-8".to_owned(),
             body: html.into_bytes(),
         });
+        let _ = answers.send_blocking((token, result));
+    });
+}
+
+/// Serves a read of `path` by Markdown link page `page` shown for another machine (upstream's
+/// `MarkdownPageSource.replicaLinkSource`): the file read there on a worker's behalf, where that machine judges it
+/// against its grant, and built with its links kept; a read naming another page fails unread.
+fn serve_replica_linked(token: SchemeToken, page: Uuid, path: Option<String>) {
+    let (Some(path), Some(answers), Some(reads)) = (
+        path,
+        with(|registry| registry.linked_reads.clone()),
+        with(|registry| registry.replica_reads.clone()),
+    ) else {
+        return answer_with(|web| {
+            web.finish_scheme_request(
+                token,
+                SchemeResponse::Error {
+                    kind: SchemeError::PermissionDenied,
+                    message: policy::NOT_THIS_PAGE.to_owned(),
+                },
+            );
+        });
+    };
+    std::thread::spawn(move || {
+        let result =
+            super::documents::build_replica_link(&path, &mut origin_reader(page, &reads)).map(|html| PageResource {
+                mime_type: "text/html; charset=utf-8".to_owned(),
+                body: html.into_bytes(),
+            });
         let _ = answers.send_blocking((token, result));
     });
 }

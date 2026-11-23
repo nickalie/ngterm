@@ -863,6 +863,62 @@ fn a_link_page_loads_its_file_through_the_page_protocol() {
     assert!(driven.view.take().contains(&Call::Load(address)));
 }
 
+/// Upstream's replica link page cases on this engine: a Markdown page shown for another machine with a link grant
+/// loads the grant's file through the page protocol, and a link to a file of that machine, which this one does not
+/// hold, goes ahead for that machine to judge; a followed link that fails there keeps the shown file.
+#[gpui_kit::test]
+fn a_replica_link_page_loads_the_origins_files_through_the_page_protocol(cx: &mut TestAppContext) {
+    let grant = ngterm_core::html::markdown_page::MarkdownLinkGrant {
+        path: "/nowhere/docs/README.md".to_owned(),
+        root: "/nowhere/docs".to_owned(),
+    };
+    let flags = ngterm_core::html::HtmlPageFlags {
+        navigation: true,
+        ..ngterm_core::html::HtmlPageFlags::default()
+    };
+    let replica = HtmlSource::Replica {
+        path: grant.path.clone(),
+        content: ReplicaContent::Markdown,
+    };
+    let source = HtmlOverlay::linked(replica, flags, Some(grant.clone()));
+    let mut driven = realized(&source);
+    let readme = scheme::replica_link_address(source.id, &grant.path).unwrap();
+    assert!(driven.view.take().contains(&Call::Load(readme.clone())));
+    assert!(driven.page.allows(&navigation(&readme, true, false, false, 1)));
+    driven.report(Report::Committed, cx);
+    driven.report(
+        Report::Completed {
+            id: 1,
+            success: true,
+            status: 0,
+            http: 200,
+        },
+        cx,
+    );
+    let guide = scheme::replica_link_address(source.id, "/nowhere/docs/sub/guide.md").unwrap();
+    let follow = navigation(&guide, true, true, false, 2);
+    assert!(driven.page.allows(&follow), "the origin judges its own files");
+    let outside = scheme::replica_link_address(source.id, "/nowhere/other/x.md").unwrap();
+    assert!(!driven.page.allows(&navigation(&outside, true, true, false, 3)));
+    driven.report(
+        Report::Navigation {
+            navigation: follow,
+            allowed: true,
+        },
+        cx,
+    );
+    driven.report(
+        Report::Completed {
+            id: 2,
+            success: false,
+            status: 13,
+            http: 0,
+        },
+        cx,
+    );
+    assert_eq!(driven.load(), (HtmlLoadState::Loaded, None));
+}
+
 #[gpui_kit::test]
 fn a_link_pages_first_load_that_fails_fails_the_page(cx: &mut TestAppContext) {
     let (_directory, source) = link_overlay();

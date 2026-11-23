@@ -852,6 +852,99 @@ fn replicas_read_only_their_own_origin_and_relay_the_body_unchanged() {
         }));
 }
 
+/// Upstream's `replicaLinkSource` on WPE: a Markdown link page shown for another machine reads each file its scheme is
+/// asked for there, under the Markdown cap and by that machine's path, never from this machine's files, and answers
+/// the document built with its links; a read naming another page fails unread.
+#[test]
+fn a_replica_link_page_reads_its_linked_files_from_the_origin() {
+    let web = replies();
+    let grant = ngterm_core::html::markdown_page::MarkdownLinkGrant {
+        path: "/nowhere/docs/README.md".to_owned(),
+        root: "/nowhere/docs".to_owned(),
+    };
+    let source = HtmlOverlay::linked(
+        HtmlSource::Replica {
+            path: grant.path.clone(),
+            content: ReplicaContent::Markdown,
+        },
+        HtmlPageFlags {
+            navigation: true,
+            ..HtmlPageFlags::default()
+        },
+        Some(grant.clone()),
+    );
+    let page = register(&source, Storage::Ephemeral);
+    realize_waiting();
+    let (reads, asked) = async_channel::unbounded::<ReplicaRead>();
+    let (linked, answered) = async_channel::unbounded();
+    with(|registry| {
+        registry.replica_reads = Some(reads);
+        registry.linked_reads = Some(linked);
+    });
+    let guide = ngterm_core::html::replica_link_url(page.id(), &grant.path)
+        .unwrap()
+        .join("sub/guide.md")
+        .unwrap();
+    let request = SchemeRequest {
+        token: SchemeToken::from_raw(4),
+        view: page.view_id(),
+        uri: guide.into(),
+    };
+    serve_replica(&request);
+    let (id, path, limit, failures, answer) = within_seconds(|| asked.try_recv().ok()).expect("a read of the origin");
+    assert_eq!(
+        (id, path.as_str(), limit),
+        (
+            page.id(),
+            "/nowhere/docs/sub/guide.md",
+            ngterm_core::html::markdown_page::MAX_BYTES
+        )
+    );
+    assert_eq!(
+        failures.unreadable,
+        "unreadable markdown file: /nowhere/docs/sub/guide.md"
+    );
+    answer.send(Ok(b"# Guide\n\n[back](../README.md)\n".to_vec())).unwrap();
+    let (token, result) = within_seconds(|| answered.try_recv().ok()).expect("the built document");
+    assert_eq!(token, request.token);
+    let body = String::from_utf8(result.unwrap().body).unwrap();
+    assert!(
+        body.contains("data-links=\"local\"") && body.contains("[back](../README.md)"),
+        "{body}"
+    );
+
+    let mut wrong = request.clone();
+    wrong.uri = ngterm_core::html::replica_link_url(Uuid::new_v4(), &grant.path)
+        .unwrap()
+        .into();
+    serve_replica(&wrong);
+    assert!(asked.is_empty());
+    assert_eq!(
+        web.resources.borrow().as_slice(),
+        [(
+            request.token,
+            SchemeResponse::Error {
+                kind: SchemeError::PermissionDenied,
+                message: policy::NOT_THIS_PAGE.to_owned(),
+            }
+        )]
+    );
+}
+
+/// What `poll` gives within five seconds of a worker's answer, so a missing answer fails rather than hangs.
+fn within_seconds<T>(mut poll: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(value) = poll() {
+            return Some(value);
+        }
+        if std::time::Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 #[test]
 fn navigation_requires_a_realized_page_and_preserves_history_refusals() {
     let _web = replies();

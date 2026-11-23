@@ -385,22 +385,30 @@ pub(super) fn read_replica_document(id: Uuid, generation: u64, path: String, con
         return;
     };
     std::thread::spawn(move || {
-        let mut read = |file: &str, limit: usize, failures: ContentFailures| {
-            let unreadable = failures.unreadable.clone();
-            let (answer, answered) = std::sync::mpsc::channel();
-            let file = file.to_owned();
-            post(&poster, move |state: &mut AppState| {
-                let answer = Box::new(move |result| {
-                    let _ = answer.send(result);
-                });
-                state.core.replica_read(id, &file, limit, failures, answer);
-                state.settle();
-            });
-            answered.recv().unwrap_or(Err(unreadable))
-        };
-        let result = super::super::documents::build_replica(&path, content, &mut read);
+        let result = super::super::documents::build_replica(&path, content, &mut origin_reader(id, &poster));
         let _ = jobs.try_send(Job::DocumentLoaded(id, generation, result));
     });
+}
+
+/// A worker's blocking read of replica `id`'s origin files, each read through the core's page channel on the main loop
+/// and waited for.
+fn origin_reader(
+    id: Uuid,
+    poster: &Poster,
+) -> impl FnMut(&str, usize, ContentFailures) -> Result<Vec<u8>, String> + '_ {
+    move |file: &str, limit: usize, failures: ContentFailures| {
+        let unreadable = failures.unreadable.clone();
+        let (answer, answered) = std::sync::mpsc::channel();
+        let file = file.to_owned();
+        post(poster, move |state: &mut AppState| {
+            let answer = Box::new(move |result| {
+                let _ = answer.send(result);
+            });
+            state.core.replica_read(id, &file, limit, failures, answer);
+            state.settle();
+        });
+        answered.recv().unwrap_or(Err(unreadable))
+    }
 }
 
 pub(super) fn document_loaded(id: Uuid, generation: u64, result: Result<String, String>) {
@@ -810,9 +818,15 @@ pub fn relay(page: Uuid, body: String, reply: u64) {
 /// A read of the replica protocol (upstream's `HtmlPageSchemeHandler`): served only for the replica page whose id the
 /// address names as its host, from the file of that path on the machine that opened it; a read naming another page,
 /// or from a page that is no replica, fails without reaching that machine. A Markdown link page's read is served from
-/// this machine's file through its link grant instead ([`serve_linked`]), which judges the file again.
+/// this machine's file through its link grant instead ([`serve_linked`]), which judges the file again, and one shown for
+/// another machine from that machine's file ([`serve_replica_linked`]), which that machine judges.
 fn replica_read(page_id: Uuid, uri: &str, reply: ReadReply) {
-    if let Some(grant) = page(page_id).and_then(|page| page.overlay().markdown_links) {
+    if let Some(overlay) = page(page_id).map(|page| page.overlay())
+        && let Some(grant) = overlay.markdown_links
+    {
+        if matches!(overlay.source, HtmlSource::Replica { .. }) {
+            return serve_replica_linked(page_id, policy::replica_link_read(uri, page_id, &grant), reply);
+        }
         return serve_linked(policy::markdown_link_read(uri, page_id), grant, reply);
     }
     let path = page(page_id).and_then(|page| {
@@ -852,6 +866,20 @@ fn serve_linked(path: Option<String>, grant: ngterm_core::html::markdown_page::M
     };
     std::thread::spawn(move || {
         let answer = super::super::documents::read_linked(&path, &grant)
+            .map(|html| ("text/html; charset=utf-8".to_owned(), html.into_bytes()));
+        respond(reply, answer);
+    });
+}
+
+/// Serves a read of `path` by Markdown link page `page_id` shown for another machine (upstream's
+/// `MarkdownPageSource.replicaLinkSource`): built on a worker from that machine's file, read through the core's page
+/// channel on the main loop, where that machine judges it against its grant; a read naming another page fails unread.
+fn serve_replica_linked(page_id: Uuid, path: Option<String>, reply: ReadReply) {
+    let (Some(path), Some(poster)) = (path, with(|registry| registry.poster.clone())) else {
+        return respond(reply, Err(policy::NOT_THIS_PAGE.to_owned()));
+    };
+    std::thread::spawn(move || {
+        let answer = super::super::documents::build_replica_link(&path, &mut origin_reader(page_id, &poster))
             .map(|html| ("text/html; charset=utf-8".to_owned(), html.into_bytes()));
         respond(reply, answer);
     });

@@ -23,6 +23,10 @@ pub fn replica_address(page: Uuid, path: &str) -> Option<String> {
 pub fn markdown_address(page: Uuid, path: &str) -> Option<String> {
     ngterm_core::html::markdown_link_url(page, path).map(|url| url.to_string())
 }
+/// The address a Markdown link page loads `path`, a file on the machine that opened it, from.
+pub fn replica_link_address(page: Uuid, path: &str) -> Option<String> {
+    ngterm_core::html::replica_link_url(page, path).map(|url| url.to_string())
+}
 pub fn app_uri(engine: &str) -> String {
     if let Some(rest) = engine.strip_prefix("ngterm-file://localhost") {
         return format!("file://{rest}");

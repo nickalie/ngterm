@@ -1251,8 +1251,14 @@ impl Page {
                 }
             }
             HtmlSource::File { path, grant_root: None } => return self.load_text(native.as_ref(), &path),
-            // a replica's files come from the machine that opened it: an HTML file read through its own protocol, any
-            // other page built here from its fetched bytes
+            // a replica's files come from the machine that opened it: an HTML file or a link page's Markdown files read
+            // through its own protocol, any other page built here from its fetched bytes
+            HtmlSource::Replica { .. } if let Some(grant) = links => {
+                match scheme::replica_link_address(self.id, &grant.path) {
+                    Some(address) => address,
+                    None => return self.fail(errors::REMOTE_FILE.to_owned()),
+                }
+            }
             HtmlSource::Replica {
                 path,
                 content: ReplicaContent::Html,

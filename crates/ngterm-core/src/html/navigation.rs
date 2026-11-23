@@ -183,6 +183,11 @@ fn follows_link(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> bool {
     if action.target != HtmlNavigationTarget::MainFrame || !super::replica_url_of(&action.url, overlay.id) {
         return false;
     }
+    // a page shown for another machine names that machine's files, never this one's
+    if matches!(overlay.source, HtmlSource::Replica { .. }) {
+        return super::replica_link_path(&action.url, grant)
+            .is_some_and(|path| super::replica_link_follows(&path, grant));
+    }
     super::markdown_link_path(&action.url).is_some_and(|path| {
         super::markdown_page::is_markdown(std::path::Path::new(&path))
             && super::markdown_page::lexical_path(&path, std::path::Path::new(&grant.root)).is_some()
@@ -668,6 +673,43 @@ mod tests {
                 decision,
                 "{url} {target:?} {user}"
             );
+        }
+    }
+
+    /// A link page shown for another machine judges a link by that machine's paths, which need not exist here: a
+    /// Windows origin's folder on any host, and a POSIX one's files missing from this machine.
+    #[test]
+    fn a_replica_link_page_judges_links_by_the_origins_paths() {
+        for (root, inside, outside) in [
+            ("/nowhere/notes", "/nowhere/notes/sub/guide.md", "/nowhere/other/x.md"),
+            (r"C:\notes", r"C:\NOTES\sub\guide.md", r"C:\other\x.md"),
+        ] {
+            let grant = super::super::markdown_page::MarkdownLinkGrant {
+                path: format!("{root}{}readme.md", if root.starts_with('/') { "/" } else { "\\" }),
+                root: root.to_owned(),
+            };
+            let page = HtmlOverlay::linked(
+                HtmlSource::Replica {
+                    path: grant.path.clone(),
+                    content: ReplicaContent::Markdown,
+                },
+                HtmlPageFlags {
+                    navigation: true,
+                    ..HtmlPageFlags::default()
+                },
+                Some(grant.clone()),
+            );
+            let decided = |path: &str, target| {
+                let url = super::super::replica_link_url(page.id, path).unwrap();
+                decide(&action(url.as_str(), target, true), &page)
+            };
+            assert_eq!(decided(&grant.path, MainFrame), Allow, "{root}");
+            assert_eq!(decided(inside, MainFrame), Allow, "{inside}");
+            assert_eq!(decided(inside, Subframe), Cancel, "{inside}");
+            assert_eq!(decided(outside, MainFrame), Cancel, "{outside}");
+            assert_eq!(decided(&inside.replace(".md", ".txt"), MainFrame), Cancel, "{inside}");
+            let other = super::super::replica_link_url(uuid::Uuid::new_v4(), inside).unwrap();
+            assert_eq!(decide(&action(other.as_str(), MainFrame, true), &page), Cancel);
         }
     }
 

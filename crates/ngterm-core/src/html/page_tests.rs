@@ -337,6 +337,65 @@ fn a_link_pages_address_keeps_a_shares_server() {
     );
 }
 
+/// A link page shown for another machine names that machine's files in its own spelling on any OS: a relative link
+/// resolves in the file's folder there, and the address gives the same path back for a POSIX, drive, share or
+/// verbatim origin.
+#[test]
+fn a_replica_link_pages_address_spells_the_origins_path_on_any_host() {
+    let page = uuid::Uuid::new_v4();
+    for (path, root, linked) in [
+        ("/docs/a b#%.md", "/docs", "/docs/sub/b.md"),
+        (r"C:\docs\a b#%.md", r"C:\docs", r"C:\docs\sub\b.md"),
+        (
+            r"\\server\share\docs\a.md",
+            r"\\server\share\docs",
+            r"\\server\share\docs\sub\b.md",
+        ),
+        (r"\\?\C:\docs\a.md", r"\\?\C:\docs", r"\\?\C:\docs\sub\b.md"),
+    ] {
+        let grant = markdown_page::MarkdownLinkGrant {
+            path: path.to_owned(),
+            root: root.to_owned(),
+        };
+        let url = replica_link_url(page, path).unwrap();
+        assert!(replica_url_of(&url, page), "{url}");
+        assert!(url.query().is_none() && url.fragment().is_none(), "{url}");
+        assert_eq!(replica_link_path(&url, &grant).as_deref(), Some(path), "{url}");
+        let followed = url.join("sub/b.md").unwrap();
+        assert_eq!(
+            replica_link_path(&followed, &grant).as_deref(),
+            Some(linked),
+            "{followed}"
+        );
+        assert!(replica_link_follows(linked, &grant), "{linked}");
+        let outside = url.join("../x.md").unwrap();
+        let outside = replica_link_path(&outside, &grant).unwrap();
+        assert!(!replica_link_follows(&outside, &grant), "{outside}");
+        assert!(!replica_link_follows(&linked.replace("b.md", "b.txt"), &grant));
+    }
+    let other = Url::parse("ngterm-file:///docs/a.md").unwrap();
+    assert_eq!(replica_link_path(&other, &link_grant_of("/docs")), None);
+}
+
+fn link_grant_of(root: &str) -> markdown_page::MarkdownLinkGrant {
+    markdown_page::MarkdownLinkGrant {
+        path: format!("{root}/a.md"),
+        root: root.to_owned(),
+    }
+}
+
+/// Upstream's `textLoaded` for a replica: a Markdown page shown for another machine with a link grant loads its files
+/// through the page scheme, one without builds its document here.
+#[test]
+fn a_replica_link_page_is_not_text_loaded() {
+    let source = HtmlSource::Replica {
+        path: "/tmp/notes/readme.md".to_owned(),
+        content: ReplicaContent::Markdown,
+    };
+    assert!(!link_page(source.clone()).text_loaded());
+    assert!(HtmlOverlay::new(source, HtmlPageFlags::default()).text_loaded());
+}
+
 /// Upstream's `withoutLinks`: a Markdown page loses its grant and its navigation with it; a page of another kind keeps
 /// its navigation.
 #[test]

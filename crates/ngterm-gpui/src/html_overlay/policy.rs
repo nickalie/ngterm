@@ -134,7 +134,8 @@ pub fn replica_read(uri: &str, page: uuid::Uuid) -> Option<String> {
 
 /// Whether a link page's navigation to `url` reaches a file its source reads (`documents::read_linked`), checked before
 /// the navigation goes ahead on an engine that shows a custom protocol's failed read as a document (`WKWebView`,
-/// `WebView2`); any other navigation, and another page's, passes. The source judges the file again when it reads it.
+/// `WebView2`); any other navigation, and another page's, passes. The source judges the file again when it reads it. A
+/// page shown for another machine names that machine's files, which only that machine judges, so its links pass.
 ///
 /// # Errors
 /// The source's refusal of the read.
@@ -143,7 +144,7 @@ pub fn link_readable(overlay: &HtmlOverlay, url: &Url) -> Result<(), String> {
     let Some(grant) = overlay.markdown_links.as_ref() else {
         return Ok(());
     };
-    if !replica_url_of(url, overlay.id) {
+    if !replica_url_of(url, overlay.id) || matches!(overlay.source, HtmlSource::Replica { .. }) {
         return Ok(());
     }
     let file = markdown_link_path(url)
@@ -157,6 +158,20 @@ pub fn link_readable(overlay: &HtmlOverlay, url: &Url) -> Result<(), String> {
 pub fn markdown_link_read(uri: &str, page: uuid::Uuid) -> Option<String> {
     let url = Url::parse(uri).ok()?;
     replica_url_of(&url, page).then(|| markdown_link_path(&url)).flatten()
+}
+
+/// The file on the machine that opened Markdown link page `page`, shown here with `grant`, a read of `uri` asks for,
+/// spelled as that machine spells it; `None` for an address that names another page.
+#[must_use]
+pub fn replica_link_read(
+    uri: &str,
+    page: uuid::Uuid,
+    grant: &ngterm_core::html::markdown_page::MarkdownLinkGrant,
+) -> Option<String> {
+    let url = Url::parse(uri).ok()?;
+    replica_url_of(&url, page)
+        .then(|| ngterm_core::html::replica_link_path(&url, grant))
+        .flatten()
 }
 
 #[cfg(target_os = "linux")]
@@ -429,12 +444,19 @@ pub fn page_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -
         return file_url(path);
     }
     // a link page shows the file it last committed, its own before that
-    if overlay.markdown_links.is_some()
-        && let HtmlSource::Markdown { path } = &overlay.source
-    {
-        return shown
-            .and_then(markdown_link_path)
-            .map_or_else(|| file_url(path), |shown| file_url(&shown));
+    if let Some(grant) = &overlay.markdown_links {
+        match &overlay.source {
+            HtmlSource::Markdown { path } => {
+                return shown
+                    .and_then(markdown_link_path)
+                    .map_or_else(|| file_url(path), |shown| file_url(&shown));
+            }
+            HtmlSource::Replica { .. } => {
+                let shown = shown.and_then(|shown| ngterm_core::html::replica_link_path(shown, grant));
+                return file_url(shown.as_deref().unwrap_or(&grant.path));
+            }
+            _ => {}
+        }
     }
     // a replica's scheme address names this machine's page id; what it shows is that path on the other machine
     if let Some(path) = web.and_then(replica_path) {
@@ -1444,5 +1466,50 @@ mod tests {
         assert_eq!(link_readable(&page, &url("https://example.com/x.md")), Ok(()));
         let plain = HtmlOverlay::new(page.source.clone(), HtmlPageFlags::default());
         assert_eq!(link_readable(&plain, &in_root(&page, "sub/missing.md")), Ok(()));
+        let grant = page.markdown_links.clone().unwrap();
+        let replica = HtmlOverlay::linked(
+            HtmlSource::Replica {
+                path: grant.path.clone(),
+                content: ngterm_core::html::ReplicaContent::Markdown,
+            },
+            page.flags,
+            Some(grant.clone()),
+        );
+        let missing = ngterm_core::html::replica_link_url(replica.id, &format!("{}/sub/missing.md", grant.root));
+        assert_eq!(
+            link_readable(&replica, &missing.unwrap()),
+            Ok(()),
+            "the origin judges its own files"
+        );
+    }
+
+    /// A Markdown link page shown for another machine reports the file it last committed by that machine's path, its own
+    /// file before that, and reads only its own page's addresses.
+    #[test]
+    fn a_replica_link_page_shows_and_reads_the_origins_paths() {
+        let grant = ngterm_core::html::markdown_page::MarkdownLinkGrant {
+            path: "/nowhere/docs/README.md".to_owned(),
+            root: "/nowhere/docs".to_owned(),
+        };
+        let page = HtmlOverlay::linked(
+            HtmlSource::Replica {
+                path: grant.path.clone(),
+                content: ngterm_core::html::ReplicaContent::Markdown,
+            },
+            HtmlPageFlags {
+                navigation: true,
+                ..HtmlPageFlags::default()
+            },
+            Some(grant.clone()),
+        );
+        let guide = ngterm_core::html::replica_link_url(page.id, "/nowhere/docs/sub/guide.md").unwrap();
+        let reported = |shown: Option<&Url>| page_url(&page, shown, Some(&guide)).map(|url| file_path(&url));
+        assert_eq!(reported(Some(&guide)).as_deref(), Some("/nowhere/docs/sub/guide.md"));
+        assert_eq!(reported(None).as_deref(), Some("/nowhere/docs/README.md"));
+        assert_eq!(
+            replica_link_read(guide.as_str(), page.id, &grant).as_deref(),
+            Some("/nowhere/docs/sub/guide.md")
+        );
+        assert_eq!(replica_link_read(guide.as_str(), uuid::Uuid::new_v4(), &grant), None);
     }
 }

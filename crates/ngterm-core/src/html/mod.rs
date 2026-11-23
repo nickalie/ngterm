@@ -381,6 +381,37 @@ pub fn markdown_link_path(url: &Url) -> Option<String> {
     Url::parse(&file).ok()?.to_file_path().ok()?.to_str().map(str::to_owned)
 }
 
+/// The address a Markdown link page shown for another machine loads `path`, a file on that machine, from: its
+/// [`replica_url`], with a Windows path spelled in `/` after a leading one, so a relative link resolves in the file's
+/// folder whatever OS this machine runs.
+#[must_use]
+pub fn replica_link_url(page: uuid::Uuid, path: &str) -> Option<Url> {
+    if origin_path::is_windows(path) {
+        replica_url(page, &format!("/{}", path.replace('\\', "/")))
+    } else {
+        replica_url(page, path)
+    }
+}
+
+/// The file on the machine that opened a Markdown link page with `grant` its address names ([`replica_link_url`]),
+/// spelled as that machine spells it; `None` for an address of another scheme.
+#[must_use]
+pub fn replica_link_path(url: &Url, grant: &markdown_page::MarkdownLinkGrant) -> Option<String> {
+    let path = replica_path(url)?;
+    if !origin_path::is_windows(&grant.root) {
+        return Some(path);
+    }
+    Some(path.strip_prefix('/').unwrap_or(&path).replace('/', "\\"))
+}
+
+/// Whether `path`, a file on the machine that opened a link page with `grant`, is Markdown strictly inside the grant's
+/// folder, judged lexically by that machine's path rules and never against this machine's files: that machine judges
+/// the real path again when it serves the file.
+#[must_use]
+pub fn replica_link_follows(path: &str, grant: &markdown_page::MarkdownLinkGrant) -> bool {
+    markdown_page::is_markdown(std::path::Path::new(path)) && origin_path::strictly_inside(path, &grant.root)
+}
+
 impl HtmlSource {
     /// The origin of an HTTP(S) URL without credentials, `None` for other schemes (upstream's `HtmlSource.origin`).
     #[must_use]
@@ -734,7 +765,8 @@ impl HtmlOverlay {
     pub fn text_loaded(&self) -> bool {
         match &self.source {
             HtmlSource::File { grant_root, .. } => grant_root.is_none(),
-            HtmlSource::Replica { content, .. } => *content != ReplicaContent::Html,
+            // a link page loads its files through the page scheme
+            HtmlSource::Replica { content, .. } => *content != ReplicaContent::Html && self.markdown_links.is_none(),
             HtmlSource::Url(_) => false,
             // a link page loads its files through the page scheme
             HtmlSource::Markdown { .. } => self.markdown_links.is_none(),

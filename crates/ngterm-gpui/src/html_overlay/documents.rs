@@ -175,12 +175,7 @@ pub(super) fn build_replica(path: &str, content: ReplicaContent, read: &mut Orig
             let image = ngterm_app::documents::image_from_bytes(bytes, path)?;
             Ok(image_page::html(&image.bytes, &image.mime_type))
         }
-        ReplicaContent::Markdown => {
-            // a picture that cannot be read is left to its alt text, as a local page's is
-            let fetch = |picture: &str, room: usize| read(picture, room, ContentFailures::default()).ok();
-            let document = ngterm_app::documents::markdown_from_bytes(bytes, path, fetch)?;
-            Ok(markdown_page::html(&document.markdown, &document.images, STYLE, false))
-        }
+        ReplicaContent::Markdown => replica_markdown(bytes, path, read, false),
         ReplicaContent::Text { line } => {
             let text = ngterm_app::documents::text_from_bytes(bytes, path)?;
             let state = text_page::PageState::default();
@@ -194,6 +189,25 @@ pub(super) fn build_replica(path: &str, content: ReplicaContent, read: &mut Orig
         }
         ReplicaContent::Document => ngterm_app::documents::document_from_bytes(bytes, path, document_page_builder()),
     }
+}
+
+/// The document a Markdown link page shown here for another machine shows for `requested`, a file there its page scheme
+/// was asked for (upstream's `MarkdownPageSource.replicaLinkSource`): read through `read`, where that machine judges it
+/// against the grant it froze, under the Markdown cap, and built here with its links kept and its pictures read there.
+/// Blocking: a worker's.
+pub(super) fn build_replica_link(requested: &str, read: &mut OriginRead<'_>) -> Result<String, String> {
+    let Some((limit, failures)) = ngterm_app::documents::replica_read(ReplicaContent::Markdown, requested) else {
+        return Err(errors::REMOTE_FILE.to_owned());
+    };
+    let bytes = read(requested, limit, failures)?;
+    replica_markdown(bytes, requested, read, true)
+}
+
+fn replica_markdown(bytes: Vec<u8>, path: &str, read: &mut OriginRead<'_>, links: bool) -> Result<String, String> {
+    // a picture that cannot be read is left to its alt text, as a local page's is
+    let fetch = |picture: &str, room: usize| read(picture, room, ContentFailures::default()).ok();
+    let document = ngterm_app::documents::markdown_from_bytes(bytes, path, fetch)?;
+    Ok(markdown_page::html(&document.markdown, &document.images, STYLE, links))
 }
 
 /// A completion from an older load or from a released page must never reach its engine.
@@ -303,6 +317,50 @@ mod tests {
             }),
             Some(script())
         );
+    }
+
+    /// Upstream's `replicaLinkSource` at the builder: the requested file there under the Markdown cap, built with its
+    /// links kept and its picture read there; a refusal keeps the reason that machine gave, and a missing file is worded
+    /// as the local probe words it.
+    #[test]
+    fn a_replica_link_page_builds_each_linked_file_from_the_origins_bytes_with_links() {
+        let (guide, shot) = (os("/o/docs/sub/guide.md"), os("/o/docs/sub/shot.png"));
+        let markdown = b"# Guide\n\n[back](../readme.md) ![s](shot.png)\n".to_vec();
+        let mut asked = Vec::new();
+        let html = build_replica_link(
+            &guide,
+            &mut origin(vec![(guide.clone(), markdown), (shot.clone(), png(4))], &mut asked),
+        )
+        .unwrap();
+        assert_eq!(
+            asked,
+            [
+                (guide.clone(), markdown_page::MAX_BYTES),
+                (shot, markdown_page::MAX_IMAGE_BYTES)
+            ]
+        );
+        assert!(
+            html.contains("data-links=\"local\"") && html.contains("data:image/png;base64,"),
+            "{html}"
+        );
+        let missing = os("/o/docs/missing.md");
+        assert_eq!(
+            build_replica_link(&missing, &mut origin(Vec::new(), &mut Vec::new())),
+            Err(format!("unreadable markdown file: {missing}"))
+        );
+        let mut refused = |path: &str, _: usize, _: ContentFailures| Err(format!("not a linked markdown file: {path}"));
+        assert_eq!(
+            build_replica_link(&guide, &mut refused),
+            Err(format!("not a linked markdown file: {guide}"))
+        );
+        let mut plain_asked = Vec::new();
+        let plain = build_replica(
+            &guide,
+            ReplicaContent::Markdown,
+            &mut origin(vec![(guide.clone(), b"[b](b.md)".to_vec())], &mut plain_asked),
+        )
+        .unwrap();
+        assert!(!plain.contains("data-links"), "{plain}");
     }
 
     /// An image, text or document replica builds the page a local one of its kind shows from the fetched bytes, judged

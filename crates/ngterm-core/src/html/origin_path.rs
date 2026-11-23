@@ -94,6 +94,17 @@ impl OriginFolder {
     }
 }
 
+/// Whether `path` is absolute on a Windows machine: rooted on a drive, a share or either behind `\\?\`.
+pub(super) fn is_windows(path: &str) -> bool {
+    windows_root(path).is_some()
+}
+
+/// Whether `path` lies strictly inside `folder`, both absolute on the machine that holds them, judged lexically by
+/// that machine's rules.
+pub(super) fn strictly_inside(path: &str, folder: &str) -> bool {
+    OriginFolder::absolute(folder).is_some_and(|folder| folder.lexical_path(path).is_some())
+}
+
 /// The root of a Windows absolute path, spelled with `\`, and the rest after it; `None` for any other path.
 fn windows_root(path: &str) -> Option<(String, &str)> {
     if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {

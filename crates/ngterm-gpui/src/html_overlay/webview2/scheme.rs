@@ -111,6 +111,12 @@ pub fn markdown_address(page: Uuid, path: &str) -> Option<String> {
     engine_address(&ngterm_core::html::markdown_link_url(page, path)?)
 }
 
+/// The address `WebView2` loads file `path` of Markdown link page `page` from, a file on the machine that opened it.
+#[must_use]
+pub fn replica_link_address(page: Uuid, path: &str) -> Option<String> {
+    engine_address(&ngterm_core::html::replica_link_url(page, path)?)
+}
+
 /// A page-scheme address as `WebView2` serves it, under the replica protocol's host.
 fn engine_address(url: &Url) -> Option<String> {
     let rest = url.as_str().strip_prefix(REPLICA_SCHEME)?.strip_prefix("://")?;
