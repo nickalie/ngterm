@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::attach::start_peer_tree_read_within;
 use super::frames::PresentationPane;
 use super::origin_replies::{COMPANION_DEADLINE, PAUSE, READY_BUDGET, read_peer_tree, reply_of};
+use super::split_mirror::MirrorRun;
 use super::ssh::{PaneLabel, attach_pane_command, control_command};
 use super::tree::TREE_DEADLINE;
 use super::viewer::{Answer, run_off_thread, take_answer};
@@ -201,11 +202,11 @@ impl Core {
 
     pub(super) fn advance_remote_splits(&mut self) {
         for mut run in std::mem::take(&mut self.remote.viewer.split_flows) {
-            if self
-                .library()
-                .held_session(run.target.session)
-                .is_none_or(|session| role_of(session, run.target.pane).is_none())
-            {
+            let Some(session) = self.library().held_session(run.target.session) else {
+                continue;
+            };
+            if role_of(session, run.target.pane).is_none() {
+                self.abandon_remote_split(run);
                 continue;
             }
             match self.step_remote_split(&mut run) {
@@ -403,6 +404,23 @@ impl Core {
                 self.apply_remote_layout(&layout, id);
             }
         }
+    }
+
+    /// The viewer pane closed while its origin split was on its way: once the origin made the split, it closes there
+    /// too, or the next attach brings it back.
+    fn abandon_remote_split(&mut self, run: SplitRun) {
+        if let Stage::Creating(answer) = &run.stage {
+            let Some(result) = take_answer(answer) else {
+                self.remote.viewer.split_flows.push(run);
+                return;
+            };
+            if reply_of(&result).is_none_or(|reply| !reply.ok) {
+                return;
+            }
+        }
+        let target = run.target;
+        let mirror = MirrorRun::abandoned(target.session, target.host, target.peer, &target.origin);
+        self.start_split_mirror(mirror);
     }
 
     fn fail_remote_split(&mut self, id: Uuid, pane: Uuid, reason: &str) {

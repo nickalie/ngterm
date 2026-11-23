@@ -225,7 +225,7 @@ impl Core {
                     self.request_pane_focus(session);
                 }
             }
-            (PaletteCommand::CloseSplit, Some(session)) => store.close_split(session),
+            (PaletteCommand::CloseSplit, Some(session)) => self.close_split_mirrored(session),
             _ => {}
         }
     }

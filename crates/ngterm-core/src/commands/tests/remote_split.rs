@@ -605,3 +605,213 @@ fn a_remote_split_carries_the_exact_capability_and_nonce_of_its_attach() {
         );
     }
 }
+
+/// What the viewer runs over ssh for `words` on the row's origin.
+fn origin_line(words: &[&str]) -> String {
+    let argv = crate::remote::ssh::control_command("buildbox", crate::remote::peer::RemotePeer::Ngterm, words).unwrap();
+    argv.last().unwrap().clone()
+}
+
+impl Remote {
+    /// The split attached to the origin's pane `target`, the origin calls so far forgotten.
+    fn attached(target: Uuid) -> Self {
+        let mut remote = Self::new();
+        remote.script([
+            result(&json!({"ok": true})),
+            Remote::listing(&[remote.origin_pane, target]),
+        ]);
+        remote.request();
+        remote.spawn();
+        remote.runner.calls.lock().unwrap().clear();
+        remote
+    }
+
+    /// The origin lines run after the attach, each as its remote command text.
+    fn origin_lines(&mut self, count: usize) -> Vec<String> {
+        for _ in 0..400 {
+            if self.runner.calls.lock().unwrap().len() >= count {
+                break;
+            }
+            self.fixture.core.remote_tick(Instant::now());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.runner
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|argv| argv.last().unwrap().clone())
+            .collect()
+    }
+}
+
+#[test]
+fn closing_a_remote_split_closes_it_on_the_origin() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    remote.script([result(&json!({"ok": true}))]);
+    let reply = remote
+        .fixture
+        .session(SessionCmd::SplitClose, Some(&wire(remote.row)), args(|_| {}));
+    assert!(reply.ok);
+    assert!(!remote.fixture.store().session(remote.row).unwrap().split.exists);
+    let lines = remote.origin_lines(1);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(
+        lines[0],
+        origin_line(&["session", "split", "close", "--target", "origin-session"])
+    );
+}
+
+#[test]
+fn hiding_a_remote_split_hides_it_on_the_origin() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    remote.script([result(&json!({"ok": true}))]);
+    let reply = remote.fixture.session(
+        SessionCmd::Split,
+        Some(&wire(remote.row)),
+        args(|args| args.mode = Some("off".to_owned())),
+    );
+    assert!(reply.ok);
+    let lines = remote.origin_lines(1);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(
+        lines[0],
+        origin_line(&["session", "split", "visibility", "off", "--target", "origin-session"])
+    );
+}
+
+#[test]
+fn closing_a_remote_split_swapped_here_closes_the_same_pane_on_the_origin() {
+    let target = Uuid::from_u128(2);
+    let mut remote = Remote::attached(target);
+    remote.fixture.core.apply_remote_layout(
+        &PresentationLayout {
+            panes: vec![remote.origin_pane, target],
+            primary: remote.origin_pane,
+            axis: Some("vertical".to_owned()),
+            shown: true,
+        },
+        remote.row,
+    );
+    remote.fixture.store_mut().unwrap().swap_panes(remote.row).unwrap();
+    remote.script([result(&json!({"ok": true})), result(&json!({"ok": true}))]);
+    let reply = remote
+        .fixture
+        .session(SessionCmd::SplitClose, Some(&wire(remote.row)), args(|_| {}));
+    assert!(reply.ok);
+    let lines = remote.origin_lines(2);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(
+        lines[0],
+        origin_line(&["session", "swap", "--target", "origin-session"])
+    );
+    assert_eq!(
+        lines[1],
+        origin_line(&["session", "split", "close", "--target", "origin-session"])
+    );
+}
+
+#[test]
+fn showing_a_hidden_remote_split_shows_it_on_the_origin_with_its_axis() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    remote
+        .fixture
+        .store_mut()
+        .unwrap()
+        .set_split_visibility(remote.row, false, None);
+    remote.script([result(&json!({"ok": true}))]);
+    let reply = remote.fixture.session(
+        SessionCmd::Split,
+        Some(&wire(remote.row)),
+        args(|args| args.axis = Some("horizontal".to_owned())),
+    );
+    assert!(reply.ok);
+    let lines = remote.origin_lines(1);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(
+        lines[0],
+        origin_line(&[
+            "session",
+            "split",
+            "visibility",
+            "on",
+            "--target",
+            "origin-session",
+            "--axis",
+            "horizontal"
+        ])
+    );
+}
+
+#[test]
+fn an_unchanged_or_local_split_sends_nothing_to_an_origin() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    let reply = remote.fixture.session(
+        SessionCmd::Split,
+        Some(&wire(remote.row)),
+        args(|args| args.mode = Some("on".to_owned())),
+    );
+    assert!(reply.ok);
+    let mut fixture = Fixture::new(0);
+    let row = fixture.sessions[0];
+    fixture.store_mut().unwrap().toggle_split(row, None);
+    assert!(
+        fixture
+            .session(SessionCmd::SplitClose, Some(&wire(row)), args(|_| {}))
+            .ok
+    );
+    assert!(remote.origin_lines(1).is_empty());
+    assert_eq!(fixture.core.remote_wake(), None);
+}
+
+#[test]
+fn an_origin_that_refuses_the_close_shows_why_over_the_row() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    let bodies = tempfile::tempdir().unwrap();
+    remote.fixture.core.set_hud_body_dir(bodies.path().to_path_buf());
+    remote.script([result(&json!({"ok": false, "error": "no such session"}))]);
+    let reply = remote
+        .fixture
+        .session(SessionCmd::SplitClose, Some(&wire(remote.row)), args(|_| {}));
+    assert!(reply.ok);
+    remote.origin_lines(1);
+    for _ in 0..400 {
+        remote.fixture.core.remote_tick(Instant::now());
+        if remote.fixture.core.remote_wake() != Some(Duration::from_millis(100)) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let spec = remote
+        .fixture
+        .core
+        .library()
+        .held_session(remote.row)
+        .unwrap()
+        .overlay
+        .effective_hud_spec()
+        .unwrap();
+    assert_eq!(spec.message, "Close Split: no such session");
+}
+
+#[test]
+fn a_split_closed_while_its_origin_split_is_made_closes_that_split_on_the_origin() {
+    let mut remote = Remote::new();
+    remote.script([
+        result(&json!({"ok": true})),
+        Remote::listing(&[remote.origin_pane]),
+        result(&json!({"ok": true})),
+    ]);
+    remote.request();
+    remote.wait_for_listing();
+    let reply = remote
+        .fixture
+        .session(SessionCmd::SplitClose, Some(&wire(remote.row)), args(|_| {}));
+    assert!(reply.ok);
+    let lines = remote.origin_lines(3);
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(
+        lines[2],
+        origin_line(&["session", "split", "close", "--target", "origin-session"])
+    );
+}

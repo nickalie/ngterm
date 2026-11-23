@@ -148,6 +148,8 @@ pub(crate) struct ViewerRuntime {
     pub(crate) relaunch_reads: Vec<super::relaunch::RelaunchRead>,
     /// New viewer panes waiting for an origin split and its live daemon.
     pub(super) split_flows: Vec<super::split::SplitRun>,
+    /// Split changes made here on their way to the origin ([`super::split_mirror`]).
+    pub(super) split_mirrors: Vec<super::split_mirror::MirrorRun>,
     /// Pane spawn requests held behind an earlier origin split in the same row (pane → session).
     pub(super) queued_split_panes: HashMap<Uuid, Uuid>,
     /// Newly bound panes whose cached layouts must be reconsidered after realization (pane → session).
@@ -254,6 +256,7 @@ impl Core {
         self.advance_handed_companions();
         self.advance_end_flows();
         self.advance_remote_splits();
+        self.advance_split_mirrors();
         self.settle_page_endings();
         self.advance_ended_companions(now);
     }
@@ -268,6 +271,7 @@ impl Core {
             || !viewer.handed_companions.is_empty()
             || !viewer.end_flows.is_empty()
             || !viewer.split_flows.is_empty()
+            || !viewer.split_mirrors.is_empty()
             || !viewer.queued_split_panes.is_empty()
             || !viewer.split_layouts.is_empty()
             || !viewer.page_endings.is_empty()

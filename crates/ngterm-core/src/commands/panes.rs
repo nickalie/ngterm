@@ -216,11 +216,16 @@ fn split(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
             args.mode.as_deref().unwrap_or("toggle")
         ))
     })?;
+    let before = store
+        .session(id)
+        .filter(|session| session.split.exists)
+        .map(|session| (session.split.shown, session.split.axis));
     match mode {
         ToggleMode::On => store.set_split_visibility(id, true, axis),
         ToggleMode::Off => store.set_split_visibility(id, false, None),
         ToggleMode::Toggle => store.toggle_split(id, axis),
     }
+    core.mirror_split_visibility(id, before);
     Ok(with_id(id))
 }
 
@@ -228,7 +233,7 @@ fn split(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
 fn close_split(core: &mut Core, target: Option<&str>, window: Option<&str>) -> Outcome {
     let (store, id) = session_store(core, target, window)?;
     if store.session(id).is_some_and(|session| session.split.exists) {
-        store.close_split(id);
+        core.close_split_mirrored(id);
     }
     Ok(with_id(id))
 }

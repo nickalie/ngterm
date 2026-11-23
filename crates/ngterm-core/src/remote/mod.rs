@@ -60,6 +60,7 @@ pub mod remotes;
 pub mod replica_page;
 pub mod respawn;
 mod split;
+pub(crate) mod split_mirror;
 pub mod ssh;
 pub mod tree;
 mod viewer;
