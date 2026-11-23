@@ -209,3 +209,20 @@ fn a_caller_that_keeps_the_spawn_loads_no_job() {
     assert!(starter.jobs.borrow().is_empty());
     assert_eq!(*starter.spawns.borrow(), [namespace.endpoint.directory()]);
 }
+
+#[test]
+fn only_a_server_of_an_earlier_login_found_here_is_asked_to_retire() {
+    let welcome = Welcome {
+        build: "b".to_owned(),
+        capabilities: Vec::new(),
+        pid: 42,
+        error: None,
+        login: Some(100_001),
+        job: None,
+    };
+    assert!(!stays(&welcome, false, None, Some(100_002)));
+    assert!(stays(&welcome, false, Some(42), Some(100_002)), "asked once already");
+    assert!(stays(&welcome, false, None, Some(100_001)), "of this login");
+    assert!(stays(&welcome, false, None, None), "of an unknown login");
+    assert!(stays(&welcome, true, None, Some(100_002)), "started by this call");
+}

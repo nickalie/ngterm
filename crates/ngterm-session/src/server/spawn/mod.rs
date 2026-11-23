@@ -281,7 +281,12 @@ pub fn connect_or_start(endpoint: &Endpoint, hello: &Hello, options: &StartOptio
     loop {
         let connected = of_any_build(endpoint, hello, options)?;
         let pid = connected.welcome.pid;
-        if retired == Some(pid) || !crate::login::is_earlier(connected.welcome.login, options.login) {
+        if stays(
+            &connected.welcome,
+            connected.started_here().is_some(),
+            retired,
+            options.login,
+        ) {
             return Ok(connected);
         }
         // a retired server takes no connection after its decision, so a later look finds the next server; one that
@@ -293,6 +298,12 @@ pub fn connect_or_start(endpoint: &Endpoint, hello: &Hello, options: &StartOptio
         }
         retired = Some(pid);
     }
+}
+
+/// Whether the server of `welcome` is kept rather than asked to retire: it is of this login, was asked once already
+/// (`retired`), or was `started_here`, which a launchd job may do in another login than `own`.
+fn stays(welcome: &Welcome, started_here: bool, retired: Option<u32>, own: Option<i64>) -> bool {
+    retired == Some(welcome.pid) || started_here || !crate::login::is_earlier(welcome.login, own)
 }
 
 /// [`connect_or_start`] without the login check.

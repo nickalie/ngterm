@@ -263,9 +263,12 @@ fn launch(directory: &Path) -> TestResult<Value> {
     Ok(report)
 }
 
-/// How a start from this test process goes: detached, or on Windows from a test run inside a job (a CI runner's),
-/// by breakaway or, where that job refuses it, by WMI.
+/// How a start from this test process goes: detached, as a launchd job on macOS 27 and later, or on Windows from a
+/// test run inside a job (a CI runner's), by breakaway or, where that job refuses it, by WMI.
 fn plain_paths() -> Vec<SpawnPath> {
+    if ngterm_session::server::spawn::job::supported() {
+        return vec![SpawnPath::LaunchdJob];
+    }
     #[cfg(windows)]
     if jobs::current_process_is_in_job() {
         return vec![SpawnPath::Breakaway, SpawnPath::Wmi];
