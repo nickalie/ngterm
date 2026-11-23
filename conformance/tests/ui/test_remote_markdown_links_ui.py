@@ -163,11 +163,12 @@ def test_a_followed_link_shows_its_pictures_from_the_origin_and_goes_forward_and
     remote_origin, remote_viewer, ui_for
 ):
     folder = _folder(remote_origin.instance)
-    # a picture elsewhere in the page's folder, outside the folder of the linked file
-    _picture(folder / "pictures" / "red.png", RED)
-    _picture(folder / "pictures" / "blue.png", BLUE)
+    # pictures resolve in the linked file's folder, not the first page's, and never above it (upstream's
+    # `remoteImageReferences`)
+    _picture(folder / "sub" / "pictures" / "red.png", RED)
+    _picture(folder / "sub" / "pictures" / "blue.png", BLUE)
     guide = folder / "sub" / "guide.md"
-    guide.write_text("![red](../pictures/red.png)\n", encoding="utf-8")
+    guide.write_text("![red](pictures/red.png)\n", encoding="utf-8")
     readme = folder / "README.md"
     _link_page(readme, "sub/guide.md")
     with _presented(remote_origin, remote_viewer, readme, navigation=True) as local:
@@ -185,7 +186,7 @@ def test_a_followed_link_shows_its_pictures_from_the_origin_and_goes_forward_and
         _shows_picture(ui, RED)
 
         # a reload shows the changed file
-        guide.write_text("![blue](../pictures/blue.png)\n", encoding="utf-8")
+        guide.write_text("![blue](pictures/blue.png)\n", encoding="utf-8")
         assert_ok(remote_viewer.request("session.overlay.reload", local))
         _shown(remote_viewer, local, "guide.md", canGoBack=True)
         _shows_picture(ui, BLUE)
