@@ -19,6 +19,7 @@ import com.nickalie.ngterm.core.ffi.PaneMouseButton
 import com.nickalie.ngterm.core.ffi.PaneSendOutcome
 import com.nickalie.ngterm.core.ffi.PaneWheel
 import com.nickalie.ngterm.core.ffi.PaneWheelOutcome
+import com.nickalie.ngterm.core.ffi.RemoteSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -61,6 +62,9 @@ class TerminalInput internal constructor(
     /** Where a finger's sideways swipe goes (the session view's next or previous pane); `null`: a drag only scrolls. */
     internal var swipe: ((forward: Boolean) -> Unit)? = null
 
+    /** Where a tap on a session link goes (the session view opens that session); `null`: a link taps as any cell. */
+    internal var sessionLink: ((RemoteSession) -> Unit)? = null
+
     private var rowCarry = 0f
     private var wheelRows = 0f
     private var wheelColumns = 0f
@@ -69,6 +73,26 @@ class TerminalInput internal constructor(
 
     /** Whether the program takes pointer events: a click and a drag are then the program's. */
     val tracking: Boolean get() = state.pane.mouseTracking()
+
+    /**
+     * A finger's tap at [position]: on a hyperlinked cell whose link names a session its machine lists, that session
+     * goes to [sessionLink]; any other tap does [otherwise].
+     */
+    fun tap(
+        position: Offset,
+        otherwise: () -> Unit,
+    ) {
+        val open = sessionLink
+        val cell = cell(position)
+        if (open == null || cell == null || !state.screen.linked(cell.y.toInt(), cell.x.toInt())) {
+            otherwise()
+            return
+        }
+        scope.launch {
+            val target = state.sessionLink(cell)
+            if (target != null) open(target) else otherwise()
+        }
+    }
 
     /** The cell under [position] (view pixels), kept inside the grid; `null` before the view has a grid. */
     fun cell(position: Offset): CellPoint? {

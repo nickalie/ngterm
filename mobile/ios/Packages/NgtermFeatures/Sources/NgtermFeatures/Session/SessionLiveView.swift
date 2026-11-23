@@ -143,7 +143,8 @@ internal struct SessionLiveView: View {
             machine: session.machine,
             look: look,
             select: select,
-            swipe: move(forward:)
+            swipe: move(forward:),
+            link: openLinked
         )
     }
 
@@ -235,6 +236,10 @@ internal struct SessionLiveView: View {
 
     private func duplicate() {
         model.duplicate(then: actions.open)
+    }
+
+    private func openLinked(_ sessionId: String) {
+        model.openLinked(sessionId, then: actions.open)
     }
 
     private func moveSession(forward: Bool) {

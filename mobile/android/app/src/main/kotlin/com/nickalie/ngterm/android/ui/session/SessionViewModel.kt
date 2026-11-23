@@ -302,6 +302,22 @@ class SessionViewModel(
         }
     }
 
+    /**
+     * Opens [key], the session a session link tapped in the open session names, attaching it first when it is not,
+     * unless the view moved on meanwhile: it then stays attached in the list.
+     */
+    fun openLinked(key: SessionKey) {
+        val at = moves
+        viewModelScope.launch {
+            try {
+                connections.attach(key.machineId, key.sessionId)
+                if (moves == at) view(key)
+            } catch (error: MobileException) {
+                notices.value = error.reason()
+            }
+        }
+    }
+
     /** The [notice] has been shown. */
     fun noticeShown() {
         notices.value = null

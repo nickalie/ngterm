@@ -15,7 +15,8 @@ import com.nickalie.ngterm.core.ffi.PaneSize
  * confirmed first),
  * [onNextSession] and [onPreviousSession] are the keyboard's (`null` with no other session to go to: the chords are
  * then the program's), [onView] is the bar's Show chat and Show terminal, and
- * [onAlone] shows the session's selected pane alone (`true`) or the origin's split again (`false`), from a pane tab.
+ * [onAlone] shows the session's selected pane alone (`true`) or the origin's split again (`false`), from a pane tab;
+ * [onSessionLink] opens the session a session link tapped in a pane names.
  */
 data class SessionViewActions(
     val onBack: (() -> Unit)?,
@@ -31,6 +32,7 @@ data class SessionViewActions(
     val onAlone: (SessionKey, Boolean) -> Unit = { _, _ -> },
     val onChatView: (SessionKey, Boolean) -> Unit = { _, _ -> },
     val onDuplicate: (SessionKey) -> Unit = {},
+    val onSessionLink: (SessionKey) -> Unit = {},
 )
 
 @Composable
@@ -50,6 +52,7 @@ internal fun rememberPaneActions(
             onTakeLead = actions.onTakeLead,
             onDetach = { actions.onDetach(key) },
             onShowTerminal = { actions.onView(it, PaneView.Terminal) },
+            onSessionLink = { actions.onSessionLink(SessionKey(key.machineId, it)) },
         )
     }
 }

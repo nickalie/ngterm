@@ -2,8 +2,9 @@ import UIKit
 
 /// A finger's gestures on a ``TerminalView``, as mobile/android's `terminalGestures` has them.
 ///
-/// - a tap gives the terminal the focus and opens the soft keyboard, and under mouse tracking clicks there; a tap lets
-///   a touch selection go;
+/// - a tap on a session link opens the session it names (``TerminalView/onSessionLink``); any other tap gives the
+///   terminal the focus and opens the soft keyboard, and under mouse tracking clicks there; a tap lets a touch
+///   selection go;
 /// - a double tap selects the word, a triple tap the line, with handles and the edit menu;
 /// - a finger coming down stops a fling;
 /// - a drag scrolls (the pane reports it to a program that asked for the mouse, as wheel turns) and flings on; a drag
@@ -51,8 +52,30 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
     }
 
     /// A tap at `point` at `time` (seconds of the system's uptime).
-    public func tap(at point: CGPoint, time: TimeInterval) {
+    ///
+    /// A single tap on a hyperlinked cell asks the pane for the session its link names, and does the tap's own work
+    /// only when it names none.
+    @discardableResult
+    public func tap(at point: CGPoint, time: TimeInterval) -> Task<Void, Never>? {
         let count = taps.click(at: point, time: time, reach: Self.tapReach)
+        guard count == 1, let open = view.onSessionLink, let cell = view.pointer.cell(at: point),
+            view.screen.isLinked(Int(cell.y), column: Int(cell.x))
+        else {
+            tapOwnWork(count, at: point)
+            return nil
+        }
+        let pane = view.pane
+        return Task { [weak self] in
+            if let target = try? await pane.sessionLink(at: cell) {
+                open(target)
+            } else {
+                self?.tapOwnWork(count, at: point)
+            }
+        }
+    }
+
+    // a tap's own work, its `count` in a run of taps
+    private func tapOwnWork(_ count: Int, at point: CGPoint) {
         let pointer = view.pointer
         let selection = view.selection
         if pointer.tracking {

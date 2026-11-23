@@ -45,11 +45,14 @@ import com.nickalie.ngterm.android.data.FontChoice
 import com.nickalie.ngterm.android.data.PaneFrames
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.TerminalPalette
+import com.nickalie.ngterm.core.ffi.CellPoint
+import com.nickalie.ngterm.core.ffi.PaneColorScheme
 import com.nickalie.ngterm.core.ffi.PaneColors
 import com.nickalie.ngterm.core.ffi.PaneInputException
 import com.nickalie.ngterm.core.ffi.PaneInterface
 import com.nickalie.ngterm.core.ffi.PaneKey
 import com.nickalie.ngterm.core.ffi.PaneSize
+import com.nickalie.ngterm.core.ffi.RemoteSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -181,6 +184,22 @@ class TerminalState(
         }
     }
 
+    /** Gives the pane the app's appearance: [dark] or light, which its terminal reports to programs that ask. */
+    internal fun colorScheme(dark: Boolean) {
+        pane.setColorScheme(if (dark) PaneColorScheme.DARK else PaneColorScheme.LIGHT)
+    }
+
+    /**
+     * The session the session link at [at] names, among the sessions its machine lists; `null` for any other cell, or
+     * a pane with no terminal now.
+     */
+    internal suspend fun sessionLink(at: CellPoint): RemoteSession? =
+        try {
+            pane.sessionLink(at)
+        } catch (_: PaneInputException) {
+            null
+        }
+
     /** Gives the pane [palette] as the colors its terminal starts from. */
     internal fun colors(palette: TerminalPalette) {
         try {
@@ -213,7 +232,8 @@ fun rememberTerminalState(pane: PaneInterface): TerminalState = remember(pane) {
  * method and a hardware keyboard type into it through [keyboard].
  * [focusRequester] lets its host give it the focus (the session view, as the focused pane moves). With [readAloud]
  * TalkBack reads its screen's text; [onSwipe] takes a finger's sideways swipe (next pane: leftward), which otherwise
- * scrolls like any drag.
+ * scrolls like any drag. A tap on a session link (`ngterm://session/<id>`) of a session its machine lists goes to
+ * [onSessionLink] in place of the tap's own work. [dark] is the appearance its terminal reports to programs that ask.
  */
 @Composable
 fun TerminalView(
@@ -225,6 +245,8 @@ fun TerminalView(
     focusRequester: FocusRequester? = null,
     readAloud: Boolean = false,
     onSwipe: ((forward: Boolean) -> Unit)? = null,
+    onSessionLink: ((RemoteSession) -> Unit)? = null,
+    dark: Boolean = NgtermTheme.dark,
 ) {
     val density = LocalDensity.current
     val font = rememberTerminalFont(state.textSize, state.face)
@@ -240,10 +262,12 @@ fun TerminalView(
         input.keyboardRequest = softKeyboard::request
         keyboard.endsCompositionsFor(state, input, selection)
         input.swipe = onSwipe
+        input.sessionLink = onSessionLink
     }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(state) { state.run() }
     LaunchedEffect(state, palette) { state.colors(palette) }
+    LaunchedEffect(state, dark) { state.colorScheme(dark) }
     LaunchedEffect(state, viewSize, font) { gridFor(viewSize, font)?.let(state::resize) }
     val description = stringResource(R.string.terminal_description)
     val spoken = if (readAloud) rememberSpokenText(state) else null

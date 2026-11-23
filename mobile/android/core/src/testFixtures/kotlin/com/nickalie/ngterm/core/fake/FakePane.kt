@@ -6,6 +6,7 @@ import com.nickalie.ngterm.core.ffi.ChatApproval
 import com.nickalie.ngterm.core.ffi.ChatQuestion
 import com.nickalie.ngterm.core.ffi.NoHandle
 import com.nickalie.ngterm.core.ffi.Pane
+import com.nickalie.ngterm.core.ffi.PaneColorScheme
 import com.nickalie.ngterm.core.ffi.PaneColors
 import com.nickalie.ngterm.core.ffi.PaneInputException
 import com.nickalie.ngterm.core.ffi.PaneKey
@@ -15,6 +16,7 @@ import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.PaneWheel
 import com.nickalie.ngterm.core.ffi.PaneWheelOutcome
 import com.nickalie.ngterm.core.ffi.QuestionAnswer
+import com.nickalie.ngterm.core.ffi.RemoteSession
 import kotlinx.coroutines.CompletableDeferred
 import java.util.Collections
 
@@ -86,7 +88,8 @@ sealed interface FakeAction {
 /**
  * A [Pane] with no native library behind it, for the views' tests: [frame] answers with what [frames] packs (a
  * [RowBufferWriter]'s bytes) for the seq asked, and throws [PaneInputException.Closed] while it is `null`; [resize]
- * and [setColors] are recorded in [sizes] and [colors], and each seq asked in [asked]. As the real terminal wakes
+ * and [setColors] are recorded in [sizes] and [colors], [setColorScheme] in [colorSchemes], and each seq asked in
+ * [asked]. [sessionLink] answers the session [links] holds for the cell. As the real terminal wakes
  * (and the core reports `PaneDirty`) after a resize, new colors or a selection change, those call [onWake]. Every
  * method may be called from any thread.
  *
@@ -122,6 +125,12 @@ open class FakePane(
     /** The colors [setColors] was given, in order. */
     val colors: MutableList<PaneColors> = Collections.synchronizedList(mutableListOf())
 
+    /** The appearances [setColorScheme] was given, in order. */
+    val colorSchemes: MutableList<PaneColorScheme> = Collections.synchronizedList(mutableListOf())
+
+    /** The session each cell's session link names, for [sessionLink]. */
+    @Volatile var links: Map<CellPoint, RemoteSession> = emptyMap()
+
     /** The seqs [frame] was asked since, in order. */
     val asked: MutableList<ULong> = Collections.synchronizedList(mutableListOf())
 
@@ -155,6 +164,15 @@ open class FakePane(
     override fun setColors(colors: PaneColors) {
         this.colors += colors
         onWake?.invoke()
+    }
+
+    override fun setColorScheme(scheme: PaneColorScheme) {
+        colorSchemes += scheme
+    }
+
+    override suspend fun sessionLink(at: CellPoint): RemoteSession? {
+        if (frames == null) throw PaneInputException.Closed()
+        return links[at]
     }
 
     override fun frame(sinceSeq: ULong): ByteArray {

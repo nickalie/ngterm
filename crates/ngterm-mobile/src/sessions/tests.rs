@@ -1114,3 +1114,50 @@ fn the_log_names_the_cli_a_listing_asks_and_why_an_answer_gave_nothing() {
     assert_eq!(failure_class(&result(-1, "the connection was lost")), "lost");
     assert_eq!(failure_class(&result(127, "command not found")), "exit-status");
 }
+
+/// A tapped session link resolves among the sessions the app that lists the tapped pane's session lists: exactly
+/// ngterm's scheme, or agterm's from an agterm origin's pane; an unknown id, a page row or any other link selects
+/// nothing.
+#[test]
+fn a_session_link_resolves_to_a_listed_session_of_the_tapped_panes_app() {
+    let link = |scheme: &str, id: &str| format!("{scheme}://session/{id}");
+    let mut own = app_tree(RemotePeer::Ngterm, &[PARENT, COMPANION]);
+    own.sessions
+        .push(app_tree(RemotePeer::Ngterm, &[PAGE]).sessions.remove(0));
+    own.sessions[2].content = Some("page".to_owned());
+    own.sessions[2].panes.clear();
+    let both = ControlRemoteTree {
+        beside: Some(Box::new(app_tree(RemotePeer::Agterm, &[CREATED]))),
+        ..own
+    };
+
+    let target = session_link_target(&both, PARENT, &link("ngterm", COMPANION)).expect("a listed session");
+    assert_eq!(
+        (target.id.as_str(), target.peer),
+        (COMPANION, Some(crate::peer::PeerKind::Ngterm))
+    );
+    let lower = link("NGTERM", &COMPANION.to_ascii_lowercase());
+    assert_eq!(
+        session_link_target(&both, PARENT, &lower).map(|found| found.id),
+        Some(COMPANION.to_owned())
+    );
+    assert_eq!(
+        session_link_target(&both, CREATED, &link("agterm", CREATED)).map(|found| found.peer),
+        Some(Some(crate::peer::PeerKind::Agterm)),
+        "an agterm origin's pane reads agterm's links"
+    );
+
+    for (from, raw) in [
+        (PARENT, link("agterm", COMPANION)),
+        (PARENT, link("ngterm", CREATED)),
+        (CREATED, link("ngterm", PARENT)),
+        (PARENT, link("ngterm", PAGE)),
+        (PARENT, link("ngterm", "00000000-0000-0000-0000-0000000000FF")),
+        (PARENT, format!("{}/", link("ngterm", COMPANION))),
+        (PARENT, link("ngterm", &COMPANION.replace('-', ""))),
+        (PARENT, format!("https://session/{COMPANION}")),
+        ("00000000-0000-0000-0000-0000000000FE", link("ngterm", PARENT)),
+    ] {
+        assert_eq!(session_link_target(&both, from, &raw), None, "{from} {raw}");
+    }
+}

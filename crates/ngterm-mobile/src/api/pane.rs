@@ -12,15 +12,15 @@
 //! [`Pane::answer_question`]) are the exception: each takes the lead, waits for the screen to settle and checks it
 //! before any key goes, so it runs on the actor ([`crate::chat::input`]) and the call waits for its outcome.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio::sync::{mpsc, oneshot};
 
 use ngterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
 use ngterm_term::{
-    ClipboardLocation, GridPoint, GridSize, KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Paste,
-    PasteSource, Rgb, SelectionText, ThemeColors, Wake, Wheel, WheelInput,
+    ClipboardLocation, ColorScheme, GridPoint, GridSize, KeyInput, ModSides, MouseAction, MouseButton, MouseInput,
+    Paste, PasteSource, Rgb, SelectionText, ThemeColors, Wake, Wheel, WheelInput,
 };
 
 use crate::actor::Command;
@@ -33,6 +33,7 @@ use crate::chat::matchers::left_arrow_backgrounds;
 use crate::chat::{ChatApproval, ChatQuestion};
 use crate::note;
 use crate::pane::PaneRef;
+use crate::sessions::RemoteSession;
 
 #[cfg(test)]
 #[path = "pane_tests.rs"]
@@ -104,6 +105,23 @@ impl TryFrom<&PaneColors> for ThemeColors {
             cursor: colors.cursor.map(rgb),
             palette: (0..=u8::MAX).zip(colors.palette.iter().copied().map(rgb)).collect(),
         })
+    }
+}
+
+/// The appearance the app shows, which a pane's terminal answers a program's color scheme query (`CSI ? 996 n`) with
+/// and reports to a program that asked for reports (mode 2031).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PaneColorScheme {
+    Light,
+    Dark,
+}
+
+impl From<PaneColorScheme> for ColorScheme {
+    fn from(scheme: PaneColorScheme) -> Self {
+        match scheme {
+            PaneColorScheme::Light => Self::Light,
+            PaneColorScheme::Dark => Self::Dark,
+        }
     }
 }
 
@@ -283,6 +301,8 @@ pub(crate) struct PaneSlot {
     size: Mutex<GridSize>,
     /// The theme the view gave ([`Pane::set_colors`]), which every terminal put in place starts from.
     colors: Mutex<Option<ThemeColors>>,
+    /// The app's appearance ([`Pane::set_color_scheme`]): dark when set. Every terminal put in place starts on it.
+    dark: AtomicBool,
     /// Tells the actor the view gave a grid while the slot held no terminal: a pane waiting for one attaches.
     sized: Wake,
     /// How the last input the view gave was delivered ([`Delivery`]), so the log says each change once.
@@ -333,6 +353,7 @@ impl std::fmt::Debug for PaneSlot {
             .field("terminal", &self.terminal)
             .field("size", &self.size)
             .field("colors", &self.colors)
+            .field("dark", &self.dark)
             .finish_non_exhaustive()
     }
 }
@@ -344,6 +365,7 @@ impl PaneSlot {
             terminal: Mutex::new(None),
             size: Mutex::new(size),
             colors: Mutex::new(None),
+            dark: AtomicBool::new(false),
             sized,
             delivery: AtomicU8::new(0),
         }
@@ -388,6 +410,7 @@ impl PaneSlot {
             // the terminal keeps its built-in colors when the library refuses these, as it would refuse them again
             let _ = terminal.set_colors(colors);
         }
+        terminal.set_color_scheme(self.color_scheme());
         *current = Some(terminal);
     }
 
@@ -398,6 +421,24 @@ impl PaneSlot {
         match lock(&self.terminal).as_ref() {
             Some(terminal) => Ok(terminal.set_colors(colors)?),
             None => Ok(()),
+        }
+    }
+
+    /// The app's appearance, which a terminal built for the pane starts on.
+    pub(crate) fn color_scheme(&self) -> ColorScheme {
+        if self.dark.load(Ordering::Acquire) {
+            ColorScheme::Dark
+        } else {
+            ColorScheme::Light
+        }
+    }
+
+    /// Stores the app's appearance and gives it to the current terminal, in the order [`Self::set_colors`] keeps.
+    fn set_color_scheme(&self, scheme: ColorScheme) {
+        let current = lock(&self.terminal);
+        self.dark.store(scheme == ColorScheme::Dark, Ordering::Release);
+        if let Some(terminal) = current.as_ref() {
+            terminal.set_color_scheme(scheme);
         }
     }
 
@@ -555,6 +596,28 @@ impl Pane {
     )]
     pub fn set_colors(&self, colors: PaneColors) -> Result<(), PaneInputError> {
         self.slot.set_colors(&ThemeColors::try_from(&colors)?)
+    }
+
+    /// The app's appearance, light or dark, kept for every later attach: the terminal answers a program's color scheme
+    /// query with it, and a program that asked for reports (mode 2031) gets one when it changes.
+    pub fn set_color_scheme(&self, scheme: PaneColorScheme) {
+        self.slot.set_color_scheme(scheme.into());
+    }
+
+    /// The listed session the session link at `at` names: an OSC 8 hyperlink of exactly `ngterm://session/<id>`, or
+    /// `agterm://session/<id>` in a pane of an agterm origin's session, that the machine's last listing holds among the
+    /// sessions the app lists ([`crate::sessions::session_link_target`]). What a tap on the link opens; `None` for any
+    /// other cell.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneInputError::Closed`] for a pane with no terminal now.
+    pub async fn session_link(&self, at: CellPoint) -> Result<Option<RemoteSession>, PaneInputError> {
+        let Some(raw) = self.slot.current()?.hyperlink(at.into()) else {
+            return Ok(None);
+        };
+        self.ask(|pane, _, reply| Command::SessionLink { pane, raw, reply })
+            .await
     }
 
     /// Sends a key, encoded for the program's keyboard modes; whether anything was sent (a lone modifier sends

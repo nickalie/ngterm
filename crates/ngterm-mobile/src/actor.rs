@@ -37,6 +37,8 @@ mod clipboard_tests;
 #[cfg(test)]
 mod input_tests;
 #[cfg(test)]
+mod link_tests;
+#[cfg(test)]
 mod log_tests;
 #[cfg(test)]
 mod pane_tests;
@@ -186,6 +188,12 @@ pub(crate) enum Command {
         pane: PaneRef,
         slot: Arc<PaneSlot>,
         reply: oneshot::Sender<Result<Vec<String>, PaneInputError>>,
+    },
+    /// The listed session a session link tapped in a shown pane names ([`Pane::session_link`]).
+    SessionLink {
+        pane: PaneRef,
+        raw: String,
+        reply: oneshot::Sender<Result<Option<RemoteSession>, PaneInputError>>,
     },
     NetworkChanged,
     Suspend,
@@ -471,6 +479,9 @@ async fn run<T: Transport>(
                     .presentations
                     .borrow_mut()
                     .answer_ask(&machine_id, &session_id, &ask_id, reply);
+            }
+            Command::SessionLink { pane, raw, reply } => {
+                let _ = reply.send(Ok(session_link(&state, &pane, &raw)));
             }
             Command::NetworkChanged => network_changed(&state),
             Command::Suspend => suspend(&state).await,
@@ -1163,6 +1174,25 @@ async fn tick<T: Transport>(state: Weak<State<T>>) {
 }
 
 /// The pane commands.
+/// The listed session `raw`, a link tapped in `pane`, names in its machine's kept listing.
+fn session_link<T: Transport>(state: &State<T>, pane: &PaneRef, raw: &str) -> Option<RemoteSession> {
+    let target = state
+        .listings
+        .borrow()
+        .get(&pane.machine_id)
+        .and_then(|kept| kept.tree.as_ref())
+        .and_then(|tree| sessions::session_link_target(tree, &pane.session_id, raw));
+    note!(
+        INFO,
+        tag::PANE,
+        "session link tapped",
+        found = target.is_some(),
+        session = pane.session_id.as_str(),
+        pane = pane.pane_id.as_str()
+    );
+    target
+}
+
 fn pane_command<T: Transport>(state: &Rc<State<T>>, command: Command) {
     match command {
         Command::ShowPane {

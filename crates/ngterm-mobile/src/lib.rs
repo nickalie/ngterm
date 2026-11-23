@@ -62,8 +62,8 @@ pub mod transport;
 
 pub use api::{
     CellPoint, EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileError, MobileEvent, Pane,
-    PaneColors, PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton, PaneSendOutcome,
-    PaneSize, PaneWheel, PaneWheelOutcome, UploadProgress, VaultError,
+    PaneColorScheme, PaneColors, PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton,
+    PaneSendOutcome, PaneSize, PaneWheel, PaneWheelOutcome, UploadProgress, VaultError,
 };
 pub use applog::{AppLog, LogError, LogLevel, app_log};
 pub use chat::input::{AgentInputOutcome, QuestionAnswer};

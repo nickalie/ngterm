@@ -13,7 +13,7 @@ import SwiftUI
 ///
 /// The selected one (`isFocused`) draws its cursor as it is, the others' go hollow, and only it says its cursor's
 /// line to VoiceOver. A touch on it, or its taking the focus, selects it; `swipe` takes a finger's sideways swipe (a
-/// phone's next or previous pane).
+/// phone's next or previous pane), and `link` a tap on a session link.
 internal struct PaneSlot: View {
     /// What a slot does, the same for every slot of a session.
     internal struct Actions {
@@ -23,10 +23,12 @@ internal struct PaneSlot: View {
         internal let look: TerminalLook
         internal let select: @MainActor (String) -> Void
         internal let swipe: (@MainActor (Bool) -> Void)?
+        /// Opens the session of the same machine a session link tapped in a pane names, by its id.
+        internal var link: (@MainActor (String) -> Void)?
 
         /// The same, a sideways drag only scrolling: one pane on screen of many is all a swipe moves between.
         internal var withoutSwipe: Self {
-            Self(model: model, keyboard: keyboard, machine: machine, look: look, select: select, swipe: nil)
+            Self(model: model, keyboard: keyboard, machine: machine, look: look, select: select, swipe: nil, link: link)
         }
     }
 
@@ -124,6 +126,10 @@ internal struct PaneSlot: View {
         let paneId = spot.id
         let select = actions.select
         let look = actions.look
+        var opensLink: (@MainActor (RemoteSession) -> Void)?
+        if let link = actions.link {
+            opensLink = { link($0.id) }
+        }
         return TerminalViewRepresentable(
             pane: shown.client,
             feed: shown.feed,
@@ -135,6 +141,7 @@ internal struct PaneSlot: View {
         .keyboard(actions.keyboard)
         .onSelect { select(paneId) }
         .onSwipe(isChat ? nil : actions.swipe)
+        .onSessionLink(opensLink)
         .readsAloud(!isChat && isFocused && spot.cover?.veils != true)
         .id(spot.ref)
     }

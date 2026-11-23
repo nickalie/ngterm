@@ -23,6 +23,8 @@
         public static let strikethrough: UInt16 = 64
         /// Attribute: overlined.
         public static let overline: UInt16 = 128
+        /// Attribute: part of a hyperlink.
+        public static let hyperlink: UInt16 = 256
 
         private static let wideColumns = 2
 

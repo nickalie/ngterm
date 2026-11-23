@@ -27,8 +27,9 @@ private val HandleReach = 24.dp
  * - a finger: a drag scrolls (the pane reports it to a program that asked for the mouse, as wheel turns) and flings
  *   on; a long press selects the word with handles and a toolbar, and a drag from it extends the selection; a drag
  *   on a handle ([handles]) moves that end; a sideways swipe goes to [TerminalInput.swipe] when the view has one;
- *   two fingers pinch the text size; a tap clicks under mouse tracking and
- *   otherwise lets a touch selection go, and unless it let one go it opens the soft keyboard; a touch the system
+ *   two fingers pinch the text size; a tap on a session link opens that session ([TerminalInput.tap]), any other
+ *   tap clicks under mouse tracking and otherwise lets a touch selection go, and unless it let one go it opens the
+ *   soft keyboard; a touch the system
  *   cancels (a consumed release) does none of these, and a canceled drag does not fling;
  * - a mouse or trackpad: a button gives the terminal the focus, then as [terminalMouse] says.
  */
@@ -84,14 +85,16 @@ private suspend fun AwaitPointerEventScope.touchGesture(
         }
 
         Touch.Tap -> {
-            if (input.tracking) {
-                input.mouse(PaneMouseAction.PRESS, PaneMouseButton.LEFT, 0u, down.position)
-                input.mouse(PaneMouseAction.RELEASE, PaneMouseButton.LEFT, 0u, down.position)
-                input.keyboardRequest(true)
-            } else if (selection.touchSelection) {
-                selection.clearSelection()
-            } else {
-                input.keyboardRequest(true)
+            input.tap(down.position) {
+                if (input.tracking) {
+                    input.mouse(PaneMouseAction.PRESS, PaneMouseButton.LEFT, 0u, down.position)
+                    input.mouse(PaneMouseAction.RELEASE, PaneMouseButton.LEFT, 0u, down.position)
+                    input.keyboardRequest(true)
+                } else if (selection.touchSelection) {
+                    selection.clearSelection()
+                } else {
+                    input.keyboardRequest(true)
+                }
             }
         }
 

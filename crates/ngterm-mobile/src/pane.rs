@@ -659,6 +659,7 @@ impl<C: Connection> Panes<C> {
             let _ = wake_notes.send(Note::News(key));
         });
         let mut config = config(built, wake);
+        config.color_scheme = shown.slot.color_scheme();
         config.attach_bridge = ngterm_core::attach_bridge::launch_nonce(&shown.endpoint, &lead).map(str::to_owned);
         // a Windows origin's sshd runs the attach in a pseudoconsole, which drops the other encodings
         config.legacy_keys = ngterm_core::remote::origin::needs_legacy_keys(&shown.endpoint);
