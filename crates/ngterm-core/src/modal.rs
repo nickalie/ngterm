@@ -266,6 +266,7 @@ impl Modals {
             controller.recent.pop_front();
         }
         self.session_pick_resolved(&pending.id, &outcome);
+        self.drain_replica_picks(window);
     }
 
     /// The live picker `id` and its window, looked up by its globally unique id (upstream's `livePick`).
@@ -356,6 +357,7 @@ impl Modals {
         if self.ask_owners.get(&ask.id) == Some(&AskOwner::Window(window)) {
             self.retain_ask(&ask.id, outcome, window);
         }
+        self.drain_replica_picks(window);
     }
 
     /// Indexes an opened ask (upstream's `register`); an id already live or retained is refused.

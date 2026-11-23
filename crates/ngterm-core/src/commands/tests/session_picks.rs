@@ -667,3 +667,102 @@ fn a_replica_is_refused_in_a_held_slot_and_dismissed_without_an_answer() {
         "a dismissed or dropped replica is never answered"
     );
 }
+
+/// Upstream's `openReplica` and `drain` on a headless origin's row: a pick handed over while the window is busy waits,
+/// pending, behind it and shows once the slot frees, a GUI ask's as well as a pick's.
+#[test]
+fn a_headless_origins_replica_pick_queues_behind_a_busy_window() {
+    let mut viewer = super::viewer::headless_viewer_built(false);
+    viewer.connect_listing(&PICK_KINDS, &json!({}));
+    let window = viewer.fixture.window;
+    viewer.frame(pick_request("K1", 4));
+    viewer.frame(pick_request("K2", 4));
+    viewer.frame(pick_request("K3", 4));
+    assert!(viewer.sent("pick.rejected").is_empty(), "a busy window queues them");
+    assert_eq!(slot_pick(&viewer.fixture, window), Some("K1".to_owned()));
+    assert_eq!(result(&mut viewer.fixture, "K2"), json!({"result": "pending"}));
+
+    viewer.fixture.core.resolve_pick(window, "K1", picked_beta());
+    viewer.fixture.core.commit();
+    assert_eq!(
+        slot_pick(&viewer.fixture, window),
+        Some("K2".to_owned()),
+        "the oldest goes next"
+    );
+    assert_eq!(viewer.node()["pick"], json!({"id": "K2", "replica": true}));
+
+    // the queued one is cancelled here: the origin hears it, and its outcome stays readable
+    assert!(cancel(&mut viewer.fixture, "K3").ok);
+    assert_eq!(
+        viewer.sent("pick.resolve").last().unwrap()["pick"],
+        json!({"id": "K3", "owner": 4})
+    );
+    assert_eq!(result(&mut viewer.fixture, "K3"), json!({"result": "cancelled"}));
+
+    // the origin's dismissal and the stream's loss take a queued one away unanswered
+    viewer.frame(pick_request("K4", 4));
+    viewer.frame(json!({"kind": "pick.dismiss", "pick": {"id": "K4", "owner": 4}}));
+    viewer.frame(pick_request("K5", 4));
+    let answered = viewer.sent("pick.resolve").len();
+    let key = viewer.link().0.borrow().key.unwrap();
+    viewer.fixture.core.viewer_closed(key, "exit 255");
+    viewer.fixture.core.commit();
+    assert_eq!(slot_pick(&viewer.fixture, window), None);
+    assert_eq!(
+        viewer.sent("pick.resolve").len(),
+        answered,
+        "nothing dropped is answered"
+    );
+    assert_eq!(viewer.node().get("pick"), None);
+}
+
+/// A window's GUI ask frees the slot for a headless origin's queued replica, and a closing window detaches what it
+/// queued without answering.
+#[test]
+fn a_queued_replica_follows_a_window_ask_and_leaves_with_its_window() {
+    let mut viewer = super::viewer::headless_viewer_built(false);
+    viewer.connect_listing(&PICK_KINDS, &json!({}));
+    let window = viewer.fixture.window;
+    let ask = viewer.fixture.send(
+        Command::Ask(AskCmd::Open),
+        None,
+        args(|a| {
+            a.title = Some("t".to_owned());
+            a.style = Some("gui".to_owned());
+            a.buttons = Some(vec![AskButton {
+                id: "ok".to_owned(),
+                label: "OK".to_owned(),
+                hotkey: None,
+            }]);
+        }),
+    );
+    assert!(ask.ok, "{ask:?}");
+    viewer.frame(pick_request("K1", 4));
+    assert!(viewer.sent("pick.rejected").is_empty());
+    assert_eq!(slot_pick(&viewer.fixture, window), None);
+    let cancelled = ngterm_proto::ControlAskResult::outcome(ngterm_proto::ControlAskOutcome::Cancelled);
+    viewer.fixture.core.modals.resolve_window_ask(window, cancelled);
+    assert_eq!(slot_pick(&viewer.fixture, window), Some("K1".to_owned()));
+
+    viewer.frame(pick_request("K2", 4));
+    viewer.fixture.core.modals.unregister(window);
+    viewer.fixture.core.commit();
+    assert!(
+        viewer.sent("pick.resolve").is_empty(),
+        "a closing window answers nothing"
+    );
+    assert_eq!(viewer.fixture.core.modals.session_picks.result("K2"), None);
+}
+
+/// A row from an origin with a screen keeps the refusal: a busy window hands the replica back.
+#[test]
+fn a_desktop_origins_replica_pick_is_refused_by_a_busy_window() {
+    let mut viewer = replica_viewer();
+    viewer.frame(pick_request("K1", 4));
+    viewer.frame(pick_request("K2", 4));
+    assert_eq!(
+        viewer.sent("pick.rejected").last().unwrap()["pick"],
+        json!({"id": "K2", "owner": 4})
+    );
+    assert_eq!(viewer.fixture.core.modals.session_picks.result("K2"), None);
+}

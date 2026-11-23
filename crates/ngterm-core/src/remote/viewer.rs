@@ -667,8 +667,9 @@ impl Core {
     // MARK: - replica asks
 
     /// Shows an ask the origin handed over (upstream's `showReplicaAsk` and `presentReplicaAsk`): over the mapped pane or
-    /// the session, a GUI one only on a target shown on screen, as the local rule, with its form and cancel role and a
-    /// draft of its own here. False when it cannot be shown, which the caller reports as a refusal.
+    /// the session, a GUI one only on a target shown on screen, as the local rule, unless the origin is headless and has
+    /// no screen to take it back to: there it waits hidden for its row. It carries its form and cancel role and a draft
+    /// of its own here. False when it cannot be shown, which the caller reports as a refusal.
     fn show_replica_ask(&mut self, ask: &PresentationAsk, session: Uuid) -> bool {
         let Some(window) = self.library().window_holding_session(session) else {
             return false;
@@ -697,7 +698,10 @@ impl Core {
         let shown = store.selected_session_id() == Some(session)
             && self.zoom_target(window).is_none()
             && self.dashboard(window).is_none();
-        if ask.style == AskStyle::Gui && !shown {
+        let headless = found
+            .remote_presentation()
+            .is_some_and(|state| state.binding.origin_headless);
+        if ask.style == AskStyle::Gui && !shown && !headless {
             return false;
         }
         let pending = PendingAsk {

@@ -227,15 +227,20 @@ impl Core {
     // MARK: - the viewer
 
     /// Shows a pick `session`'s origin handed over in the window holding the attached row (upstream's
-    /// `showReplicaPick`). False when it cannot be shown, which the caller reports as a refusal.
+    /// `showReplicaPick`). A busy window refuses it, unless the origin is headless and has no screen to take it back
+    /// to: there it waits. False when it cannot be shown, which the caller reports as a refusal.
     pub(crate) fn show_replica_pick(&mut self, request: &PresentationPick, session: Uuid) -> bool {
         let Some(window) = self.library().window_holding_session(session) else {
             return false;
         };
-        let attached = self
+        let Some(headless) = self
             .presented_session(session)
-            .is_some_and(|found| found.remote_presentation().is_some());
-        if !attached || !self.modals.open_replica_pick(request, session, window) {
+            .and_then(|found| found.remote_presentation())
+            .map(|state| state.binding.origin_headless)
+        else {
+            return false;
+        };
+        if (!headless && self.modal_pending(window)) || !self.modals.open_replica_pick(request, session, window) {
             return false;
         }
         if request.follow == Some(true) {

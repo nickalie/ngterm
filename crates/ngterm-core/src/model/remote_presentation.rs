@@ -38,6 +38,9 @@ pub struct RemoteBinding {
     pub presentation_version: Option<i64>,
     /// `None` for a binding built without one, which can then not be attached again.
     pub origin: Option<RemoteOrigin>,
+    /// An origin with no screen (`live tree`'s `headless`), which holds what a viewer refuses instead of drawing it
+    /// (upstream's `originHeadless`): such a row's GUI ask waits hidden and its pick queues behind a busy window.
+    pub origin_headless: bool,
     local_by_remote: HashMap<Uuid, Uuid>,
     daemons_by_local: HashMap<Uuid, String>,
 }
@@ -72,6 +75,7 @@ impl RemoteBinding {
             catalog_owned: false,
             presentation_version,
             origin,
+            origin_headless: false,
             local_by_remote,
             daemons_by_local,
         }

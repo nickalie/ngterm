@@ -70,6 +70,8 @@ pub struct SessionPicks {
     entries: HashMap<String, Entry>,
     retained: VecDeque<Retained>,
     replicas: HashMap<String, Replica>,
+    /// Replicas waiting, oldest first, for their window's modal slot.
+    queued: Vec<(PresentationPick, Replica)>,
     dismissals: Vec<(Uuid, PresentationPickRef)>,
     answers: Vec<(Uuid, PresentationPickAnswer)>,
 }
@@ -77,6 +79,13 @@ pub struct SessionPicks {
 impl SessionPicks {
     fn entry_of(&self, session: Uuid) -> Option<(&String, &Entry)> {
         self.entries.iter().find(|(_, entry)| entry.session == session)
+    }
+
+    fn queued(&self, id: &str) -> Option<&Replica> {
+        self.queued
+            .iter()
+            .find(|(request, _)| request.id == id)
+            .map(|(_, replica)| replica)
     }
 
     /// Where `session`'s pick in flight is drawn; `None` when it has none.
@@ -174,10 +183,10 @@ impl SessionPicks {
         })
     }
 
-    /// Pick `id`'s outcome: pending while booked, then the retained answer.
+    /// Pick `id`'s outcome: pending while booked or queued, then the retained answer.
     #[must_use]
     pub fn result(&self, id: &str) -> Option<ControlPickResult> {
-        if self.entries.contains_key(id) {
+        if self.entries.contains_key(id) || self.queued(id).is_some() {
             return Some(ControlPickResult::outcome(ControlPickOutcome::Pending));
         }
         self.retained
@@ -190,6 +199,9 @@ impl SessionPicks {
     /// The window pick `id` was opened for, booked or retained; `None` for an unknown id or one with no window.
     #[must_use]
     pub fn window_of(&self, id: &str) -> Option<Uuid> {
+        if let Some(waiting) = self.queued(id) {
+            return Some(waiting.window);
+        }
         match self.entries.get(id) {
             Some(entry) => entry.window,
             None => self
@@ -215,7 +227,14 @@ impl SessionPicks {
         self.replicas
             .iter()
             .find(|(_, replica)| replica.session == session)
-            .map(|(id, _)| ControlSessionPick {
+            .map(|(id, _)| id)
+            .or_else(|| {
+                self.queued
+                    .iter()
+                    .find(|(_, replica)| replica.session == session)
+                    .map(|(request, _)| &request.id)
+            })
+            .map(|id| ControlSessionPick {
                 id: id.clone(),
                 remote: None,
                 replica: Some(true),
@@ -229,6 +248,7 @@ impl SessionPicks {
             .values()
             .map(|entry| entry.session)
             .chain(self.replicas.values().map(|replica| replica.session))
+            .chain(self.queued.iter().map(|(_, replica)| replica.session))
             .collect();
         sessions.sort_unstable();
         sessions.dedup();
@@ -256,14 +276,19 @@ impl SessionPicks {
         }
     }
 
-    /// Detaches the replicas shown in `window` without answering, before its slot is cancelled: the origin takes them
-    /// back when the window's streams end.
+    /// Detaches the replicas shown or queued in `window` without answering, before its slot is cancelled: the origin
+    /// takes them back when the window's streams end.
     fn window_closing(&mut self, window: Uuid) {
+        self.queued.retain(|(_, replica)| replica.window != window);
         self.replicas.retain(|_, replica| replica.window != window);
     }
 
     fn finish(&mut self, id: &str, result: ControlPickResult) {
         let window = self.entries.remove(id).and_then(|entry| entry.window);
+        self.retain(id, result, window);
+    }
+
+    fn retain(&mut self, id: &str, result: ControlPickResult, window: Option<Uuid>) {
         self.retained.retain(|retained| retained.id != id);
         self.retained.push_back(Retained {
             id: id.to_owned(),
@@ -306,6 +331,21 @@ impl Modals {
     /// Ends pick `id` from this machine: its presenter is told to take it down, a local one is cancelled in its window.
     /// False for an id the book never held; a retained one is a successful no-op.
     pub(crate) fn cancel_session_pick(&mut self, id: &str) -> bool {
+        if let Some(index) = self
+            .session_picks
+            .queued
+            .iter()
+            .position(|(request, _)| request.id == id)
+        {
+            let (_, waiting) = self.session_picks.queued.remove(index);
+            let cancelled = ControlPickResult::outcome(ControlPickOutcome::Cancelled);
+            self.session_picks.retain(id, cancelled.clone(), Some(waiting.window));
+            self.session_picks.answers.push((
+                waiting.session,
+                PresentationPickAnswer::new(id, waiting.owner, &cancelled),
+            ));
+            return true;
+        }
         let Some(entry) = self.session_picks.entries.get(id) else {
             return self.session_picks.result(id).is_some();
         };
@@ -398,26 +438,51 @@ impl Modals {
         self.drop_replica_picks(session);
     }
 
-    /// Shows the pick an origin handed over in window `window`'s slot; false for an id this machine already holds or a
-    /// slot already held.
+    /// Shows the pick an origin handed over in window `window`'s slot, or queues it there until the slot frees
+    /// (upstream's `openReplica`); false only for an id this machine already holds.
     pub(crate) fn open_replica_pick(&mut self, request: &PresentationPick, session: Uuid, window: Uuid) -> bool {
-        if self.session_picks.replicas.contains_key(&request.id) || self.open_pick(window, request.pending()).is_err() {
+        if self.session_picks.replicas.contains_key(&request.id) || self.session_picks.queued(&request.id).is_some() {
             return false;
         }
-        self.session_picks.replicas.insert(
-            request.id.clone(),
-            Replica {
-                session,
-                owner: request.owner,
-                window,
-            },
-        );
+        let replica = Replica {
+            session,
+            owner: request.owner,
+            window,
+        };
+        if self.open_pick(window, request.pending()).is_err() {
+            self.session_picks.queued.push((request.clone(), replica));
+            return true;
+        }
+        self.session_picks.replicas.insert(request.id.clone(), replica);
         true
+    }
+
+    /// Shows the oldest replica queued for window `window` once its modal slot is free (upstream's `drain`).
+    pub(super) fn drain_replica_picks(&mut self, window: Uuid) {
+        let Some(index) = self
+            .session_picks
+            .queued
+            .iter()
+            .position(|(_, replica)| replica.window == window)
+        else {
+            return;
+        };
+        if self
+            .open_pick(window, self.session_picks.queued[index].0.pending())
+            .is_err()
+        {
+            return;
+        }
+        let (request, replica) = self.session_picks.queued.remove(index);
+        self.session_picks.replicas.insert(request.id, replica);
     }
 
     /// Takes the replica `reference` names down without answering, once its origin ended the pick. One under another
     /// owner, or no longer shown, changes nothing.
     pub(crate) fn dismiss_replica_pick(&mut self, reference: &PresentationPickRef, session: Uuid) {
+        self.session_picks.queued.retain(|(request, replica)| {
+            request.id != reference.id || replica.session != session || replica.owner != reference.owner
+        });
         let matches = self
             .session_picks
             .replicas
@@ -431,6 +496,9 @@ impl Modals {
 
     /// Takes down `session`'s replicas without answering: its stream is gone, and the origin takes the pick back.
     pub(crate) fn drop_replica_picks(&mut self, session: Uuid) {
+        self.session_picks
+            .queued
+            .retain(|(_, replica)| replica.session != session);
         let shown: Vec<(String, Uuid)> = self
             .session_picks
             .replicas

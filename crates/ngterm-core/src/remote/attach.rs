@@ -281,10 +281,9 @@ impl Core {
             session_name: remote.name.clone(),
         };
         let identities: Vec<Uuid> = daemons.keys().copied().collect();
-        store.bind_remote(
-            RemoteBinding::new(remote.id.clone(), daemons, remote_tree.presentation, Some(origin)),
-            created,
-        );
+        let mut binding = RemoteBinding::new(remote.id.clone(), daemons, remote_tree.presentation, Some(origin));
+        binding.origin_headless = remote_tree.headless == Some(true);
+        store.bind_remote(binding, created);
         let primary_identity = store.session(created).map(|session| session.pane_identity);
         for identity in identities {
             let lead = if Some(identity) == primary_identity {

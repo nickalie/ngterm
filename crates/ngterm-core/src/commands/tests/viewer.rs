@@ -140,6 +140,17 @@ fn agterm_tree_answer(origin: (Uuid, Uuid), split: bool) -> String {
     format!("{}\n{value}", crate::remote::peer::AGTERM_ANSWER)
 }
 
+/// [`viewer_built`] attached from a headless origin, whose listing reports `headless`.
+pub(super) fn headless_viewer_built(split: bool) -> Viewer {
+    viewer_answered("origin", split, |_| {}, headless_tree_answer)
+}
+
+fn headless_tree_answer(origin: (Uuid, Uuid), split: bool) -> String {
+    let mut value: Value = serde_json::from_str(&tree_answer(origin, split)).unwrap();
+    value["result"]["remote"]["headless"] = json!(true);
+    value.to_string()
+}
+
 /// [`viewer_built`] attached from `host`, whose listing is `answer`.
 fn viewer_answered(host: &str, split: bool, setup: impl FnOnce(&mut Fixture), answer: TreeAnswer) -> Viewer {
     let mut fixture = Fixture::new(0);
@@ -863,6 +874,67 @@ fn overlay_request(job: &str, pane: Option<Uuid>, wait: bool) -> Value {
     json!({"kind": "overlay.request", "overlay": overlay})
 }
 
+/// A headless origin's pending set as the presenter gets it: `pending.chunk` frames slicing the batch.
+fn pending_chunks(frames: &[Value]) -> Vec<Value> {
+    use base64::Engine as _;
+    let data = serde_json::to_vec(&frames).unwrap();
+    let half = data.len() / 2;
+    [&data[..half], &data[half..]]
+        .iter()
+        .zip(0..)
+        .map(|(slice, index)| {
+            json!({"kind": "pending.chunk", "pending": {"index": index,
+                "data": base64::engine::general_purpose::STANDARD.encode(slice)}})
+        })
+        .collect()
+}
+
+/// Upstream's `pendingChunk`/`pendingCommit` on a viewer: what a headless origin held arrives as chunks and is applied
+/// only at the commit, all of it together; a stream that drops before the commit applies none of it, and a job's offer
+/// token reaches its helper's `run-job`.
+#[test]
+fn a_pending_batch_applies_at_its_commit_and_a_dropped_stream_applies_nothing() {
+    let mut viewer = headless_viewer_built(false);
+    viewer.connect(&json!({}));
+    let mut overlay = overlay_request("J1", None, false);
+    overlay["overlay"]["token"] = json!("T1");
+    let batch = [ask_request("A1", None), overlay];
+    let framed: Vec<Value> = batch
+        .iter()
+        .map(|frame| {
+            let mut frame = frame.clone();
+            frame["gen"] = json!(0);
+            frame["rev"] = json!(0);
+            frame
+        })
+        .collect();
+    let chunks = pending_chunks(&framed);
+
+    viewer.frame(chunks[0].clone());
+    viewer.frame(chunks[1].clone());
+    assert!(viewer.session().ask().is_none(), "nothing applies before the commit");
+    assert!(!viewer.session().overlay.program_active());
+    let key = viewer.link().0.borrow().key.unwrap();
+    viewer.fixture.core.viewer_closed(key, "exit 255");
+    viewer.fixture.core.commit();
+    viewer.fixture.core.remote_tick(Instant::now() + Duration::from_secs(2));
+    viewer.connect(&json!({}));
+    viewer.frame(json!({"kind": "pending.commit"}));
+    assert!(viewer.session().ask().is_none(), "the dropped stream's chunks are gone");
+    assert!(!viewer.session().overlay.program_active());
+
+    for chunk in chunks {
+        viewer.frame(chunk);
+    }
+    viewer.frame(json!({"kind": "pending.commit"}));
+    assert_eq!(viewer.node()["ask"], json!({"id": "A1", "replica": true}));
+    let slot = &viewer.session().overlay;
+    assert!(slot.program_active());
+    let command = crate::remote::viewer_run::readable(&slot.command.clone().unwrap());
+    let words: String = command.chars().filter(|c| !matches!(c, '\'' | '\\')).collect();
+    assert!(words.contains("run-job J1 --token T1"), "{command}");
+}
+
 #[test]
 fn a_handed_over_overlay_runs_the_jobs_helper_and_its_close_here_tells_the_origin() {
     let mut viewer = viewer_with(false);
@@ -1239,6 +1311,33 @@ fn a_gui_replica_ask_is_refused_under_a_terminal_zoom_or_the_dashboard() {
         true,
         "shown once nothing covers the row"
     );
+}
+
+/// Upstream's `showReplicaAsk`: a headless origin has no screen to take a GUI ask back to, so its row keeps it hidden
+/// under the dashboard and shows it once the row is shown; an origin with a screen gets it back.
+#[test]
+fn a_headless_origins_gui_ask_waits_hidden_for_its_row() {
+    let mut viewer = headless_viewer_built(false);
+    viewer.connect(&json!({}));
+    let window = viewer.fixture.window;
+    let binding = |viewer: &Viewer| viewer.session().remote_presentation().unwrap().binding.origin_headless;
+    assert!(binding(&viewer), "the listing's headless reaches the row");
+    viewer.fixture.core.toggle_dashboard(window);
+    viewer.fixture.core.commit();
+    let mut request = ask_request("G1", None);
+    request["ask"]["style"] = json!("gui");
+    viewer.frame(request.clone());
+    assert!(viewer.sent("ask.rejected").is_empty());
+    assert_eq!(viewer.node()["ask"], json!({"id": "G1", "replica": true}));
+
+    let mut desktop = viewer_with(false);
+    desktop.connect(&json!({}));
+    assert!(!binding(&desktop));
+    let window = desktop.fixture.window;
+    desktop.fixture.core.toggle_dashboard(window);
+    desktop.fixture.core.commit();
+    desktop.frame(request);
+    assert_eq!(desktop.sent("ask.rejected").last().unwrap()["ask"]["id"], "G1");
 }
 
 #[test]
