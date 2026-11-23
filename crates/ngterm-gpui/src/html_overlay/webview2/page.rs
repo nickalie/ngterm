@@ -667,6 +667,14 @@ impl Page {
 
     /// Whether `navigation` goes ahead, answered at once (module docs); the app's own text load is its own.
     pub fn allows(&self, navigation: &Navigation) -> bool {
+        let allowed = self.decides(navigation);
+        if allowed && navigation.main_frame && !navigation.redirect {
+            self.link_superseded(navigation);
+        }
+        allowed
+    }
+
+    fn decides(&self, navigation: &Navigation) -> bool {
         if navigation.main_frame {
             let text = self
                 .state
@@ -827,7 +835,6 @@ impl Page {
     fn navigation(&self, navigation: &Navigation, allowed: bool, cx: &mut App) {
         if allowed {
             if !navigation.redirect {
-                self.link_superseded(navigation);
                 self.load_event(&LoadEvent::Started);
             }
             return;
@@ -855,10 +862,12 @@ impl Page {
         self.offer(navigation, HtmlNavigationTarget::MainFrame, cx);
     }
 
-    /// A main-frame load that went ahead after a held link replaces that link, and a read document it does not load
-    /// is not served later.
+    /// A main-frame load that goes ahead after a held link replaces that link, and a read document it does not load
+    /// is not served later. Both engines decide every navigation here; WKWebView reports no allowed one.
     fn link_superseded(&self, navigation: &Navigation) {
-        let mut state = self.state.borrow_mut();
+        let Ok(mut state) = self.state.try_borrow_mut() else {
+            return;
+        };
         state.link_read.take_if(|held| *held < navigation.id);
         let path = app_url(&navigation.uri).and_then(|url| state.replica_link(&url));
         state

@@ -984,13 +984,6 @@ fn a_replica_link_pages_later_load_replaces_a_held_link(cx: &mut TestAppContext)
     );
     let back = navigation(&readme, true, false, false, 3);
     assert!(driven.page.allows(&back));
-    driven.report(
-        Report::Navigation {
-            navigation: back,
-            allowed: true,
-        },
-        cx,
-    );
     driven
         .page
         .link_read(2, path.clone(), &guide, Ok("<p>guide</p>".to_owned()));
@@ -1004,13 +997,6 @@ fn a_replica_link_pages_later_load_replaces_a_held_link(cx: &mut TestAppContext)
     assert_eq!(driven.view.take(), [Call::Load(guide.clone())]);
     let reload = navigation(&readme, true, false, false, 5);
     assert!(driven.page.allows(&reload));
-    driven.report(
-        Report::Navigation {
-            navigation: reload,
-            allowed: true,
-        },
-        cx,
-    );
     assert_eq!(
         driven.page.take_link_document(&path),
         None,
