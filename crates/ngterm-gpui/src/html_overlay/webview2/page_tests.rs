@@ -942,6 +942,100 @@ fn a_replica_link_page_follows_a_link_only_once_the_origin_read_it(cx: &mut Test
     assert_eq!(driven.page.take_link_document(&path), None);
 }
 
+/// A replica link page's own Markdown page and its address, realized, its first load committed at that address.
+fn realized_replica_link_page(cx: &mut TestAppContext) -> (Driven, HtmlOverlay, String) {
+    let grant = ngterm_core::html::markdown_page::MarkdownLinkGrant {
+        path: "/nowhere/docs/README.md".to_owned(),
+        root: "/nowhere/docs".to_owned(),
+    };
+    let flags = ngterm_core::html::HtmlPageFlags {
+        navigation: true,
+        ..ngterm_core::html::HtmlPageFlags::default()
+    };
+    let replica = HtmlSource::Replica {
+        path: grant.path.clone(),
+        content: ReplicaContent::Markdown,
+    };
+    let source = HtmlOverlay::linked(replica, flags, Some(grant.clone()));
+    let mut driven = realized(&source);
+    let readme = scheme::replica_link_address(source.id, &grant.path).unwrap();
+    driven.view.take();
+    assert!(driven.page.allows(&navigation(&readme, true, false, false, 1)));
+    driven.report(Report::Source(readme.clone()), cx);
+    driven.report(Report::Committed, cx);
+    (driven, source, readme)
+}
+
+/// A load that goes ahead while a followed link waits for the origin's read replaces that link: the late read loads
+/// nothing, and a read document whose load was replaced is not served to a later load of that file.
+#[gpui_kit::test]
+fn a_replica_link_pages_later_load_replaces_a_held_link(cx: &mut TestAppContext) {
+    let (mut driven, source, readme) = realized_replica_link_page(cx);
+    let path = "/nowhere/docs/sub/guide.md".to_owned();
+    let guide = scheme::replica_link_address(source.id, &path).unwrap();
+    let follow = navigation(&guide, true, true, false, 2);
+    assert!(!driven.page.allows(&follow), "held until the origin read the link");
+    driven.report(
+        Report::Navigation {
+            navigation: follow,
+            allowed: false,
+        },
+        cx,
+    );
+    let back = navigation(&readme, true, false, false, 3);
+    assert!(driven.page.allows(&back));
+    driven.report(
+        Report::Navigation {
+            navigation: back,
+            allowed: true,
+        },
+        cx,
+    );
+    driven
+        .page
+        .link_read(2, path.clone(), &guide, Ok("<p>guide</p>".to_owned()));
+    assert!(driven.view.take().is_empty(), "a replaced hold's read loads nothing");
+    assert_eq!(driven.page.take_link_document(&path), None);
+
+    assert!(!driven.page.allows(&navigation(&guide, true, true, false, 4)));
+    driven
+        .page
+        .link_read(4, path.clone(), &guide, Ok("<p>guide</p>".to_owned()));
+    assert_eq!(driven.view.take(), [Call::Load(guide.clone())]);
+    let reload = navigation(&readme, true, false, false, 5);
+    assert!(driven.page.allows(&reload));
+    driven.report(
+        Report::Navigation {
+            navigation: reload,
+            allowed: true,
+        },
+        cx,
+    );
+    assert_eq!(
+        driven.page.take_link_document(&path),
+        None,
+        "a later read of the file asks the origin again"
+    );
+}
+
+/// A followed link to a place in the document a replica link page shows scrolls there without the origin's read.
+#[gpui_kit::test]
+fn a_replica_link_pages_anchor_in_its_own_document_is_not_held(cx: &mut TestAppContext) {
+    let (driven, source, readme) = realized_replica_link_page(cx);
+    assert!(
+        driven
+            .page
+            .allows(&navigation(&format!("{readme}#usage"), true, true, false, 2))
+    );
+    let guide = scheme::replica_link_address(source.id, "/nowhere/docs/sub/guide.md").unwrap();
+    assert!(
+        !driven
+            .page
+            .allows(&navigation(&format!("{guide}#usage"), true, true, false, 3)),
+        "an anchor in another file waits for its read"
+    );
+}
+
 #[gpui_kit::test]
 fn a_link_pages_first_load_that_fails_fails_the_page(cx: &mut TestAppContext) {
     let (_directory, source) = link_overlay();

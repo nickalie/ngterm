@@ -159,6 +159,29 @@ impl PageState {
     fn active(&self) -> bool {
         self.life != Life::Released
     }
+
+    /// The file on the machine that opened this page that `url` names, when this is a Markdown link page shown for
+    /// that machine.
+    fn replica_link(&self, url: &Url) -> Option<String> {
+        let grant = self.overlay.markdown_links.as_ref()?;
+        if !matches!(self.overlay.source, HtmlSource::Replica { .. }) {
+            return None;
+        }
+        ngterm_core::html::replica_link_path(url, grant)
+    }
+
+    /// Whether `url` only moves to a place in the document the page shows, which the engine scrolls to without a read.
+    fn same_document(&self, url: &Url) -> bool {
+        let Some(shown) = self.engine.uri.as_deref().and_then(app_url) else {
+            return false;
+        };
+        url.fragment().is_some() && shown[..url::Position::AfterQuery] == url[..url::Position::AfterQuery]
+    }
+}
+
+/// An address the web view reports, as the app spells it.
+fn app_url(uri: &str) -> Option<Url> {
+    Url::parse(&scheme::app_uri(uri)).ok()
 }
 
 /// Where a page is in its life.
@@ -615,7 +638,7 @@ impl Page {
         if navigation.uri.starts_with("file:") || scheme::is_text_resource(&navigation.uri) {
             return None;
         }
-        let url = Url::parse(&scheme::app_uri(&navigation.uri)).ok()?;
+        let url = app_url(&navigation.uri)?;
         let state = self.state.try_borrow().ok()?;
         if !state.active() {
             return None;
@@ -669,7 +692,8 @@ impl Page {
     /// Whether a followed link of a page shown for another machine waits for that machine's read
     /// (`registry::read_replica_link`): that machine judges its own files, and this engine shows a failed read as a
     /// document, so the link loads only once its document is read, and a refusal keeps the shown file (upstream's
-    /// failed scheme task). A load the app starts, a history step and a reload read on demand.
+    /// failed scheme task). A load the app starts, a history step, a reload and a move inside the shown document read on
+    /// demand.
     fn holds_for_origin(&self, navigation: &Navigation, url: &Url) -> bool {
         if !navigation.main_frame || !navigation.user || navigation.redirect {
             return false;
@@ -677,16 +701,10 @@ impl Page {
         let Ok(mut state) = self.state.try_borrow_mut() else {
             return false;
         };
-        let Some(grant) = state.overlay.markdown_links.clone() else {
+        let Some(path) = state.replica_link(url) else {
             return false;
         };
-        if !matches!(state.overlay.source, HtmlSource::Replica { .. }) {
-            return false;
-        }
-        let Some(path) = ngterm_core::html::replica_link_path(url, &grant) else {
-            return false;
-        };
-        if state.link_document.as_ref().is_some_and(|(read, _)| *read == path) {
+        if state.same_document(url) || state.link_document.as_ref().is_some_and(|(read, _)| *read == path) {
             return false;
         }
         state.link_read = Some(navigation.id);
@@ -809,6 +827,7 @@ impl Page {
     fn navigation(&self, navigation: &Navigation, allowed: bool, cx: &mut App) {
         if allowed {
             if !navigation.redirect {
+                self.link_superseded(navigation);
                 self.load_event(&LoadEvent::Started);
             }
             return;
@@ -834,6 +853,17 @@ impl Page {
         };
         self.report_outcome(outcome);
         self.offer(navigation, HtmlNavigationTarget::MainFrame, cx);
+    }
+
+    /// A main-frame load that went ahead after a held link replaces that link, and a read document it does not load
+    /// is not served later.
+    fn link_superseded(&self, navigation: &Navigation) {
+        let mut state = self.state.borrow_mut();
+        state.link_read.take_if(|held| *held < navigation.id);
+        let path = app_url(&navigation.uri).and_then(|url| state.replica_link(&url));
+        state
+            .link_document
+            .take_if(|(read, _)| path.as_deref() != Some(read.as_str()));
     }
 
     /// Why a refused main-frame navigation failed the load: a link page's first load names its source's refusal, as
@@ -1186,7 +1216,7 @@ impl Page {
     /// The web view's address as the app spells it.
     fn web_url(&self) -> Option<Url> {
         let uri = self.state.borrow().engine.uri.clone()?;
-        Url::parse(&scheme::app_uri(&uri)).ok()
+        app_url(&uri)
     }
 
     /// Reports what the page shows and where its history can go (upstream's `reportPage`).

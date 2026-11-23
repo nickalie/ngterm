@@ -453,7 +453,12 @@ pub fn page_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -
             }
             HtmlSource::Replica { .. } => {
                 let shown = shown.and_then(|shown| ngterm_core::html::replica_link_path(shown, grant));
-                return file_url(shown.as_deref().unwrap_or(&grant.path));
+                let path = shown.as_deref().unwrap_or(&grant.path);
+                // a path no host URL spells (a Windows one here) is reported as its page address spells it
+                return file_url(path).or_else(|| {
+                    let address = ngterm_core::html::replica_link_url(overlay.id, path)?;
+                    file_url(&replica_path(&address)?)
+                });
             }
             _ => {}
         }
@@ -1511,5 +1516,42 @@ mod tests {
             Some("/nowhere/docs/sub/guide.md")
         );
         assert_eq!(replica_link_read(guide.as_str(), uuid::Uuid::new_v4(), &grant), None);
+    }
+
+    /// A Markdown link page shown for a Windows machine reports the file it shows on any host, so its history and
+    /// identity reach the model.
+    #[test]
+    fn a_windows_replica_link_page_reports_its_file_on_any_host() {
+        for (root, windows, posix) in [
+            (r"C:\docs", r"C:\docs", "/C:/docs"),
+            (r"\\server\share\docs", r"\\server\share\docs", "/server/share/docs"),
+            (r"\\?\C:\docs", r"C:\docs", "/?/C:/docs"),
+        ] {
+            let grant = ngterm_core::html::markdown_page::MarkdownLinkGrant {
+                path: format!(r"{root}\README.md"),
+                root: root.to_owned(),
+            };
+            let page = HtmlOverlay::linked(
+                HtmlSource::Replica {
+                    path: grant.path.clone(),
+                    content: ngterm_core::html::ReplicaContent::Markdown,
+                },
+                HtmlPageFlags {
+                    navigation: true,
+                    ..HtmlPageFlags::default()
+                },
+                Some(grant.clone()),
+            );
+            let guide = ngterm_core::html::replica_link_url(page.id, &format!(r"{root}\sub\guide.md")).unwrap();
+            let shown = page_url(&page, Some(&guide), Some(&guide)).map(|url| file_path(&url));
+            let own = page_url(&page, None, None).map(|url| file_path(&url));
+            let (folder, separator) = if cfg!(windows) { (windows, r"\") } else { (posix, "/") };
+            assert_eq!(
+                shown,
+                Some(format!("{folder}{separator}sub{separator}guide.md")),
+                "{root}"
+            );
+            assert_eq!(own, Some(format!("{folder}{separator}README.md")), "{root}");
+        }
     }
 }

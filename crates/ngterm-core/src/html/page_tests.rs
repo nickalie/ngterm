@@ -377,6 +377,35 @@ fn a_replica_link_pages_address_spells_the_origins_path_on_any_host() {
     assert_eq!(replica_link_path(&other, &link_grant_of("/docs")), None);
 }
 
+/// A Windows origin reads a link without a drive or share, a `/`-rooted one or one that climbs above the root, on the
+/// grant's drive or share, so the viewer judges it as that machine does.
+#[test]
+fn a_windows_replica_links_rootless_path_is_on_the_grants_root() {
+    let page = uuid::Uuid::new_v4();
+    for (root, rooted, climbed) in [
+        (r"C:\docs", r"C:\docs\sub\b.md", r"C:\x.md"),
+        (
+            r"\\server\share\docs",
+            r"\\server\share\docs\sub\b.md",
+            r"\\server\share\x.md",
+        ),
+    ] {
+        let grant = markdown_page::MarkdownLinkGrant {
+            path: format!(r"{root}\a.md"),
+            root: root.to_owned(),
+        };
+        let url = replica_link_url(page, &grant.path).unwrap();
+        let root_relative = url.join("/docs/sub/b.md").unwrap();
+        let path = replica_link_path(&root_relative, &grant).unwrap();
+        assert_eq!(path, rooted, "{root_relative}");
+        assert!(replica_link_follows(&path, &grant), "{path}");
+        let above = url.join("../../../../../x.md").unwrap();
+        let path = replica_link_path(&above, &grant).unwrap();
+        assert_eq!(path, climbed, "{above}");
+        assert!(!replica_link_follows(&path, &grant), "{path}");
+    }
+}
+
 fn link_grant_of(root: &str) -> markdown_page::MarkdownLinkGrant {
     markdown_page::MarkdownLinkGrant {
         path: format!("{root}/a.md"),

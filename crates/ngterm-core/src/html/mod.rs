@@ -394,14 +394,19 @@ pub fn replica_link_url(page: uuid::Uuid, path: &str) -> Option<Url> {
 }
 
 /// The file on the machine that opened a Markdown link page with `grant` its address names ([`replica_link_url`]),
-/// spelled as that machine spells it; `None` for an address of another scheme.
+/// spelled as that machine spells it, a Windows path without a drive or share on the grant's; `None` for an address of
+/// another scheme.
 #[must_use]
 pub fn replica_link_path(url: &Url, grant: &markdown_page::MarkdownLinkGrant) -> Option<String> {
     let path = replica_path(url)?;
     if !origin_path::is_windows(&grant.root) {
         return Some(path);
     }
-    Some(path.strip_prefix('/').unwrap_or(&path).replace('/', "\\"))
+    let path = path.strip_prefix('/').unwrap_or(&path).replace('/', "\\");
+    if origin_path::is_windows(&path) {
+        return Some(path);
+    }
+    origin_path::on_root_of(&path, &grant.root)
 }
 
 /// Whether `path`, a file on the machine that opened a link page with `grant`, is Markdown strictly inside the grant's

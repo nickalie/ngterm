@@ -99,6 +99,13 @@ pub(super) fn is_windows(path: &str) -> bool {
     windows_root(path).is_some()
 }
 
+/// `path`, rooted on a Windows machine's current drive, put on `folder`'s drive or share, as that machine reads a
+/// `\\`-rooted path; `None` when `folder` is not a Windows path.
+pub(super) fn on_root_of(path: &str, folder: &str) -> Option<String> {
+    let (root, _) = windows_root(folder)?;
+    Some(format!("{root}{}", path.trim_start_matches('\\')))
+}
+
 /// Whether `path` lies strictly inside `folder`, both absolute on the machine that holds them, judged lexically by
 /// that machine's rules.
 pub(super) fn strictly_inside(path: &str, folder: &str) -> bool {
