@@ -160,3 +160,33 @@ def test_an_ask_from_an_attached_pane_while_a_new_split_on_the_origin_leads(remo
 
     assert_ok(remote_viewer.request("session.close", local))
     assert_ok(origin.request("session.close", sid))
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.parametrize("remote_origin", ["headless"], indirect=True)
+@pytest.mark.covers("ask.open", "ask.cancel", "session.select", "field:tree.session.ask", "field:tree.session.interactions")
+def test_a_headless_origins_gui_ask_for_a_row_not_on_screen_waits_hidden_on_the_viewer(remote_origin, remote_viewer):
+    """A viewer refuses a GUI ask for a row it does not show, so that a desktop origin shows it itself; a headless origin
+    has no screen to take it back to, so the viewer keeps it hidden with the row until the row is shown."""
+    origin = Ctl(remote_origin.instance)
+    sid = _origin_session(origin)
+    local = _attach(remote_viewer, remote_origin.host, sid)
+    origin.wait_tree(lambda tree: _presented(tree, sid))
+    own = assert_ok(remote_viewer.request("session.new"))["id"]
+    assert_ok(remote_viewer.request("session.select", own))
+
+    ask = assert_ok(origin.request("ask.open", sid, title="Proceed?", style="gui",
+                                   buttons=[{"id": "yes", "label": "Yes"}]))["id"]
+    remote_viewer.wait_tree(lambda tree: find_session(tree, local).get("ask") == {"id": ask, "replica": True})
+    assert [(held["kind"], held["state"]) for held in find_session(origin.tree(), sid)["interactions"]] == [
+        ("ask", "offered")
+    ], "the viewer took the ask, and did not refuse it back to the origin"
+    assert assert_ok(origin.request("ask.result", ask))["ask"] == {"result": "pending"}
+    assert_ok(remote_viewer.request("session.select", local))
+    assert find_session(remote_viewer.tree(), local).get("ask") == {"id": ask, "replica": True}
+    assert_ok(origin.request("ask.cancel", ask))
+    remote_viewer.wait_tree(lambda tree: "ask" not in find_session(tree, local))
+
+    assert_ok(remote_viewer.request("session.close", own))
+    assert_ok(remote_viewer.request("session.close", local))
+    assert_ok(origin.request("session.close", sid))

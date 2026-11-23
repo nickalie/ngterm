@@ -139,3 +139,51 @@ def test_a_viewer_with_a_busy_pick_slot_hands_the_pick_back(remote_origin, remot
         remote_viewer.request("pick.cancel", busy)
     assert_ok(remote_viewer.request("session.close", local))
     assert_ok(origin.request("session.close", sid))
+
+
+def _held(tree, sid):
+    return [(held["kind"], held["state"]) for held in find_session(tree, sid).get("interactions", [])]
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.parametrize("remote_origin", ["headless"], indirect=True)
+@pytest.mark.covers("pick.open", "pick.result", "pick.cancel", "field:tree.session.pick",
+                    "field:tree.session.interactions")
+def test_a_headless_origins_pick_waits_for_a_viewer_and_behind_its_busy_slot(remote_origin, remote_viewer):
+    """A headless origin has no window to hand a pick back to: one opened with no viewer waits for the next one, one a
+    viewer leaves waits again, and one that reaches a viewer whose pick slot is busy waits there until the slot frees."""
+    origin = Ctl(remote_origin.instance)
+    sid = assert_ok(origin.request("session.new"))["id"]
+    origin.wait_mounted(sid, "left")
+    pick_id = _open(origin, sid)
+    assert _held(origin.tree(), sid) == [("pick", "unpresented")]
+
+    local = assert_ok(remote_viewer.request("live.attach", sid, host=remote_origin.host))["id"]
+    _replica(remote_viewer, local, pick_id)
+    origin.wait_tree(lambda tree: _held(tree, sid) == [("pick", "offered")])
+    assert_ok(remote_viewer.request("session.close", local))
+    origin.wait_tree(lambda tree: _held(tree, sid) == [("pick", "unpresented")])
+    assert assert_ok(origin.request("pick.result", pick_id))["pick"] == {"result": "pending"}
+    assert_ok(origin.request("pick.cancel", pick_id))
+    origin.wait_tree(lambda tree: _held(tree, sid) == [])
+
+    local = assert_ok(remote_viewer.request("live.attach", sid, host=remote_origin.host))["id"]
+    remote_viewer.wait_tree(lambda tree: find_session(tree, local).get("realized"))
+    origin.wait_tree(lambda tree: find_session(tree, sid).get("presenters", {}).get("presenter") is True)
+    busy = assert_ok(remote_viewer.request("pick.open", items=ITEMS))["id"]
+    try:
+        pick_id = _open(origin, sid)
+        remote_viewer.wait_tree(lambda tree: find_session(tree, local).get("pick") == {"id": pick_id, "replica": True})
+        origin.wait_tree(lambda tree: _held(tree, sid) == [("pick", "offered")])
+        assert remote_viewer.tree()["tree"]["pickPending"] == busy
+        assert assert_ok(remote_viewer.request("pick.result", pick_id))["pick"] == {"result": "pending"}
+    finally:
+        remote_viewer.request("pick.cancel", busy)
+    remote_viewer.wait_tree(lambda tree: tree["tree"].get("pickPending") == pick_id)
+    assert_ok(remote_viewer.request("pick.cancel", pick_id))
+    _ends_cancelled(origin, pick_id)
+    origin.wait_tree(lambda tree: _held(tree, sid) == [])
+    _no_pick(remote_viewer, local)
+
+    assert_ok(remote_viewer.request("session.close", local))
+    assert_ok(origin.request("session.close", sid))
