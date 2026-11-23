@@ -128,3 +128,31 @@ fn an_answer_on_another_sessions_stream_is_ignored() {
         Some(ControlPickOutcome::Custom)
     );
 }
+
+/// Upstream's `drain`: a queued replica waits while the slot is still held, an id already queued is refused, and a
+/// drain in another window leaves it queued.
+#[test]
+fn a_queued_replica_waits_until_its_own_windows_slot_frees() {
+    let mut modals = Modals::default();
+    let (session, window) = (Uuid::new_v4(), Uuid::new_v4());
+    modals.open_pick(window, pick("local")).unwrap();
+    let request = crate::remote::frames::PresentationPick::new(&pick("k1"), 4, false);
+    assert!(modals.open_replica_pick(&request, session, window));
+    assert!(
+        !modals.open_replica_pick(&request, session, window),
+        "an id already queued"
+    );
+    modals.drain_replica_picks(window);
+    modals.drain_replica_picks(Uuid::new_v4());
+    assert_eq!(
+        modals.session_picks.node(session).map(|node| node.id),
+        Some("k1".to_owned())
+    );
+    assert_eq!(modals.session_picks.window_of("k1"), Some(window));
+    assert!(
+        !modals.slot_pick_is(window, "k1"),
+        "the slot still holds the local pick"
+    );
+    modals.resolve_pick(window, ControlPickResult::outcome(ControlPickOutcome::Cancelled));
+    assert!(modals.slot_pick_is(window, "k1"));
+}
