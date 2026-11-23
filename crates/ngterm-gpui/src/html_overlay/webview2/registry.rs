@@ -53,6 +53,14 @@ pub enum Job {
     /// A web view's report about page `id`.
     Report(Uuid, Report),
     DocumentLoaded(Uuid, u64, Result<String, String>),
+    /// A held link's read from the machine that opened page `page` (`Page::link_read`).
+    LinkRead {
+        page: Uuid,
+        navigation: u64,
+        path: String,
+        uri: String,
+        result: Result<String, String>,
+    },
     /// A read of page `page`'s replica protocol: the app's address and the responder.
     ReplicaRead {
         page: Uuid,
@@ -253,6 +261,17 @@ fn run(job: Job, cx: &mut AsyncApp) {
     match job {
         Job::Build(id) => outside_tasks(Box::new(move || build(id))),
         Job::DocumentLoaded(id, generation, result) => cx.update(|_| document_loaded(id, generation, result)),
+        Job::LinkRead {
+            page: id,
+            navigation,
+            path,
+            uri,
+            result,
+        } => cx.update(|_| {
+            if let Some(page) = page(id) {
+                page.link_read(navigation, path, &uri, result);
+            }
+        }),
         Job::Sync(id) => {
             if let Some(page) = page(id) {
                 page.sync_native();
@@ -387,6 +406,24 @@ pub(super) fn read_replica_document(id: Uuid, generation: u64, path: String, con
     std::thread::spawn(move || {
         let result = super::super::documents::build_replica(&path, content, &mut origin_reader(id, &poster));
         let _ = jobs.try_send(Job::DocumentLoaded(id, generation, result));
+    });
+}
+
+/// Reads the file `path` a followed link of page `id`, shown for another machine, names there and builds its document
+/// on a worker (`documents::build_replica_link`); the answer goes to the page's navigation `navigation` at `uri`.
+pub(super) fn read_replica_link(id: Uuid, navigation: u64, path: String, uri: String) {
+    let (Some(jobs), Some(poster)) = with(|registry| (registry.jobs.clone(), registry.poster.clone())) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let result = super::super::documents::build_replica_link(&path, &mut origin_reader(id, &poster));
+        let _ = jobs.try_send(Job::LinkRead {
+            page: id,
+            navigation,
+            path,
+            uri,
+            result,
+        });
     });
 }
 
@@ -875,7 +912,13 @@ fn serve_linked(path: Option<String>, grant: ngterm_core::html::markdown_page::M
 /// `MarkdownPageSource.replicaLinkSource`): built on a worker from that machine's file, read through the core's page
 /// channel on the main loop, where that machine judges it against its grant; a read naming another page fails unread.
 fn serve_replica_linked(page_id: Uuid, path: Option<String>, reply: ReadReply) {
-    let (Some(path), Some(poster)) = (path, with(|registry| registry.poster.clone())) else {
+    let Some(path) = path else {
+        return respond(reply, Err(policy::NOT_THIS_PAGE.to_owned()));
+    };
+    if let Some(html) = page(page_id).and_then(|page| page.take_link_document(&path)) {
+        return respond(reply, Ok(("text/html; charset=utf-8".to_owned(), html.into_bytes())));
+    }
+    let Some(poster) = with(|registry| registry.poster.clone()) else {
         return respond(reply, Err(policy::NOT_THIS_PAGE.to_owned()));
     };
     std::thread::spawn(move || {

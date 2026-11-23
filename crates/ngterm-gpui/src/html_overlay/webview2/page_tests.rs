@@ -863,11 +863,13 @@ fn a_link_page_loads_its_file_through_the_page_protocol() {
     assert!(driven.view.take().contains(&Call::Load(address)));
 }
 
-/// Upstream's replica link page cases on this engine: a Markdown page shown for another machine with a link grant
-/// loads the grant's file through the page protocol, and a link to a file of that machine, which this one does not
-/// hold, goes ahead for that machine to judge; a followed link that fails there keeps the shown file.
+/// Upstream's `testAReplicaLinkPageKeepsItsDocumentWhenTheOriginCannotServeALink` and its link-following case on this
+/// engine, which shows a failed read as a document: a Markdown page shown for another machine with a link grant loads
+/// the grant's file through the page protocol; a followed link to a file of that machine, which this one does not
+/// hold, is held until that machine's read answers. A refusal keeps the shown file, loaded and without an error; a read
+/// document loads at the link's address and is served to that load once.
 #[gpui_kit::test]
-fn a_replica_link_page_loads_the_origins_files_through_the_page_protocol(cx: &mut TestAppContext) {
+fn a_replica_link_page_follows_a_link_only_once_the_origin_read_it(cx: &mut TestAppContext) {
     let grant = ngterm_core::html::markdown_page::MarkdownLinkGrant {
         path: "/nowhere/docs/README.md".to_owned(),
         root: "/nowhere/docs".to_owned(),
@@ -895,28 +897,49 @@ fn a_replica_link_page_loads_the_origins_files_through_the_page_protocol(cx: &mu
         },
         cx,
     );
-    let guide = scheme::replica_link_address(source.id, "/nowhere/docs/sub/guide.md").unwrap();
-    let follow = navigation(&guide, true, true, false, 2);
-    assert!(driven.page.allows(&follow), "the origin judges its own files");
     let outside = scheme::replica_link_address(source.id, "/nowhere/other/x.md").unwrap();
-    assert!(!driven.page.allows(&navigation(&outside, true, true, false, 3)));
+    assert!(!driven.page.allows(&navigation(&outside, true, true, false, 2)));
+
+    let path = "/nowhere/docs/sub/guide.md".to_owned();
+    let guide = scheme::replica_link_address(source.id, &path).unwrap();
+    let follow = navigation(&guide, true, true, false, 3);
+    assert!(!driven.page.allows(&follow), "held until the origin read the link");
     driven.report(
         Report::Navigation {
             navigation: follow,
-            allowed: true,
+            allowed: false,
         },
         cx,
     );
     driven.report(
         Report::Completed {
-            id: 2,
+            id: 3,
             success: false,
-            status: 13,
+            status: OPERATION_CANCELED,
             http: 0,
         },
         cx,
     );
     assert_eq!(driven.load(), (HtmlLoadState::Loaded, None));
+    driven
+        .page
+        .link_read(3, path.clone(), &guide, Err("unreadable markdown file".to_owned()));
+    assert!(driven.view.take().is_empty(), "a refused link loads nothing");
+    assert_eq!(driven.load(), (HtmlLoadState::Loaded, None));
+    assert_eq!(driven.page.take_link_document(&path), None);
+
+    assert!(!driven.page.allows(&navigation(&guide, true, true, false, 4)));
+    driven
+        .page
+        .link_read(3, path.clone(), &guide, Ok("<p>stale</p>".to_owned()));
+    assert!(driven.view.take().is_empty(), "an earlier hold's read does nothing");
+    driven
+        .page
+        .link_read(4, path.clone(), &guide, Ok("<p>guide</p>".to_owned()));
+    assert_eq!(driven.view.take(), [Call::Load(guide.clone())]);
+    assert!(driven.page.allows(&navigation(&guide, true, false, false, 5)));
+    assert_eq!(driven.page.take_link_document(&path).as_deref(), Some("<p>guide</p>"));
+    assert_eq!(driven.page.take_link_document(&path), None);
 }
 
 #[gpui_kit::test]

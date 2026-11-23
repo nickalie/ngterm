@@ -109,6 +109,11 @@ struct PageState {
     /// A text load the app started is the next main-frame navigation, at the text's address.
     text_pending: bool,
     network: NetworkGate,
+    /// The followed link of a page shown for another machine held back while that machine is read: its navigation.
+    link_read: Option<u64>,
+    /// A followed link's document read from the machine that opened the page: its path there and the document, served
+    /// to the navigation the read let go ahead.
+    link_document: Option<(String, String)>,
 }
 
 /// Where a page that blocks the network ([`HtmlOverlay::blocks_network`]) stands with its web view's network filter,
@@ -259,6 +264,8 @@ impl Page {
                 link_refusal: None,
                 text_pending: false,
                 network: NetworkGate::initial(overlay),
+                link_read: None,
+                link_document: None,
             }),
             native: RefCell::new(None),
             building: Cell::new(false),
@@ -653,8 +660,67 @@ impl Page {
         };
         // the engine shows a custom protocol's failed read as a document, so a link that cannot be read goes nowhere
         self.decision(navigation, target).is_some_and(|(decision, url)| {
-            decision == HtmlNavigationDecision::Allow && self.link_readable(navigation, &url)
+            decision == HtmlNavigationDecision::Allow
+                && self.link_readable(navigation, &url)
+                && !self.holds_for_origin(navigation, &url)
         })
+    }
+
+    /// Whether a followed link of a page shown for another machine waits for that machine's read
+    /// (`registry::read_replica_link`): that machine judges its own files, and this engine shows a failed read as a
+    /// document, so the link loads only once its document is read, and a refusal keeps the shown file (upstream's
+    /// failed scheme task). A load the app starts, a history step and a reload read on demand.
+    fn holds_for_origin(&self, navigation: &Navigation, url: &Url) -> bool {
+        if !navigation.main_frame || !navigation.user || navigation.redirect {
+            return false;
+        }
+        let Ok(mut state) = self.state.try_borrow_mut() else {
+            return false;
+        };
+        let Some(grant) = state.overlay.markdown_links.clone() else {
+            return false;
+        };
+        if !matches!(state.overlay.source, HtmlSource::Replica { .. }) {
+            return false;
+        }
+        let Some(path) = ngterm_core::html::replica_link_path(url, &grant) else {
+            return false;
+        };
+        if state.link_document.as_ref().is_some_and(|(read, _)| *read == path) {
+            return false;
+        }
+        state.link_read = Some(navigation.id);
+        state.link_document = None;
+        drop(state);
+        registry::read_replica_link(self.id, navigation.id, path, navigation.uri.clone());
+        true
+    }
+
+    /// A held link's read from the machine that opened the page: its document loads at `uri` and is served to that
+    /// load ([`Self::take_link_document`]); a refusal keeps the shown file. A read of a link held before a later one,
+    /// or of a closed page, does nothing.
+    pub(super) fn link_read(&self, navigation: u64, path: String, uri: &str, result: Result<String, String>) {
+        {
+            let mut state = self.state.borrow_mut();
+            if !state.active() || state.link_read != Some(navigation) {
+                return;
+            }
+            state.link_read = None;
+            let Ok(html) = result else { return };
+            state.link_document = Some((path, html));
+        }
+        if let Some(native) = self.native() {
+            native.load_url(uri);
+        }
+    }
+
+    /// The document a held link's read brought for `path`, once: the load the read let go ahead serves it.
+    pub(super) fn take_link_document(&self, path: &str) -> Option<String> {
+        let mut state = self.state.borrow_mut();
+        state
+            .link_document
+            .take_if(|(read, _)| read.as_str() == path)
+            .map(|(_, html)| html)
     }
 
     // MARK: - the web view's reports
@@ -750,6 +816,11 @@ impl Page {
         let outcome = {
             let mut state = self.state.borrow_mut();
             if !state.active() {
+                return;
+            }
+            // a link held for the origin's read goes on once that read answers: its end is no failure
+            if state.link_read == Some(navigation.id) {
+                state.refused = Some(navigation.id);
                 return;
             }
             // its end, a cancellation, is this refusal's
