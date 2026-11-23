@@ -375,8 +375,9 @@ and how this build does it where the OS matters:
 - Status shapes (v0.41): triangle-down, play, seal, bolt and bell, drawn as outlines traced after SF Symbols on Linux,
   Windows and Android; a viewer that does not list `status.shapes` gets only the six shapes it decodes.
 - The checkmark status shape (v0.42): `session status --shape checkmark`, pick items and Settings; drawn as a heavy
-  stroke traced after SF Symbols' `checkmark` on Linux and Windows. A viewer that does not list `status.checkmark` gets
-  its status without it and draws its own Settings shape; the Android and iOS apps do not list it yet.
+  stroke traced after SF Symbols' `checkmark` on Linux, Windows and Android, and as the SF Symbol `checkmark` at heavy
+  weight on iOS. A viewer that does not list `status.checkmark` gets its status without it and draws its own Settings
+  shape; the Android and iOS apps list it.
 - Row tints (v0.41): teal, pink, brown, indigo and mint, and `#rrggbb` hex tints from the CLI, with a "Custom
   #rrggbb" entry on the Tint menu of a hex-tinted row; a new tint starts on the last Show On pick.
 - Sidebar (v0.41): a compact density (`sidebar density default|compact|toggle`, tree `sidebarDensity`, Settings ▸
