@@ -366,7 +366,8 @@ impl fmt::Debug for PresentationHub {
 }
 
 impl PresentationHub {
-    /// A hub dropping a subscriber silent for longer than `stale_timeout`, reading the time from `now`.
+    /// A hub dropping a subscriber that does not answer a ping for longer than `stale_timeout`, reading the time from
+    /// `now`.
     #[must_use]
     pub fn new(stale_timeout: Duration, now: Box<dyn Fn() -> Instant>) -> Self {
         Self {

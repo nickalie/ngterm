@@ -99,7 +99,7 @@ use crate::model::{AgentStatus, OverlayPane, Session, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::resolve::{Resolver, trimmed};
 
-/// A viewer silent for longer than this is dropped (upstream's hub `staleTimeout`).
+/// A viewer that does not answer a ping for longer than this is dropped (upstream's hub `staleTimeout`).
 pub const STALE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often the frontend runs [`Core::presentation_heartbeat`] while a stream is up (upstream's
 /// `presentationHeartbeatSeconds`).

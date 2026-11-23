@@ -6,7 +6,9 @@
 //! windows' `tree.changed` debounces armed on the loop) and records what the frontend must do with the app context
 //! ([`FrontendWork`]). Handlers never touch the state in place: they [`post`] a task. The loop's consumer runs each
 //! task with the state, then brings the windows in line with the model (`windows.rs`, the GTK build's settle-time
-//! windows sync) and lands the frontend work (`app.rs`).
+//! windows sync) and lands the frontend work (`app.rs`). The one exception is a follower's poll
+//! ([`ngterm_core::settles_after`]: `events.read`, `msg.read`): it changes nothing a commit or a window reads, so it
+//! skips both the settle and the windows' sync.
 
 use std::cell::RefCell;
 use std::panic::{self, AssertUnwindSafe};
@@ -230,15 +232,23 @@ pub struct NotifyFocus {
     pub active: bool,
 }
 
+/// What the loop does with the windows after a task.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Landing {
+    #[default]
+    Sync,
+    /// The task changed nothing the windows show ([`ngterm_core::settles_after`]).
+    Skip,
+}
+
 /// What the main loop owns.
 pub struct AppState {
     pub core: Core,
     poster: Poster,
     /// The quit save ran: nothing is committed, saved or re-rendered after it.
     quitting: bool,
-    /// The follower's poll the last task answered, which changed nothing the windows show
-    /// ([`ngterm_core::settles_after`]): the loop skips their sync.
-    unsettled_poll: Option<Command>,
+    /// What the loop does with the windows after the last task.
+    landing: Landing,
     /// The window holding the keyboard, as the frontend reports it.
     key_window: Option<Uuid>,
     /// What [`AppState::take_frontend_work`] hands the frontend next.
@@ -307,7 +317,7 @@ impl AppState {
             revealed,
             poster: detached_poster(),
             quitting: false,
-            unsettled_poll: None,
+            landing: Landing::Sync,
             key_window: None,
             frontend: FrontendWork::default(),
             heartbeat_armed: false,
@@ -369,7 +379,7 @@ impl AppState {
 
     /// Whether the task that just ran changed nothing the windows show; the flag clears with the call.
     pub fn take_unchanged(&mut self) -> bool {
-        self.unsettled_poll.take().is_some()
+        std::mem::take(&mut self.landing) == Landing::Skip
     }
 
     /// What the tasks since the last call left to the frontend.
@@ -824,7 +834,7 @@ impl AppState {
         let dispatched = self.core.begin(request);
         let reply = match dispatched {
             Dispatched::Done(response) if !ngterm_core::settles_after(request.cmd) => {
-                self.unsettled_poll = Some(request.cmd);
+                self.landing = Landing::Skip;
                 return response.into();
             }
             Dispatched::Done(response) if request.cmd == Command::Session(SessionCmd::OverlayJobRun) && response.ok => {

@@ -893,6 +893,33 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_followers_poll_lands_no_window_and_a_command_does(cx: &mut gpui_kit::TestAppContext) {
+        let dir = tempfile::Builder::new()
+            .prefix("ngt")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let shell = cx.update(|cx| test_shell(dir.path(), cx));
+        cx.update(|cx| {
+            for cmd in [
+                ngterm_proto::Command::Events(ngterm_proto::command::EventsCmd::Read),
+                ngterm_proto::Command::Msg(ngterm_proto::command::MsgCmd::Read),
+            ] {
+                shell.state.update(cx, |state, _| {
+                    drop(state.handle_request(&ngterm_proto::Request::new(cmd)));
+                });
+                land(&shell, &shell.state, cx);
+                assert_eq!(shell.windows.borrow().iter().count(), 0, "{cmd:?}");
+            }
+            shell.state.update(cx, |state, _| {
+                drop(state.handle_request(&ngterm_proto::Request::new(ngterm_proto::Command::Tree)));
+            });
+            land(&shell, &shell.state, cx);
+            assert_eq!(shell.windows.borrow().iter().count(), 1);
+            shut_down(&shell, cx);
+        });
+    }
+
+    #[gpui_kit::test]
     fn a_reset_or_quit_without_a_window_proceeds(cx: &mut gpui_kit::TestAppContext) {
         let dir = tempfile::Builder::new()
             .prefix("ngt")

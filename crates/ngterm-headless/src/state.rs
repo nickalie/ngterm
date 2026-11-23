@@ -3,7 +3,9 @@
 //!
 //! RULE, as there: every mutation runs as a main-loop task and ends with [`HeadlessState::settle`], which commits and
 //! arms what the commit leaves to the loop; after each task the runner calls [`HeadlessState::land`], which brings the
-//! terminals in line with the model ([`crate::panes`]).
+//! terminals in line with the model ([`crate::panes`]). The one exception is a follower's poll
+//! ([`ngterm_core::settles_after`]: `events.read`, `msg.read`): it changes nothing a commit or a terminal reads, so it
+//! skips both the settle and the terminals' sync.
 //!
 //! A viewer's `live.present`, an overlay job's helper and a page channel keep their connection as a stream adopted by
 //! the core, exactly as in the GPUI frontend: the presentation of a session a viewer attached goes out on it, and what
