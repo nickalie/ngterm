@@ -171,6 +171,30 @@ fn cancelling_a_local_session_pick_ends_it_in_its_window() {
     assert_eq!(refusal(&cancel(&mut fixture, UNKNOWN)), "unknown pick: zzz");
 }
 
+/// With `--window`, a session pick answers only in its own window.
+#[test]
+fn a_session_pick_answers_window_scoped_commands_only_in_its_window() {
+    let mut fixture = Fixture::new(0);
+    let session = fixture.sessions[0];
+    let other = fixture.core.library_mut().new_window(None);
+    let id = opened(&open(&mut fixture, Some(session), |_| {}));
+    let scoped = |fixture: &mut Fixture, cmd: PickCmd, window: Uuid| {
+        let response = fixture.send(Command::Pick(cmd), Some(&id), args(|a| a.window = Some(wire(window))));
+        fixture.core.commit();
+        response
+    };
+    let unknown = format!("unknown pick: {id}");
+    assert_eq!(refusal(&scoped(&mut fixture, PickCmd::Result, other)), unknown);
+    assert_eq!(refusal(&scoped(&mut fixture, PickCmd::Cancel, other)), unknown);
+    assert_eq!(result(&mut fixture, &id), json!({"result": "pending"}));
+
+    let own = fixture.window;
+    let pending = scoped(&mut fixture, PickCmd::Result, own);
+    assert_eq!(pending.result.unwrap()["pick"], json!({"result": "pending"}));
+    assert!(scoped(&mut fixture, PickCmd::Cancel, own).ok);
+    assert_eq!(result(&mut fixture, &id), json!({"result": "cancelled"}));
+}
+
 /// Upstream's `theSessionLeavingCancelsItsPick`.
 #[test]
 fn the_session_leaving_cancels_its_pick() {

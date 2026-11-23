@@ -145,7 +145,7 @@ impl Core {
             return None;
         }
         let found = self.presented_session(session)?;
-        if !self.presents_remotely(found, None) || self.modals.expired(&pick.id) {
+        if !self.presents_remotely(found, None) {
             return None;
         }
         let owner = self.remote.hub.presenter_generation(session);

@@ -96,3 +96,35 @@ fn retained_results_stop_at_the_limit_dropping_the_oldest() {
     assert_eq!(modals.session_picks.result("p0"), None);
     assert!(modals.session_picks.result("p1").is_some());
 }
+
+/// Owners count per session, so only the session check stops another session's presenter from answering.
+#[test]
+fn an_answer_on_another_sessions_stream_is_ignored() {
+    let mut modals = Modals::default();
+    let (session, other) = (Uuid::new_v4(), Uuid::new_v4());
+    assert!(modals.session_picks.open_remote(pick("k1"), session, 2, None));
+    let answer = PresentationPickAnswer {
+        id: "k1".to_owned(),
+        owner: 2,
+        item: None,
+        query: Some("typed".to_owned()),
+    };
+    modals.resolve_remote_pick(&answer, other);
+    assert_eq!(
+        modals.session_picks.result("k1"),
+        Some(ControlPickResult::outcome(ControlPickOutcome::Pending))
+    );
+    assert_eq!(
+        modals.session_picks.node(session),
+        Some(ControlSessionPick {
+            id: "k1".to_owned(),
+            remote: Some(true),
+            replica: None,
+        })
+    );
+    modals.resolve_remote_pick(&answer, session);
+    assert_eq!(
+        modals.session_picks.result("k1").map(|result| result.result),
+        Some(ControlPickOutcome::Custom)
+    );
+}
