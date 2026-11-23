@@ -10,10 +10,10 @@ public enum StatusShape: CaseIterable, Sendable {
     case bell
     /// A filled lightning bolt.
     case bolt
-    /// A check, drawn as a heavy stroke.
-    case checkmark
     /// A filled capsule.
     case capsule
+    /// A check, drawn as a heavy stroke.
+    case checkmark
     /// A filled circle.
     case circle
     /// A filled diamond.
@@ -60,11 +60,11 @@ public enum StatusShape: CaseIterable, Sendable {
         case .bolt:
             "bolt.fill"
 
-        case .checkmark:
-            "checkmark"
-
         case .capsule:
             "capsule.fill"
+
+        case .checkmark:
+            "checkmark"
 
         case .circle:
             "circle.fill"
