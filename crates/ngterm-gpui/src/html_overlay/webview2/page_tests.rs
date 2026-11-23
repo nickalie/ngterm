@@ -1022,6 +1022,33 @@ fn a_replica_link_pages_anchor_in_its_own_document_is_not_held(cx: &mut TestAppC
     );
 }
 
+/// WKWebView decides a move to an anchor in the shown document; that move loads nothing and keeps a held link.
+#[gpui_kit::test]
+fn a_replica_link_pages_anchor_keeps_a_held_link(cx: &mut TestAppContext) {
+    let (mut driven, source, readme) = realized_replica_link_page(cx);
+    let path = "/nowhere/docs/sub/guide.md".to_owned();
+    let guide = scheme::replica_link_address(source.id, &path).unwrap();
+    let follow = navigation(&guide, true, true, false, 2);
+    assert!(!driven.page.allows(&follow), "held until the origin read the link");
+    driven.report(
+        Report::Navigation {
+            navigation: follow,
+            allowed: false,
+        },
+        cx,
+    );
+    assert!(
+        driven
+            .page
+            .allows(&navigation(&format!("{readme}#usage"), true, true, false, 3))
+    );
+    driven
+        .page
+        .link_read(2, path.clone(), &guide, Ok("<p>guide</p>".to_owned()));
+    assert_eq!(driven.view.take(), [Call::Load(guide.clone())]);
+    assert_eq!(driven.page.take_link_document(&path).as_deref(), Some("<p>guide</p>"));
+}
+
 #[gpui_kit::test]
 fn a_link_pages_first_load_that_fails_fails_the_page(cx: &mut TestAppContext) {
     let (_directory, source) = link_overlay();

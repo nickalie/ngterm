@@ -863,13 +863,18 @@ impl Page {
     }
 
     /// A main-frame load that goes ahead after a held link replaces that link, and a read document it does not load
-    /// is not served later. Both engines decide every navigation here; WKWebView reports no allowed one.
+    /// is not served later. A move inside the shown document loads nothing, so it keeps both. Both engines decide every
+    /// navigation here; WKWebView reports no allowed one.
     fn link_superseded(&self, navigation: &Navigation) {
         let Ok(mut state) = self.state.try_borrow_mut() else {
             return;
         };
+        let url = app_url(&navigation.uri);
+        if url.as_ref().is_some_and(|url| state.same_document(url)) {
+            return;
+        }
         state.link_read.take_if(|held| *held < navigation.id);
-        let path = app_url(&navigation.uri).and_then(|url| state.replica_link(&url));
+        let path = url.and_then(|url| state.replica_link(&url));
         state
             .link_document
             .take_if(|(read, _)| path.as_deref() != Some(read.as_str()));
