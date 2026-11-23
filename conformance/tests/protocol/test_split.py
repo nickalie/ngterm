@@ -560,19 +560,19 @@ def test_scratch_cwd_reads_back_while_the_session_has_a_scratch(ctl):
 
 
 def _watch_size(ctl, sid, pane, marker):
-    """A loop in `pane` that prints its count and the terminal's `stty size` five times a second, so a resize that
-    lasts only while another session is shown still reads. The typed line holds the marker split in two."""
-    report = f'printf "%s%s=%s %s\\n" {marker[:4]} {marker[4:]} "$n" "$(stty size)"'
-    loop = f"n=0; while :; do n=$((n+1)); {report}; sleep 0.2; done"
+    """A loop in `pane` that prints its count, the SIGWINCH count and the terminal's `stty size` five times a second,
+    so a resize between two readings still shows. The typed line holds the marker split in two."""
+    report = f'printf "%s%s=%s %s %s\\n" {marker[:4]} {marker[4:]} "$n" "$w" "$(stty size)"'
+    loop = f"n=0; w=0; winch() {{ w=$((w+1)); }}; trap winch WINCH; while :; do n=$((n+1)); {report}; sleep 0.2; done"
     assert_ok(ctl.request("session.type", sid, text=f" sh -c '{loop}'\n", pane=pane))
 
 
 def _sizes(ctl, sid, pane, marker):
-    """The count and the (rows, cols) of each reading the watcher in `pane` printed."""
+    """The count and the (SIGWINCH count, rows, cols) of each reading the watcher in `pane` printed."""
     text = assert_ok(ctl.request("session.text", sid, all=True, pane=pane))["text"]
     return [
-        (int(count), (int(rows), int(cols)))
-        for count, rows, cols in re.findall(rf"(?m)^{marker}=(\d+) (\d+) (\d+)\s*$", text)
+        (int(count), (int(winches), int(rows), int(cols)))
+        for count, winches, rows, cols in re.findall(rf"(?m)^{marker}=(\d+) (\d+) (\d+) (\d+)\s*$", text)
     ]
 
 
@@ -602,4 +602,4 @@ def test_switching_to_and_from_a_left_right_split_keeps_both_panes_size(launch):
 
     for pane, marker in markers.items():
         seen = {size for _, size in _sizes(ctl, split, pane, marker)}
-        assert len(seen) == 1, f"the {pane} pane read {sorted(seen)} across the switches"
+        assert len(seen) == 1, f"the {pane} pane read (SIGWINCH count, rows, cols) {sorted(seen)} across the switches"
