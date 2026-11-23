@@ -312,8 +312,18 @@ pub(crate) fn keyboard_held(cx: &mut App) -> bool {
         })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The tests' stand-in for the application's activation, which a test runner never has on macOS.
+    static APP_ACTIVE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
 /// Whether ngterm is the active application, beyond one of its windows being active.
 fn app_active() -> bool {
+    #[cfg(test)]
+    if let Some(active) = APP_ACTIVE.get() {
+        return active;
+    }
     #[cfg(target_os = "macos")]
     return crate::macos::app_active();
     #[cfg(not(target_os = "macos"))]
