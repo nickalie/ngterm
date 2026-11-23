@@ -4,10 +4,10 @@ import UserNotifications
 /// Stands in as the notification center's delegate, to see the notifications the system presents to the app in the
 /// foreground as they reach the user; ``restore()`` puts the hosted app's own delegate back.
 ///
-/// A listed presentation keeps the notification in the system's delivered list, as one that reached the user out of
-/// the app does.
+/// It is also the delivered list of the notices it saw presented, for ``SystemNotices/init(delivered:)``: the system's
+/// own list does not get a hosted test app's notices on a simulator.
 @MainActor
-internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegate {
+internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegate, DeliveredNotices {
     /// A presented notification, as the user sees it.
     internal struct Shown: Equatable, Sendable {
         /// Its title.
@@ -31,19 +31,13 @@ internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegat
     private static let presentationLimit = Duration.seconds(limitSeconds)
 
     private let previous: (any UNUserNotificationCenterDelegate)?
-    private let options: UNNotificationPresentationOptions
     private var shown: [String: Shown] = [:]
+    private var listed: [UNNotificationRequest] = []
     private var waiting: [String: AsyncStream<Shown>.Continuation] = [:]
 
     /// Stands in from now on.
-    override internal convenience init() {
-        self.init(listed: false)
-    }
-
-    /// Stands in from now on; with `listed`, each notification presented stays in the delivered list.
-    internal init(listed: Bool) {
+    override internal init() {
         previous = UNUserNotificationCenter.current().delegate
-        options = listed ? [.list] : []
         super.init()
         UNUserNotificationCenter.current().delegate = self
     }
@@ -51,6 +45,16 @@ internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegat
     /// Puts the app's own delegate back.
     internal func restore() {
         UNUserNotificationCenter.current().delegate = previous
+    }
+
+    /// The requests of the notifications presented and not removed, the last presentation of an id only.
+    internal func requests() -> [UNNotificationRequest] {
+        listed
+    }
+
+    /// Takes the notifications `ids` out of the presented list.
+    internal func remove(_ ids: [String]) {
+        listed.removeAll { ids.contains($0.identifier) }
     }
 
     /// The notification `id` once the system presents it, bounded by the presentation limit.
@@ -97,17 +101,25 @@ internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegat
             category: content.categoryIdentifier,
             info: SystemNotices.info(of: notification)
         )
-        return await arrived(notification.request.identifier, seen)
+        var userInfo: [String: String] = [:]
+        for case (let key as String, let value as String) in content.userInfo {
+            userInfo[key] = value
+        }
+        await arrived(notification.request.identifier, userInfo: userInfo, seen)
+        return []
     }
 
-    private func arrived(_ id: String, _ seen: Shown) -> UNNotificationPresentationOptions {
+    private func arrived(_ id: String, userInfo: [String: String], _ seen: Shown) {
+        let content = UNMutableNotificationContent()
+        content.userInfo = userInfo
+        listed.removeAll { $0.identifier == id }
+        listed.append(UNNotificationRequest(identifier: id, content: content, trigger: nil))
         guard let waiter = waiting.removeValue(forKey: id) else {
             shown[id] = seen
-            return options
+            return
         }
         waiter.yield(seen)
         waiter.finish()
-        return options
     }
 
     deinit {

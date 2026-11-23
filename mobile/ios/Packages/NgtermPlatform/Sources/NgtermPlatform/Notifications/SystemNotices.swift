@@ -18,14 +18,20 @@ public final class SystemNotices: NoticeCenter {
     private static let sendTitle = String(localized: "Send")
 
     private let center = UNUserNotificationCenter.current()
+    private let deliveredList: any DeliveredNotices
     // the categories of the notices up, by category id
     private var categories: [String: UNNotificationCategory] = [:]
     // the last post or withdrawal, which the next one waits for
     private var last: Task<Void, Never>?
 
     /// The system's notifications.
-    public init() {
-        // nothing to set up: the categories are registered as notices need them
+    public convenience init() {
+        self.init(delivered: SystemDeliveredNotices())
+    }
+
+    /// The system's notifications, with `delivered` as the list a switch turned off searches by kind.
+    public init(delivered: any DeliveredNotices) {
+        deliveredList = delivered
     }
 
     /// What the user did with a notice, as the app takes it.
@@ -151,9 +157,11 @@ public final class SystemNotices: NoticeCenter {
         // a notice posted again after this call keeps its new category
         let known = categories
         enqueue { center in
-            let ids = Self.ids(of: await center.deliveredNotifications().map(\.request), ofKinds: kinds)
+            let ids = Self.ids(of: await self.deliveredList.requests(), ofKinds: kinds)
             self.forget(ids, unlessChangedSince: known)
-            Self.remove(ids, from: center, keeping: Set(self.categories.values))
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+            self.deliveredList.remove(ids)
+            center.setNotificationCategories(Set(self.categories.values))
         }
     }
 
