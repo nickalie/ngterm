@@ -62,6 +62,11 @@ fn the_pane_answers_and_reports_the_apps_appearance_and_keeps_it_for_the_next_at
     send(&again.peer, b"\x1b[?996n");
     let (bytes, _) = inputs_until(&mut again.peer, |bytes, _| contains(bytes, dark));
     assert_eq!(bytes, dark, "a fresh terminal starts on the kept appearance");
+
+    pane.set_color_scheme(PaneColorScheme::Light);
+    send(&again.peer, b"\x1b[?996n");
+    let (bytes, _) = inputs_until(&mut again.peer, |bytes, _| contains(bytes, light));
+    assert_eq!(bytes, light, "and goes back to light");
 }
 
 #[test]
