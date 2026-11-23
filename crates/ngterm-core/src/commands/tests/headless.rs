@@ -157,3 +157,29 @@ fn a_pick_needs_a_session_on_a_headless_origin() {
     let mut app = Fixture::new(0);
     assert!(app.send(Command::Pick(PickCmd::Open), None, items()).ok);
 }
+
+/// Upstream's `ServerActionsAskTests` and `ServerActionsPickTests` size cases: a request no frame can carry would wait
+/// for a presenter forever.
+#[test]
+fn an_ask_or_a_pick_too_large_for_a_frame_is_refused_on_a_headless_origin() {
+    let huge = "x".repeat(crate::remote::frames::MAX_FRAME_BYTES);
+    let mut server = headless(0);
+    let session = wire(server.sessions[0]);
+    let mut ask = ask_args("gui");
+    ask.message = Some(huge.clone());
+    assert_eq!(
+        server.send(Command::Ask(AskCmd::Open), Some(&session), ask),
+        failure("ask is too large to send to a Mac")
+    );
+    let pick = args(|a| {
+        a.items = Some(vec![PickItem {
+            id: "a".to_owned(),
+            label: huge,
+            ..PickItem::default()
+        }]);
+    });
+    assert_eq!(
+        server.send(Command::Pick(PickCmd::Open), Some(&session), pick),
+        failure("pick is too large to send to a Mac")
+    );
+}

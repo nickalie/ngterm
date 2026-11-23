@@ -11,9 +11,12 @@ use serde_json::{Value, json};
 
 use super::live::{Live, live};
 use super::remote::{Viewer, frame, node, subscribe_listing};
+use super::remote_page::Origin;
 use super::{args, failure, wire};
 use crate::remote::frames::{Body, PendingBatch, PresentationPendingChunk};
 use crate::remote::hub::{HELD_KINDS, SUPPORTED_KINDS};
+
+const PAGE_FILE: &str = "/tmp/docs/index.html";
 
 /// A live session on a headless origin no viewer presents yet.
 fn headless() -> Live {
@@ -310,6 +313,52 @@ fn a_claimed_job_keeps_its_slot_and_is_never_offered_again() {
     let (_, next) = present(&mut live, &SUPPORTED_KINDS);
     assert!(next.frames("pending.chunk").is_empty(), "{:?}", next.kinds());
     assert!(next.last("overlay.request").is_none());
+}
+
+fn page_entry(live: &mut Live) -> Value {
+    let entries = interactions(live);
+    assert_eq!(entries.as_array().map(Vec::len), Some(1), "{entries}");
+    assert_eq!(entries[0]["kind"], "page");
+    entries[0].clone()
+}
+
+/// A page a lost presenter showed is parked unpresented, with no deadline, and goes to the next presenter inside its
+/// pending batch; only a channel page waits for a claim, so a url page is offered with no deadline.
+#[test]
+fn a_page_is_listed_parked_and_handed_on_inside_the_batch() {
+    let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
+    origin.fixture().core.set_presenter_only();
+    let page = origin.opened(PAGE_FILE, |_| {});
+    let offered = page_entry(&mut origin.live);
+    assert_eq!(
+        (offered["id"].as_str(), offered["state"].as_str()),
+        (Some(page.as_str()), Some("offered"))
+    );
+    assert!(
+        offered["deadline"].is_f64(),
+        "a channel page waits for its claim: {offered}"
+    );
+
+    origin.lose_presenter();
+    let parked = page_entry(&mut origin.live);
+    assert_eq!(parked["state"], "unpresented");
+    assert!(parked.get("deadline").is_none(), "{parked}");
+
+    let (_, next) = present(&mut origin.live, &SUPPORTED_KINDS);
+    assert!(next.last("page.request").is_none(), "only inside the batch");
+    let handed = batch(&next);
+    let [Body::PageRequest(request)] = handed.as_slice() else {
+        panic!("{handed:?}")
+    };
+    assert_eq!(request.page, page);
+    assert_eq!(states(&mut origin.live), [held("page", "offered")]);
+
+    let mut url = Origin::build(false, &SUPPORTED_KINDS, false);
+    url.fixture().core.set_presenter_only();
+    url.opened("https://example.com/", |_| {});
+    let offered = page_entry(&mut url.live);
+    assert_eq!(offered["state"], "offered");
+    assert!(offered.get("deadline").is_none(), "a url page has no claim: {offered}");
 }
 
 #[test]

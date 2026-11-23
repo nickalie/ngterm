@@ -156,7 +156,7 @@ impl Core {
         if !self
             .modals
             .session_picks
-            .open_remote(pick.clone(), session, owner, window)
+            .open_remote(pick.clone(), session, owner, window, follow)
         {
             return Some(false);
         }

@@ -15,9 +15,7 @@ use ngterm_proto::{ControlAskOutcome, ControlAskResult, ControlPickOutcome, Cont
 use uuid::Uuid;
 
 use crate::model::{AskDraft, EndedAsk, PendingAsk};
-pub use session_pick::{
-    INTERACTION_CLAIMED, INTERACTION_OFFERED, INTERACTION_UNPRESENTED, PICK_ALREADY_PENDING, Placement, SessionPicks,
-};
+pub use session_pick::{PICK_ALREADY_PENDING, Placement, SessionPicks};
 
 /// The longest `--timeout` of an ask or a pick, a day like the HUD's ceiling (upstream's `ControlInteraction.maxTimeout`).
 pub const MAX_TIMEOUT: f64 = 86_400.0;

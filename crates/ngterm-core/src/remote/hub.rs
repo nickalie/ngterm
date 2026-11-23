@@ -67,7 +67,8 @@ pub enum HubEvent {
         holder: SubscriberId,
     },
     /// A viewer just became the one showing the session's `surface`, after any answer it was due went out (this
-    /// build's addition: the owner hands it the pages parked since the last one).
+    /// build's addition: the owner hands it the pages parked, or the overlay jobs a headless origin held, since the
+    /// last one).
     SurfaceGained(Uuid, Surface),
     /// A viewer just took the session's presenter role and was told so (upstream's `onPresenterGranted`).
     PresenterGranted(Uuid),

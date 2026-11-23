@@ -577,9 +577,11 @@ pub(crate) fn page_result(core: &mut Core, page: Uuid) -> Outcome {
 // MARK: - the frontend's hooks
 
 impl Core {
-    /// Routes pages and asks to the session's presenter regardless of terminal leadership: a headless origin draws
-    /// neither. Its newly created split leads locally until a viewer attaches it, but what opens on it still belongs on
-    /// that viewer.
+    /// Makes this core a headless origin (`ngterm-headless`), which draws nothing. It routes pages, asks, picks and
+    /// overlay jobs to the session's presenter regardless of terminal leadership, and holds them while no presenter
+    /// shows the session. It refuses the commands that drive a window, a `--wait`, and a GUI ask or pick with no
+    /// session, and `version` and `live tree` report `headless`. Its newly created split leads locally until a viewer
+    /// attaches it, but what opens on it still belongs on that viewer.
     pub fn set_presenter_only(&mut self) {
         self.pages.presenter_only = true;
     }

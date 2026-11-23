@@ -17,9 +17,15 @@ use super::frames::{self, Body, PresentationAsk, PresentationPane};
 use super::hub::HELD_KINDS;
 use crate::Core;
 use crate::html::HtmlSource;
-use crate::modal::{INTERACTION_CLAIMED, INTERACTION_OFFERED, INTERACTION_UNPRESENTED};
 use crate::model::{RemoteOverlaySlot, Session};
 use crate::overlay_jobs::OverlayJobState;
+
+/// An interaction's state while a headless origin holds it for a presenter (upstream's `ControlInteraction.unpresented`).
+const INTERACTION_UNPRESENTED: &str = "unpresented";
+/// An interaction's state while it is handed to a presenter (upstream's `ControlInteraction.offered`).
+const INTERACTION_OFFERED: &str = "offered";
+/// An interaction's state once its helper or channel holds it (upstream's `ControlInteraction.claimed`).
+const INTERACTION_CLAIMED: &str = "claimed";
 
 /// `instant` as epoch seconds, read against `now` on the monotonic clock.
 fn epoch_seconds(instant: Instant, now: Instant) -> f64 {
@@ -58,7 +64,14 @@ impl Core {
             };
             nodes.push(interaction("ask", &pending.ask.id, state, deadline(&pending.ask.id)));
         }
-        nodes.extend(self.modals.session_picks.interaction(session.id(), deadline));
+        if let Some((id, offered)) = self.modals.session_picks.interaction(session.id()) {
+            let state = if offered {
+                INTERACTION_OFFERED
+            } else {
+                INTERACTION_UNPRESENTED
+            };
+            nodes.push(interaction("pick", id, state, deadline(id)));
+        }
         for slot in session.remote_overlays().slots() {
             nodes.extend(self.slot_interaction(slot, now));
         }

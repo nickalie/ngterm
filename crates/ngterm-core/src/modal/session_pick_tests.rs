@@ -51,13 +51,13 @@ fn a_stale_refusal_leaves_the_newer_pick_and_a_handback_with_no_window_cancels()
     assert!(
         modals
             .session_picks
-            .open_remote(pick("first"), session, 2, Some(window))
+            .open_remote(pick("first"), session, 2, Some(window), false)
     );
     assert!(modals.cancel_session_pick("first"));
     assert!(
         modals
             .session_picks
-            .open_remote(pick("second"), session, 2, Some(window))
+            .open_remote(pick("second"), session, 2, Some(window), false)
     );
     let stale = PresentationPickRef {
         id: "first".to_owned(),
@@ -89,7 +89,7 @@ fn retained_results_stop_at_the_limit_dropping_the_oldest() {
         assert!(
             modals
                 .session_picks
-                .open_remote(pick(&format!("p{n}")), session, 1, None)
+                .open_remote(pick(&format!("p{n}")), session, 1, None, false)
         );
         assert!(modals.cancel_session_pick(&format!("p{n}")));
     }
@@ -102,7 +102,7 @@ fn retained_results_stop_at_the_limit_dropping_the_oldest() {
 fn an_answer_on_another_sessions_stream_is_ignored() {
     let mut modals = Modals::default();
     let (session, other) = (Uuid::new_v4(), Uuid::new_v4());
-    assert!(modals.session_picks.open_remote(pick("k1"), session, 2, None));
+    assert!(modals.session_picks.open_remote(pick("k1"), session, 2, None, false));
     let answer = PresentationPickAnswer {
         id: "k1".to_owned(),
         owner: 2,
@@ -126,6 +126,22 @@ fn an_answer_on_another_sessions_stream_is_ignored() {
     assert_eq!(
         modals.session_picks.result("k1").map(|result| result.result),
         Some(ControlPickOutcome::Custom)
+    );
+}
+
+/// A pick that a lost presenter gives back keeps its `--follow` for the next offer (upstream's `openRemote`).
+#[test]
+fn a_pick_returned_to_pending_keeps_its_follow() {
+    let mut modals = Modals::default();
+    let session = Uuid::new_v4();
+    assert!(modals.session_picks.open_remote(pick("f1"), session, 3, None, true));
+    modals.session_picks.return_to_pending(session, None);
+    assert_eq!(
+        modals
+            .session_picks
+            .unpresented(session)
+            .map(|(pick, follow)| (pick.id.as_str(), follow)),
+        Some(("f1", true))
     );
 }
 

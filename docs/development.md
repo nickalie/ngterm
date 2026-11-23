@@ -1017,8 +1017,11 @@ that were already running need to source `~/.config/ngterm/agent-status/shell/in
 
 The attached row is as one from a desktop instance: each pane an ssh into its live session (the viewer claims the pty
 size), the status, context, split, HUD and notifications streamed over `ngtermctl live present`, asks, program
-overlays and pages shown on the viewer. What would be drawn on the server (banners, sounds, an overlay with no viewer)
-has no display there: banners go to its log. A session closes when its program ends, as in the app.
+overlays and pages shown on the viewer. What would be drawn on the server (banners, sounds) has no display there:
+banners go to its log. An ask, a pick or a program overlay opened while no viewer presents its session waits, listed
+in the session's `interactions` in `live tree`, until the next viewer takes the session. Commands that drive a window,
+a `--wait`, and a GUI ask or pick with no session are refused by name. A session closes when its program ends, as in
+the app.
 It builds and runs on macOS and Windows too. On a Unix origin a viewer's remote commands go through `/bin/sh -c`.
 A Windows origin (Windows' OpenSSH server, whichever of `cmd.exe` and PowerShell it runs) has neither `/bin/sh` nor one
 quoting both shells read, so there each is `ngtermctl origin-run WORD`, with what to run base64-encoded in the word,

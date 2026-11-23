@@ -42,8 +42,9 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 /// once. `status.shapes` ([`super::hub::STATUS_SHAPES_KIND`]) is always listed: desktop and both mobile apps draw
 /// every shape it names. `status.checkmark` ([`super::hub::STATUS_CHECKMARK_KIND`]) is always listed too: desktop
 /// and both mobile apps draw the checkmark. A Markdown page's links ([`PAGE_LINKS_KIND`]) are not listed yet: an
-/// origin hands this build's presenter a Markdown page without them. The pick kinds ([`PICK_KINDS`]) are left out: a
-/// viewer that shows handed-over picks adds them ([`PresentationClient::set_shows_picks`]).
+/// origin hands this build's presenter a Markdown page without them. The pick kinds ([`PICK_KINDS`]) and the held
+/// kinds ([`HELD_KINDS`]) are left out: a viewer that shows handed-over picks or takes what a headless origin held adds
+/// them ([`PresentationClient::set_shows_picks`], [`PresentationClient::set_takes_held`]).
 #[must_use]
 pub fn viewer_kinds(pages: bool) -> Vec<String> {
     SUPPORTED_KINDS

@@ -19,12 +19,6 @@ const RETAINED_LIMIT: usize = 32;
 
 /// `pick already pending`: the session, or the window slot a pick needs, holds one.
 pub const PICK_ALREADY_PENDING: &str = "pick already pending";
-/// An interaction's state while a headless origin holds it for a presenter (upstream's `ControlInteraction.unpresented`).
-pub const INTERACTION_UNPRESENTED: &str = "unpresented";
-/// An interaction's state while it is handed to a presenter (upstream's `ControlInteraction.offered`).
-pub const INTERACTION_OFFERED: &str = "offered";
-/// An interaction's state once its helper or channel holds it (upstream's `ControlInteraction.claimed`).
-pub const INTERACTION_CLAIMED: &str = "claimed";
 
 /// Where a session's pick in flight is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,8 +88,16 @@ impl SessionPicks {
         self.entry_of(session).map(|(_, entry)| entry.placement)
     }
 
-    /// Books `pick` as drawn by `session`'s presenter under `owner`; false when the session already has one.
-    pub(crate) fn open_remote(&mut self, pick: PendingPick, session: Uuid, owner: i64, window: Option<Uuid>) -> bool {
+    /// Books `pick` as drawn by `session`'s presenter under `owner`, keeping its `--follow` for a later offer; false
+    /// when the session already has one.
+    pub(crate) fn open_remote(
+        &mut self,
+        pick: PendingPick,
+        session: Uuid,
+        owner: i64,
+        window: Option<Uuid>,
+        follow: bool,
+    ) -> bool {
         if self.placement(session).is_some() {
             return false;
         }
@@ -104,7 +106,7 @@ impl SessionPicks {
             pick,
             placement: Placement::Presenter { owner },
             window,
-            follow: false,
+            follow,
         };
         self.entries.insert(entry.pick.id.clone(), entry);
         true
@@ -162,25 +164,15 @@ impl SessionPicks {
         entry.placement = Placement::Unpresented;
     }
 
-    /// `session`'s pick as `interactions` lists it while a presenter holds it or one is awaited, with its deadline
-    /// from `deadline`; `None` for none or one drawn in a window here (upstream's `interaction`).
-    pub(crate) fn interaction(
-        &self,
-        session: Uuid,
-        deadline: impl Fn(&str) -> Option<f64>,
-    ) -> Option<ngterm_proto::ControlInteraction> {
+    /// `session`'s pick id and whether a presenter holds it, while a presenter holds it or one is awaited; `None` for
+    /// none or one drawn in a window here (upstream's `interaction`).
+    pub(crate) fn interaction(&self, session: Uuid) -> Option<(&str, bool)> {
         let (id, entry) = self.entry_of(session)?;
-        let state = match entry.placement {
-            Placement::Presenter { .. } => INTERACTION_OFFERED,
-            Placement::Unpresented => INTERACTION_UNPRESENTED,
-            Placement::Local(_) => return None,
-        };
-        Some(ngterm_proto::ControlInteraction {
-            kind: "pick".to_owned(),
-            id: id.clone(),
-            state: state.to_owned(),
-            deadline: deadline(id),
-        })
+        match entry.placement {
+            Placement::Presenter { .. } => Some((id, true)),
+            Placement::Unpresented => Some((id, false)),
+            Placement::Local(_) => None,
+        }
     }
 
     /// Pick `id`'s outcome: pending while booked or queued, then the retained answer.
