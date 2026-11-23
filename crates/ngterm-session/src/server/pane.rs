@@ -808,6 +808,10 @@ impl Pane {
         if !input.forward {
             return Ok(false);
         }
+        if self.core.outlet.hold_input(data) {
+            self.core.wake_helper();
+            return Ok(true);
+        }
         self.core.await_replies_written();
         self.actor.write_input(data)?;
         Ok(true)

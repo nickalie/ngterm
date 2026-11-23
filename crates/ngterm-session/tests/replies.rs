@@ -706,6 +706,49 @@ fn a_scheme_report_reaches_the_program_before_the_keys_sent_after_the_change() -
     Ok(())
 }
 
+/// A key sent while a scheme report waits behind a Kitty barrier reaches the program after the report, and the
+/// owner's completion of the barrier still goes through meanwhile.
+#[cfg(unix)]
+#[test]
+fn a_key_sent_while_a_scheme_report_waits_behind_a_kitty_barrier_reaches_the_program_after_it() -> TestResult {
+    const ANSWER: &[u8] = b"\x1b_Gi=31;OK\x1b\\";
+    let dir = tempfile::tempdir()?;
+    let script = format!(
+        "stty raw -echo; printf '\\033[?2031h'; printf '\\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\\033\\\\'; \
+         printf 'armed\\r\\n'; head -c {} | tr '\\033' 'E'; printf '\\r\\nread-all\\r\\n'; sleep 10",
+        ANSWER.len() + LIGHT_REPORT.len() + 1
+    );
+    let mut config = pane_config("kitty-keys", dir.path(), support::spec(&["sh", "-c", &script]));
+    config.metadata = metadata();
+    config.kitty_wait = PATIENCE;
+    let (pane, creator) = Pane::spawn(config)?;
+    let owner = creator.subscription.id();
+    let deadline = Instant::now() + PATIENCE;
+    let (barrier, epoch) = loop {
+        assert!(Instant::now() < deadline, "no Kitty barrier");
+        if let Ok(ClientEvent::KittyBarrier { id, epoch }) = creator.subscription.recv_timeout(PATIENCE) {
+            break (id, epoch);
+        }
+    };
+    server_expects(&pane, "armed");
+    pane.set_metadata(
+        owner,
+        ReplyMetadata {
+            color_scheme: Some(ColorScheme::Light),
+            ..metadata()
+        },
+    );
+    assert!(pane.input(owner, b"K")?);
+    assert!(pane.complete(owner, barrier, epoch, ANSWER));
+    let expected = shown(&[ANSWER, LIGHT_REPORT, b"K"].concat()).replace('\x1b', "E");
+    let text: String = server_expects(&pane, "read-all")
+        .chars()
+        .filter(|ch| *ch != '\n')
+        .collect();
+    assert!(text.contains(&expected), "{expected:?} in {text:?}");
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn a_clipboard_read_goes_to_the_owner_alone_and_the_output_after_it_waits_for_the_answer() -> TestResult {

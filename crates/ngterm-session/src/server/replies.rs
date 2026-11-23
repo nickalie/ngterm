@@ -44,7 +44,8 @@
 //! is queued in the pane's [`Outlet`] under the pane's lock, in that lock's order; one thread, the pane's helper, takes
 //! them and writes them to the program, so it reads them in the order of its queries. A client's input waits until
 //! the helper wrote the replies made ready before it, so a mode 2031 report the client's new appearance made reaches
-//! the program before the keys the client sent next, as from one terminal (zmx's client wrote both in one stream).
+//! the program before the keys the client sent next, as from one terminal (zmx's client wrote both in one stream); input
+//! sent while replies wait behind a Kitty barrier waits there after them, and the client's reader goes on.
 //!
 //! # The reply owner
 //!
@@ -424,6 +425,19 @@ impl Outlet {
     /// Queue `data` for the program, behind every Kitty barrier waiting.
     pub fn push(&self, data: &[u8]) {
         lock(&self.sequence).push(data);
+    }
+
+    /// Queue a client's `input` behind the replies that wait for a Kitty barrier, so the program reads it after them,
+    /// as from one terminal; `false`, with nothing queued, when no reply waits.
+    pub fn hold_input(&self, input: &[u8]) -> bool {
+        let mut sequence = lock(&self.sequence);
+        if sequence.held == 0 {
+            return false;
+        }
+        let discard = std::mem::replace(&mut sequence.discard, false);
+        sequence.push(input);
+        sequence.discard = discard;
+        true
     }
 
     /// Drop the replies queued from now on (`true`), or queue them again (`false`).
@@ -1509,6 +1523,23 @@ mod tests {
         outlet.push(b"printed");
         outlet.discard(false);
         assert!(!outlet.ready());
+    }
+
+    #[test]
+    fn input_waits_behind_held_replies_alone_and_a_prints_discard_keeps_it() {
+        let outlet = Outlet::default();
+        let later = Instant::now() + Duration::from_secs(60);
+        assert!(!outlet.hold_input(b"free"), "nothing waits");
+        outlet.open(barrier(1, 7, later));
+        assert!(!outlet.hold_input(b"free"), "a barrier with no reply behind it");
+        outlet.push(b"report");
+        outlet.discard(true);
+        assert!(outlet.hold_input(b"key"));
+        outlet.push(b"printed");
+        outlet.discard(false);
+        assert!(!outlet.ready());
+        assert!(outlet.complete(1, 7, 1, b"K1".to_vec()));
+        assert_eq!(outlet.take(), chunks(&[b"K1", b"report", b"key"]));
     }
 
     #[test]
