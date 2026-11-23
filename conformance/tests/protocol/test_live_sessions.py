@@ -2037,3 +2037,85 @@ def test_a_headless_origin_refuses_a_wait_and_an_ask_or_pick_with_nowhere_to_sho
     )
     assert_error(origin.request("pick.open"), "pick.open requires items")
     assert_ok(origin.request("session.close", sid))
+
+
+HELD_PRESENTER_KINDS = [*PAGE_PRESENTER_KINDS, "pick.request", "pick.resolve", "pick.rejected", "pick.dismiss",
+                        "pending.snapshot", "job.token"]
+
+
+def _pending_batch(stream, timeout=30):
+    """The frames a headless origin held for a new presenter: its `pending.chunk` frames' slices joined in order at the
+    `pending.commit`, pings acked on the way."""
+    deadline = time.monotonic() + timeout
+    data = b""
+    while (remaining := deadline - time.monotonic()) > 0:
+        frame = stream.read(remaining)
+        if frame.get("kind") == "ping":
+            stream.send({"kind": "ack", "gen": frame["gen"], "rev": 0})
+        elif frame.get("kind") == "pending.chunk":
+            data += base64.b64decode(frame["pending"]["data"])
+        elif frame.get("kind") == "pending.commit":
+            return json.loads(data)
+    pytest.fail(f"no pending.commit within {timeout}s")
+
+
+def _held(tree, sid):
+    return [(held["kind"], held["state"]) for held in find_session(tree, sid).get("interactions", [])]
+
+
+@headless_origin
+@pytest.mark.covers(
+    "ask.open",
+    "pick.open",
+    "session.overlay.open",
+    "session.overlay.job.run",
+    "live.present",
+    "field:tree.session.interactions",
+    streams=("live.present", "session.overlay.job.run"),
+)
+def test_a_headless_origin_holds_interactions_for_the_next_presenter(remote_origin):
+    """Upstream's `ServerStreams` pending interactions: an ask, a pick and a program opened while nobody presents the
+    session wait there, unpresented, and are listed on its node; the next presenter listing `pending.snapshot` gets
+    them at once as one batch, the job under an offer token its helper must claim with; when that presenter goes, what
+    it did not settle waits again."""
+    origin = Ctl(remote_origin.instance)
+    sid = assert_ok(origin.request("session.new"))["id"]
+    buttons = [{"id": "y", "label": "Yes"}]
+    ask = assert_ok(origin.request("ask.open", sid, title="deploy?", style="terminal", buttons=buttons,
+                                   timeout=600))["id"]
+    pick = assert_ok(origin.request("pick.open", sid, items=[{"id": "a", "label": "Alpha"}]))["id"]
+    assert_ok(origin.request("session.overlay.open", sid, command="true"))
+    held = find_session(origin.tree(), sid)["interactions"]
+    assert [(entry["kind"], entry["state"]) for entry in held] == [
+        ("ask", "unpresented"),
+        ("pick", "unpresented"),
+        ("job", "unpresented"),
+    ]
+    assert [held[0]["id"], held[1]["id"]] == [ask, pick]
+    assert isinstance(held[0]["deadline"], float), "an ask's --timeout is its deadline"
+    assert_absent(held[2], "deadline")
+    job = held[2]["id"]
+    with origin.stream("session.overlay.job.run", job) as early:
+        assert_error(early.reply, "job not claimable")
+
+    presenter, gen = _subscribed(origin, sid, "presenter", HELD_PRESENTER_KINDS)
+    with presenter:
+        presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
+        wait_frame(presenter.read, "presenter.granted", presenter.send)
+        batch = _pending_batch(presenter)
+        assert [frame["kind"] for frame in batch] == ["ask.request", "pick.request", "overlay.request"]
+        assert [batch[0]["ask"]["id"], batch[1]["pick"]["id"], batch[2]["overlay"]["job"]] == [ask, pick, job]
+        token = batch[2]["overlay"]["token"]
+        assert _held(origin.tree(), sid) == [("ask", "offered"), ("pick", "offered"), ("job", "offered")]
+        assert isinstance(find_session(origin.tree(), sid)["interactions"][2]["deadline"], float), \
+            "a job's launch window starts at its offer"
+        with origin.stream("session.overlay.job.run", job) as untokened:
+            assert_error(untokened.reply, "job not claimable")
+        with origin.stream("session.overlay.job.run", job, token=token) as helper:
+            assert helper.reply.ok, helper.reply.raw
+            assert helper.read()["context"]["command"] == "true"
+            helper.send({"kind": "started"})
+            helper.send({"kind": "exited", "code": 0})
+            origin.wait_tree(lambda tree: [kind for kind, _ in _held(tree, sid)] == ["ask", "pick"])
+    origin.wait_tree(lambda tree: _held(tree, sid) == [("ask", "unpresented"), ("pick", "unpresented")])
+    assert_ok(origin.request("session.close", sid))
