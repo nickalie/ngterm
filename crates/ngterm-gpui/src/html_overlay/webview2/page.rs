@@ -421,8 +421,9 @@ impl Page {
         self.placement_changed();
     }
 
-    /// Where the native window should be now: shown only while the page is on screen, laid out, not failed (the
-    /// failure is drawn where the page would be) and nothing the window draws covers it (`registry::set_covered`).
+    /// Where the native window should be now: shown only while the page is on screen, laid out, not failed nor
+    /// awaiting its first content (the failure or the loading indicator is drawn where the page would be) and nothing
+    /// the window draws covers it (`registry::set_covered`).
     pub fn wanted(&self) -> Placement {
         let mut wanted = self.laid_out.get();
         let (shown, failed) = {
