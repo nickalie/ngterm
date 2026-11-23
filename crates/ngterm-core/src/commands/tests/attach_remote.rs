@@ -2338,6 +2338,54 @@ fn a_partial_picked_group_moves_its_error_hud_to_the_attached_parent() {
     assert_eq!(row.overlay.effective_hud_spec(), Some(failure(&expected)));
 }
 
+/// Attaches a two-pane session listed by an origin whose attach bridge is `capability`, `select`ed or not.
+fn attach_split_session(fixture: &mut Fixture, capability: Option<u32>, select: bool) -> Uuid {
+    let mut remote = build_session();
+    remote["panes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"pane":"right", "daemon": crate::live::daemon_name(Uuid::from_u128(0xd2))}));
+    let remote: ngterm_proto::ControlRemoteSession = serde_json::from_value(remote).unwrap();
+    let tree = ngterm_proto::ControlRemoteTree {
+        host: None,
+        endpoint: ngterm_proto::ControlLiveEndpoint {
+            peer: None,
+            executable: "/session".into(),
+            socket_directory: "/live".into(),
+            attach_bridge: capability,
+        },
+        sessions: vec![remote.clone()],
+        presentation: None,
+        beside: None,
+        skipped: None,
+        restore: None,
+    };
+    let placement = crate::remote::attach::Placement {
+        window: fixture.window,
+        workspace: fixture.workspace,
+        at: None,
+        parent: None,
+        select,
+    };
+    let result = fixture
+        .core
+        .attach_remote_session(&remote, &tree, "origin", placement)
+        .unwrap();
+    Uuid::parse_str(result.id.as_deref().unwrap()).unwrap()
+}
+
+#[test]
+fn an_attached_split_session_opens_on_its_left_pane_selected_or_not() {
+    for select in [true, false] {
+        let mut fixture = Fixture::new(0);
+        let id = attach_split_session(&mut fixture, None, select);
+        let session = fixture.store().session(id).unwrap();
+        assert!(session.split.exists && session.split.shown);
+        assert!(!session.split.focused, "select: {select}");
+        assert_eq!(fixture.core.pane_focus_requested(id), select);
+    }
+}
+
 #[test]
 fn initial_remote_panes_pair_their_capability_gated_commands_and_nonces() {
     for capability in [
@@ -2346,42 +2394,7 @@ fn initial_remote_panes_pair_their_capability_gated_commands_and_nonces() {
         Some(crate::attach_bridge::VERSION + 1),
     ] {
         let mut fixture = Fixture::new(0);
-        let mut remote = build_session();
-        remote["panes"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"pane":"right", "daemon": crate::live::daemon_name(Uuid::from_u128(0xd2))}));
-        let remote: ngterm_proto::ControlRemoteSession = serde_json::from_value(remote).unwrap();
-        let tree = ngterm_proto::ControlRemoteTree {
-            host: None,
-            endpoint: ngterm_proto::ControlLiveEndpoint {
-                peer: None,
-                executable: "/session".into(),
-                socket_directory: "/live".into(),
-                attach_bridge: capability,
-            },
-            sessions: vec![remote.clone()],
-            presentation: None,
-            beside: None,
-            skipped: None,
-            restore: None,
-        };
-        let result = fixture
-            .core
-            .attach_remote_session(
-                &remote,
-                &tree,
-                "origin",
-                crate::remote::attach::Placement {
-                    window: fixture.window,
-                    workspace: fixture.workspace,
-                    at: None,
-                    parent: None,
-                    select: false,
-                },
-            )
-            .unwrap();
-        let id = Uuid::parse_str(result.id.as_deref().unwrap()).unwrap();
+        let id = attach_split_session(&mut fixture, capability, false);
         let session = fixture.store_mut().unwrap().session_mut(id).unwrap();
         for role in [crate::model::StatusPane::Left, crate::model::StatusPane::Right] {
             let launch = session.pane_launch(role).unwrap();

@@ -118,6 +118,44 @@ fn a_full_ring_serves_exactly_its_capacity() {
 }
 
 #[test]
+fn a_tail_cursor_returns_an_empty_batch_at_the_current_sequence() {
+    let mut subject = ring(2);
+    assert_eq!(subject.read(&after(0)).unwrap(), subject.batch(0, Vec::new()));
+    subject.append(draft(EventKind::Status, "one"));
+    subject.append(draft(EventKind::Notify, "two"));
+    subject.append(draft(EventKind::SessionCreated, "three"));
+    assert_eq!(subject.read(&after(3)).unwrap(), subject.batch(3, Vec::new()));
+}
+
+#[test]
+fn a_run_mismatch_at_the_tail_still_fails() {
+    let mut subject = ring(DEFAULT_CAPACITY);
+    subject.append(draft(EventKind::Status, "s"));
+    let other = ReadOptions {
+        cursor: Some(EventCursor {
+            run: Uuid::from_u128(0x1111_1111_2222_3333_4444_5555_5555_5555),
+            after: 1,
+        }),
+        ..ReadOptions::default()
+    };
+    let failure = subject.read(&other).unwrap_err();
+    assert_eq!(failure.error, EventReadError::RunChanged);
+    assert_eq!(failure.anchor, subject.batch(1, Vec::new()));
+}
+
+#[test]
+fn a_mid_ring_cursor_after_eviction_starts_after_the_cursor() {
+    let mut subject = ring(3);
+    for name in ["one", "two", "three", "four", "five"] {
+        subject.append(draft(EventKind::Status, name));
+    }
+    let all = subject.read(&after(3)).unwrap();
+    let limited = subject.read(&of_kinds(&after(2), &[EventKind::Status], 2)).unwrap();
+    assert_eq!((names(&all), all.next), (vec!["four", "five"], 5));
+    assert_eq!((names(&limited), limited.next), (vec!["three", "four"], 4));
+}
+
+#[test]
 fn reads_are_non_destructive_and_independent() {
     let mut subject = ring(DEFAULT_CAPACITY);
     subject.append(draft(EventKind::Status, "s"));

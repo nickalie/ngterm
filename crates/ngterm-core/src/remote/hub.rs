@@ -94,7 +94,8 @@ struct Subscriber {
     /// opt-in kind.
     kinds: Vec<String>,
     revision: i64,
-    last_ack: Instant,
+    /// The first ping still unanswered: a late heartbeat sends a ping before it can call the viewer stale.
+    pinged_at: Option<Instant>,
     /// Deltas published while the snapshot is being taken, held so they land after it.
     held: Option<Vec<Body>>,
     presents: bool,
@@ -399,7 +400,6 @@ impl PresentationHub {
             .ok_or(SubscribeError::UnsupportedVersion(hello.version))?;
         self.last_generation += 1;
         let id = SubscriberId(self.last_generation);
-        let now = (self.now)();
         let kinds: Vec<String> = SUPPORTED_KINDS
             .iter()
             .chain(OPT_IN_KINDS.iter())
@@ -413,7 +413,7 @@ impl PresentationHub {
                 sink,
                 kinds: kinds.clone(),
                 revision: 0,
-                last_ack: now,
+                pinged_at: None,
                 held: Some(Vec::new()),
                 presents: hello.mode == PresentationMode::Presenter,
                 dropped_pages: HashMap::new(),
@@ -584,7 +584,7 @@ impl PresentationHub {
         }
         let session = subscriber.session;
         match frame.body {
-            Body::Ack => subscriber.last_ack = (self.now)(),
+            Body::Ack => subscriber.pinged_at = None,
             Body::Ping => {
                 self.send(Body::Ack, from);
             }
@@ -619,19 +619,22 @@ impl PresentationHub {
         }
     }
 
-    /// Drops every subscriber whose last ack is older than the stale timeout and pings the rest. The owner of the
-    /// streams calls this on its own timer.
+    /// Drops every subscriber that left a ping unanswered past the stale timeout and pings the rest. The owner of
+    /// the streams calls this on its own timer.
     pub fn heartbeat(&mut self) {
         let now = (self.now)();
-        let ids: Vec<(SubscriberId, Instant)> = self
-            .subscribers
-            .iter()
-            .map(|(id, subscriber)| (*id, subscriber.last_ack))
-            .collect();
-        for (id, last_ack) in ids {
-            if now.saturating_duration_since(last_ack) > self.stale_timeout {
-                self.drop_subscriber(id, CloseReason::Stale);
+        let ids: Vec<SubscriberId> = self.subscribers.keys().copied().collect();
+        for id in ids {
+            let Some(subscriber) = self.subscribers.get_mut(&id) else {
                 continue;
+            };
+            match subscriber.pinged_at {
+                Some(pinged_at) if now.saturating_duration_since(pinged_at) > self.stale_timeout => {
+                    self.drop_subscriber(id, CloseReason::Stale);
+                    continue;
+                }
+                Some(_) => {}
+                None => subscriber.pinged_at = Some(now),
             }
             self.send(Body::Ping, id);
         }
@@ -1011,6 +1014,7 @@ mod tests {
                 })
                 .unwrap();
             if stale_heartbeat {
+                hub.heartbeat();
                 advance(&clock, 31);
                 hub.heartbeat();
                 assert_eq!(first.borrow().closed, Some(CloseReason::Stale));
@@ -1461,8 +1465,26 @@ mod tests {
         hub.heartbeat();
         advance(&clock, 20);
         hub.heartbeat();
+        assert_eq!(seen.borrow().closed, None);
+        advance(&clock, 11);
+        hub.heartbeat();
         assert_eq!(seen.borrow().closed, Some(CloseReason::Stale));
         assert_eq!(hub.subscriber_count(session), 0);
+    }
+
+    // regression: a heartbeat late past the stale timeout dropped viewers it had never given a ping to answer
+    #[test]
+    fn a_long_gap_between_heartbeats_leaves_the_viewer_a_ping_to_answer() {
+        let (mut hub, clock) = hub();
+        let (id, seen) = subscribe(&mut hub, Uuid::new_v4(), PresentationMode::Mirror);
+        advance(&clock, 60);
+        hub.heartbeat();
+        assert_eq!(seen.borrow().closed, None);
+        hub.receive(frame(id, Body::Ack), id);
+        advance(&clock, 60);
+        hub.heartbeat();
+        assert_eq!(seen.borrow().closed, None);
+        assert_eq!(bodies(&seen).iter().filter(|body| **body == Body::Ping).count(), 2);
     }
 
     #[test]
@@ -1543,6 +1565,7 @@ mod tests {
             hub.receive(frame(id, Body::PresenterAcquire), id);
             assert_eq!(hub.take_events(), gained(session, &BOTH));
             if stale {
+                hub.heartbeat();
                 advance(&clock, 31);
                 hub.heartbeat();
             } else {

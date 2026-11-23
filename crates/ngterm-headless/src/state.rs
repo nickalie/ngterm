@@ -128,6 +128,8 @@ pub struct HeadlessState {
     phase: Phase,
     heartbeat_armed: bool,
     remote_tick_armed: bool,
+    /// The last task changed nothing the terminals follow ([`ngterm_core::settles_after`]): [`Self::land`] skips them.
+    unchanged: bool,
 }
 
 /// The presentation bridges of the sessions this instance attached from another machine ([`ngterm_app::remote`]).
@@ -178,6 +180,7 @@ impl HeadlessState {
             phase: Phase::Running,
             heartbeat_armed: false,
             remote_tick_armed: false,
+            unchanged: false,
         }
     }
 
@@ -227,7 +230,7 @@ impl HeadlessState {
 
     /// After every task: the terminals follow the model, and what windows would take is dropped.
     pub fn land(&mut self) {
-        if self.quitting() {
+        if std::mem::take(&mut self.unchanged) || self.quitting() {
             return;
         }
         let before = self.panes.len();
@@ -270,10 +273,15 @@ impl HeadlessState {
         }
     }
 
-    /// Answers one control request and settles what it changed (the GPUI frontend's `handle_request`).
+    /// Answers one control request and settles what it changed (the GPUI frontend's `handle_request`); a follower's
+    /// poll settles nothing ([`ngterm_core::settles_after`]).
     pub fn handle_request(&mut self, request: &Request) -> Reply {
         let dispatched = self.core.begin(request);
         let reply = match dispatched {
+            Dispatched::Done(response) if !ngterm_core::settles_after(request.cmd) => {
+                self.unchanged = true;
+                return response.into();
+            }
             Dispatched::Done(response) if request.cmd == Command::Session(SessionCmd::OverlayJobRun) && response.ok => {
                 self.job_stream(response)
             }

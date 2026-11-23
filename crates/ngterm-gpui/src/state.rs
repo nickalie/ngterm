@@ -236,6 +236,9 @@ pub struct AppState {
     poster: Poster,
     /// The quit save ran: nothing is committed, saved or re-rendered after it.
     quitting: bool,
+    /// The follower's poll the last task answered, which changed nothing the windows show
+    /// ([`ngterm_core::settles_after`]): the loop skips their sync.
+    unsettled_poll: Option<Command>,
     /// The window holding the keyboard, as the frontend reports it.
     key_window: Option<Uuid>,
     /// What [`AppState::take_frontend_work`] hands the frontend next.
@@ -304,6 +307,7 @@ impl AppState {
             revealed,
             poster: detached_poster(),
             quitting: false,
+            unsettled_poll: None,
             key_window: None,
             frontend: FrontendWork::default(),
             heartbeat_armed: false,
@@ -361,6 +365,11 @@ impl AppState {
     #[must_use]
     pub fn is_quitting(&self) -> bool {
         self.quitting
+    }
+
+    /// Whether the task that just ran changed nothing the windows show; the flag clears with the call.
+    pub fn take_unchanged(&mut self) -> bool {
+        self.unsettled_poll.take().is_some()
     }
 
     /// What the tasks since the last call left to the frontend.
@@ -809,10 +818,15 @@ impl AppState {
 
     /// Answers one control request and settles what it changed. A command waiting on the frontend (a terminal coming
     /// up, a search count) answers later: its steps run as delayed main-loop tasks, each settled, while the
-    /// connection's thread waits for the deferred reply.
+    /// connection's thread waits for the deferred reply. A follower's poll settles nothing and leaves the windows
+    /// alone ([`ngterm_core::settles_after`]).
     pub fn handle_request(&mut self, request: &Request) -> Reply {
         let dispatched = self.core.begin(request);
         let reply = match dispatched {
+            Dispatched::Done(response) if !ngterm_core::settles_after(request.cmd) => {
+                self.unsettled_poll = Some(request.cmd);
+                return response.into();
+            }
             Dispatched::Done(response) if request.cmd == Command::Session(SessionCmd::OverlayJobRun) && response.ok => {
                 self.job_stream(response)
             }

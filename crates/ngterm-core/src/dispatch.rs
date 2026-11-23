@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
-use ngterm_proto::command::{BrowserCmd, DebugCmd, EventsCmd, SessionCmd};
+use ngterm_proto::command::{BrowserCmd, DebugCmd, EventsCmd, MsgCmd, SessionCmd};
 use ngterm_proto::{
     AppIdentity, Args, Command, ConformanceProfile, ControlResult, ControlTree, PARITY_LEVEL, Request, Response,
     VersionResult,
@@ -202,6 +202,14 @@ const NOT_JSON: &str = "The given data was not valid JSON.";
 /// The refusal of a command sent with an operation id (upstream's dispatcher, naming this build's headless server:
 /// conformance/docs/rust-build.md > Other strings of the build's own). Only that server keeps receipts.
 pub const OPERATION_RECEIPTS_ERROR: &str = "operation receipts are served only by ngterm-headless";
+
+/// Whether a frontend settles and syncs its windows after a request of `cmd`. The polls an idle follower repeats
+/// (`events.read`, `msg.read`) change nothing a commit or a window reads, so they skip both (upstream's window cache
+/// skip, #955).
+#[must_use]
+pub fn settles_after(cmd: Command) -> bool {
+    !matches!(cmd, Command::Events(EventsCmd::Read) | Command::Msg(MsgCmd::Read))
+}
 
 /// Decodes one request line (newline excluded), as upstream's `handleConnection` decodes a `ControlRequest`
 /// (`agterm/Control/ControlServer.swift`).
@@ -1170,6 +1178,16 @@ mod tests {
             // a fresh core each, so `window.new` opens no window for the commands after it
             let response = core().dispatch(&Request::new(cmd));
             assert_eq!(response.ok, ANSWERED.contains(&cmd), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn only_the_followers_polls_skip_the_settle() {
+        use ngterm_proto::command::MsgCmd;
+        assert!(!settles_after(Command::Events(EventsCmd::Read)));
+        assert!(!settles_after(Command::Msg(MsgCmd::Read)));
+        for cmd in [Command::Msg(MsgCmd::Ack), Command::Msg(MsgCmd::Send), Command::Tree] {
+            assert!(settles_after(cmd), "{cmd:?}");
         }
     }
 

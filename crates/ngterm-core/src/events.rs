@@ -291,14 +291,18 @@ impl EventRing {
         if cursor.after > self.current {
             return Err(fail(EventReadError::CursorAhead));
         }
+        if cursor.after == self.current {
+            return Ok(self.batch(self.current, Vec::new()));
+        }
         let oldest = self.entries.front().map_or(self.current + 1, |event| event.seq);
         if cursor.after + 1 < oldest {
             return Err(fail(EventReadError::CursorExpired));
         }
         // sequences are contiguous, so the first event after the cursor sits at a known index
-        let start = usize::try_from(cursor.after + 1 - oldest).unwrap_or(usize::MAX);
+        let start = usize::try_from(cursor.after + 1 - oldest)
+            .map_or(self.entries.len(), |start| start.min(self.entries.len()));
         let mut items = Vec::new();
-        for event in self.entries.iter().skip(start) {
+        for event in self.entries.range(start..) {
             if options.kinds.as_ref().is_some_and(|kinds| !kinds.contains(&event.kind)) {
                 continue;
             }

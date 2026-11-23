@@ -852,6 +852,37 @@ fn land_and_drain_deliver_real_terminal_reports_then_remove_closed_panes() {
     state.teardown();
 }
 
+#[cfg(unix)]
+#[test]
+fn a_followers_poll_leaves_the_terminals_to_the_next_task() {
+    let polls = [
+        Request::new(Command::Events(ngterm_proto::command::EventsCmd::Read)),
+        Request::new(Command::Msg(ngterm_proto::command::MsgCmd::Read)),
+    ];
+    for poll in polls {
+        let (mut state, _, _) = fixture();
+        let config = ngterm_core::ghostty_config::GhosttyConfig::default();
+        state.panes = Panes::new(
+            PaneEnvironment {
+                socket: "private.sock".into(),
+                program_version: "test".into(),
+                host: ngterm_term::Host::new(&config, Some("/bin/sh".into()), None, None),
+                config,
+                grid: (80, 24),
+                hostname: "box".into(),
+            },
+            Arc::new(|_, _| {}),
+        );
+        drop(state.handle_request(&poll));
+        state.land();
+        assert_eq!(state.terminals(), 0, "{:?}", poll.cmd);
+        drop(state.handle_request(&Request::new(Command::Tree)));
+        state.land();
+        assert_eq!(state.terminals(), 1, "{:?}", poll.cmd);
+        state.teardown();
+    }
+}
+
 #[test]
 fn a_debounced_font_change_also_saves_the_latest_terminal_directory() {
     let (mut state, main_loop, _) = fixture();

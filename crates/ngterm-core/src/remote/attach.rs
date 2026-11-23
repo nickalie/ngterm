@@ -341,6 +341,10 @@ fn install_panes(
             .and_then(SplitAxis::from_wire)
             .unwrap_or_default();
         store.set_split_visibility(created, true, Some(axis));
+        // a new split focuses its right pane; an attached session opens on its left one
+        if let Some(session) = store.session_mut(created) {
+            session.split.focused = false;
+        }
     }
     let Some(session) = store.session(created) else {
         return HashMap::new();

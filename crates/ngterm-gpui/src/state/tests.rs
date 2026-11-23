@@ -3254,3 +3254,18 @@ fn a_path_clicked_in_an_attached_pane_is_forwarded_and_never_opened_here() {
         assert!(work.reveals.is_empty() && work.open_urls.is_empty(), "{raw}");
     }
 }
+
+#[test]
+fn a_followers_poll_leaves_the_windows_alone_and_a_command_does_not() {
+    let mut state = AppState::new(core(WindowLibrary::seeded("/home/u"), None));
+    for cmd in [
+        Command::Events(ngterm_proto::command::EventsCmd::Read),
+        Command::Msg(ngterm_proto::command::MsgCmd::Read),
+    ] {
+        drop(state.handle_request(&Request::new(cmd)));
+        assert!(state.take_unchanged(), "{cmd:?}");
+        assert!(!state.take_unchanged(), "{cmd:?}");
+    }
+    drop(state.handle_request(&Request::new(Command::Tree)));
+    assert!(!state.take_unchanged());
+}

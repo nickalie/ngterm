@@ -94,6 +94,6 @@ pub use commands::process::{CorePoster, CoreTask, ProcessHost, widened_path};
 pub use commands::recent::NO_RECENT_ITEMS;
 pub use commands::relaunch::{EXIT_CAPTURE_BUDGET, EXIT_LISTING_TIMEOUT, PaneSpawn};
 pub use commands::surface::POLL_INTERVAL;
-pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
+pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request, settles_after};
 pub use error::{ControlError, Noun};
 pub use windows::{WindowRequest, WindowSize, WindowState};

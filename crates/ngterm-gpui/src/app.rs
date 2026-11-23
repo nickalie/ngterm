@@ -412,6 +412,9 @@ fn windows(context: PaneContext, resources: Option<PathBuf>, dark: bool, poster:
 
 /// Brings the windows in line with the model, then lands what the last task left to the frontend.
 fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
+    if state.update(cx, |state, _| state.take_unchanged()) {
+        return;
+    }
     crate::updater::set_automatic(state.read(cx).core.settings().auto_update.unwrap_or(true), cx);
     let resettle = state.update(cx, |state, cx| {
         if state.is_quitting() {
