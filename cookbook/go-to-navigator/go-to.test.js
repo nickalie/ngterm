@@ -612,6 +612,8 @@ const pagePx = (() => {
     return px(sides[0]) + px(sides[2] ?? sides[0]);
   };
   const line = px(/\/(\S+)/.exec(pageCss.body.font)[1]);
+  assert.equal(px(pageCss[".row.ws:first-child"]["margin-top"]), 0, "the first workspace has no margin above it");
+  assert.equal(vertical(pageCss["#chip"].padding), 0, "the filter chip does not make the search bar taller");
   return {
     top: line + vertical(pageCss["#top"].padding),
     info: 2 * line + vertical(pageCss["#info"].padding),
@@ -624,13 +626,15 @@ const pagePx = (() => {
   };
 })();
 
-const opensAt = (t, zoom = 1) => {
+const contentPx = t => {
   const p = pagePx;
   const workspaces = t.workspaces.length;
   const list = workspaces ? p.row * new Navigator(t, {}).view().all.length + p.workspace_margin * (workspaces - 1)
                           : p.empty;
-  return new Fit().next(list + p.top + p.info + p.hints + p.gaps + p.padding, zoom);
+  return list + p.top + p.info + p.hints + p.gaps + p.padding;
 };
+
+const opensAt = (t, zoom = 1) => new Fit().next(contentPx(t), zoom);
 
 test("outside text cannot open a comment or a tag in the page's data", () => {
   const hostile = structuredClone(tree);
@@ -718,12 +722,25 @@ test("with no workspace the panel opens at the empty list's one line", () => {
 });
 
 test("the script adds up the heights go-to.html lays out, and rounds as the page does", () => {
-  const script = fs.readFileSync(path.join(__dirname, "go-to-navigator.sh"), "utf8");
-  const page = fs.readFileSync(path.join(__dirname, "assets", "go-to.js"), "utf8");
-  const scriptPx = Object.fromEntries([.../\{([^}]*)\} as \$px/.exec(script)[1].matchAll(/(\w+): (\d+)/g)]
-    .map(([, name, value]) => [name, Number(value)]));
-  assert.deepEqual(scriptPx, pagePx);
-  assert.equal(/\* \$zoom - (\S+) \| ceil/.exec(script)[1], /: 1\) - (\S+)\);/.exec(page)[1]);
+  const nine = structuredClone(tree);
+  nine.workspaces.push({ id: "W3", name: "empty", sessions: [] });
+  const trees = [
+    { workspaces: [] },
+    { workspaces: [{ id: "W1", name: "a", sessions: [] }] },
+    { workspaces: [{ id: "W1", name: "a", sessions: [] }, { id: "W2", name: "b", sessions: [] }] },
+    tree,
+    nine,
+  ];
+  let noisy = 0;
+  for (const t of trees) {
+    for (const zoom of [0.55, 0.7, 1, 1.1, 1.25, 1.4, 2.2, 2.8]) {
+      const run = runScript([], { treeJson: t, openStatus: 2, settings: JSON.stringify({ htmlOverlayZoom: zoom }) });
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(run.height, opensAt(t, zoom), `${contentPx(t)} px at ${zoom}`);
+      if (Math.ceil(contentPx(t) * zoom) !== run.height) noisy += 1;
+    }
+  }
+  assert.ok(noisy > 0, "some product carries float noise above a whole point");
 });
 
 test("WebKit's float noise in a measure keeps its point, a hundredth of a pixel more takes the next", () => {
@@ -756,4 +773,42 @@ test("settings.json is read from the state directory the app uses", () => {
   assert.equal(at({ ...unset, XDG_DATA_HOME: path.join(home, "data") }).height, opensAt(tree, 1.5));
   assert.equal(at({ ...unset, XDG_DATA_HOME: "data" }).height, opensAt(tree, 2), "a relative XDG_DATA_HOME is ignored");
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test("a jq that ends its lines with CRLF, as a native one under Git Bash does, still opens and selects", () => {
+  const shim = fs.mkdtempSync(path.join(os.tmpdir(), "go-to-jq-"));
+  const real = spawnSync("bash", ["-c", "command -v jq"], { encoding: "utf8" }).stdout.trim();
+  fs.writeFileSync(path.join(shim, "jq"), `#!/usr/bin/env bash\n"${real}" "$@" | perl -pe 's/\\n/\\r\\n/'\n`, { mode: 0o755 });
+  const env = { PATH: `${shim}${path.delimiter}${process.env.PATH}` };
+  const run = runScript([], { env, settings: '{"htmlOverlayZoom": 1.25}',
+                              openOut: JSON.stringify({ outcome: "submitted", value: "p:S2:right" }) });
+  fs.rmSync(shim, { recursive: true, force: true });
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(!run.calls.join("\n").includes("\r"), "no CR reaches ngtermctl");
+  assert.equal(run.height, opensAt(tree, 1.25));
+  assert.ok(run.calls.includes("session select --target S2"));
+  assert.ok(run.calls.includes("session focus right --target S2"));
+});
+
+test("a workspace takes no branch from a name the branch map only inherits", () => {
+  const t = { workspaces: [{ id: "W1", name: "a", sessions: [{ id: "S1", name: "s", cwd: "constructor" }] }] };
+  assert.equal(new Navigator(t, {}).view().all.find(r => r.target === "w:W1").branch, null);
+});
+
+test("a refused resize is asked again at the next poll", async () => {
+  const calls = [];
+  let refuse = true;
+  const request = (cmd, opts) => {
+    calls.push(cmd);
+    if (cmd === "tree") return Promise.resolve({ tree });
+    return refuse ? Promise.reject(new Error("refused")) : Promise.resolve({});
+  };
+  const panel = new Panel(request, list => list.length * 10, "");
+  const apply = t => new Navigator(t, {}).view();
+  assert.equal(await panel.poll(apply), 80);
+  await new Promise(r => setImmediate(r));
+  refuse = false;
+  assert.equal(await panel.poll(apply), 80, "the same tree fits again after a refusal");
+  assert.equal(await panel.poll(apply), null, "and not after an accepted resize");
+  assert.equal(calls.filter(c => c === "session.overlay.resize").length, 2);
 });

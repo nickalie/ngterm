@@ -72,12 +72,12 @@ if [ "$state" = "$socket" ] || [ ! -f "$state/settings.json" ]; then
 fi
 zoom=1
 if [ -n "$state" ]; then
-  zoom=$(jq -s '
+  zoom=$(jq -js '
     (if length == 1 and (.[0] | type) == "object" then .[0].htmlOverlayZoom else null end) as $zoom
     | if ($zoom | type) != "number" or ($zoom | isnan or isinfinite) then 1
       elif $zoom < 0.5 then 0.5 elif $zoom > 3 then 3 else $zoom end' "$state/settings.json" 2>/dev/null) || zoom=1
 fi
-height=$(jq --argjson zoom "$zoom" '
+height=$(jq -j --argjson zoom "$zoom" '
   {top: 33, info: 51, hints: 17, gaps: 24, padding: 20, row: 21, workspace_margin: 6, empty: 35} as $px
   | [(.workspaces // [])[]
      | 1 + ([(.sessions // [])[] | select(.content != "page") | if .hasSplit then 3 else 1 end] | add // 0)]
@@ -92,7 +92,7 @@ out=$(wctl session overlay open --html "$tmp/go-to.html" --js --chromeless --siz
   --block --target "${AGT_SESSION_ID:-active}") || status=$?
 [ "$status" -eq 2 ] && exit 0
 [ "$status" -eq 0 ] || exit "$status"
-choice=$(jq -r '.value // empty' <<<"$out")
+choice=$(jq -j '.value // empty' <<<"$out")
 
 case "$choice" in
   w:*) wctl workspace select --target "${choice#w:}" ;;
@@ -103,7 +103,7 @@ case "$choice" in
     pane=${rest#*:}
     wctl session select --target "$session"
     split=$(wctl tree --json |
-      jq -r --arg id "$session" '.result.tree.workspaces[].sessions[] | select(.id == $id) | .hasSplit // false')
+      jq -j --arg id "$session" '.result.tree.workspaces[].sessions[] | select(.id == $id) | .hasSplit // false')
     if [ "$split" = true ]; then
       wctl session focus "$pane" --target "$session"
     fi

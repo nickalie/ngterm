@@ -196,7 +196,7 @@ const GoTo = (() => {
         }
       }
       const first = sessions[0];
-      const branch = first && !first.remoteHost ? (branches || {})[first.cwd] || null : null;
+      const branch = first && !first.remoteHost && Object.hasOwn(known, first.cwd) ? known[first.cwd] : null;
       return { id: ws.id, name: ws.name || "", branch, panes };
     });
   }
@@ -459,7 +459,12 @@ const GoTo = (() => {
       if (json === this.fitted) return null;
       this.fitted = json;
       const height = this.fit.next(this.measure(view.all, view), pageZoom(tree, this.session));
-      if (height !== null) this.request("session.overlay.resize", { args: { height } }).catch(() => {});
+      if (height !== null) {
+        this.request("session.overlay.resize", { args: { height } }).catch(() => {
+          this.fit.height = null;
+          this.fitted = null;
+        });
+      }
       return height;
     }
   }
