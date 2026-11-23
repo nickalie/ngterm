@@ -1,7 +1,7 @@
 """A split that a viewer closes, hides or swaps is a pane of the origin, so the change reaches the origin and the next
-attach shows it. Upstream sends the change only from its GUI actions (`AppActions.swift` `performRemote(.setSplit)` and
-`performRemote(.closeSplit)`); its `session.split` and `session.split.close` change only the viewer's row, so these
-tests are Rust-only: the build sends the change from both paths."""
+attach shows it. Upstream sends a split change to the server only for a row of a remote (catalog) window, from its GUI
+actions and from `session.split`/`session.split.close` alike (`performRemote`, `RemoteOperation.structuralCommands`).
+An attached row (`live attach`) keeps the change on the viewer, so these tests are Rust-only."""
 
 import re
 
