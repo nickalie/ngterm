@@ -1009,6 +1009,17 @@ fn listed<T: Transport>(
     began: u64,
 ) -> Vec<RemoteSession> {
     let tree = with_skipped_app(state, &machine_id, tree);
+    keep_listed(state, link, machine_id, tree, began)
+}
+
+/// [`listed`] for a `tree` that already holds the app it went on without.
+fn keep_listed<T: Transport>(
+    state: &State<T>,
+    link: &OnMachine<T::Connection>,
+    machine_id: String,
+    tree: ControlRemoteTree,
+    began: u64,
+) -> Vec<RemoteSession> {
     let sessions = sessions::listed_sessions(&tree);
     let hint = not_live::hint(&tree);
     if !state.is_current(&machine_id, &link.connection) {
@@ -1039,6 +1050,19 @@ async fn list_sessions<T: Transport>(
     let began = state.ticket();
     let tree = sessions::list(&*link.connection, &link.host).await.map_err(remote)?;
     Ok(listed(&state, &link, machine_id, tree, began))
+}
+
+/// [`list_sessions`], answered with the tree it fetched, which a newer change on the machine can keep from being kept.
+async fn list_tree<T: Transport>(
+    state: Rc<State<T>>,
+    link: OnMachine<T::Connection>,
+    machine_id: String,
+) -> Result<ControlRemoteTree, MobileError> {
+    let began = state.ticket();
+    let tree = sessions::list(&*link.connection, &link.host).await.map_err(remote)?;
+    let tree = with_skipped_app(&state, &machine_id, tree);
+    keep_listed(&state, &link, machine_id, tree.clone(), began);
+    Ok(tree)
 }
 
 async fn create_session<T: Transport>(
@@ -1181,7 +1205,7 @@ async fn tick<T: Transport>(state: Weak<State<T>>) {
 }
 
 /// The listed session `raw`, a link tapped in `pane`, names. A session link the machine's kept listing misses is
-/// looked for again in a fresh listing: a program can make the session after the last one (upstream's viewer keeps
+/// looked for again in a fresh listing, in the tree that listing fetched even when it is not kept: a program can make the session after the last one (upstream's viewer keeps
 /// its listing live, `WindowLibrary+SessionLink.swift`).
 fn session_link<T: Transport>(
     state: &Rc<State<T>>,
@@ -1196,12 +1220,14 @@ fn session_link<T: Transport>(
         return;
     }
     let (listed, listing) = oneshot::channel();
-    spawn_on_machine(state, pane.machine_id.clone(), listed, list_sessions);
+    spawn_on_machine(state, pane.machine_id.clone(), listed, list_tree);
     let state = Rc::clone(state);
     tokio::task::spawn_local(async move {
-        // a failed listing leaves the kept one, which misses the session
-        let _ = listing.await;
-        let target = kept_link_target(&state, &pane, &raw);
+        let target = match listing.await {
+            Ok(Ok(tree)) => sessions::session_link_target(&tree, &pane.session_id, &raw),
+            // a failed listing leaves the kept one, which misses the session
+            _ => kept_link_target(&state, &pane, &raw),
+        };
         noted_link(&pane, target.as_ref(), true);
         let _ = reply.send(Ok(target));
     });

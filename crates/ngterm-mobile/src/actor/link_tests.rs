@@ -172,3 +172,42 @@ fn keys_typed_in_the_pane_reach_an_origin_that_speaks_them() {
     let submit = format!(r#""input":{{"pane":"{PANE}","key":"submit"}}"#);
     inputs_until(&mut stream.peer, |bytes, _| contains(bytes, submit.as_bytes()));
 }
+
+#[test]
+fn a_link_finds_its_session_in_the_fresh_listing_an_end_meanwhile_keeps_from_being_kept() {
+    let mut fixture = Fixture::connected_with(vec![listing(true)]);
+    let pane = fixture.show();
+    let opened = fixture.attach();
+    fixture.attached();
+    send(
+        &opened.peer,
+        format!("\x1b]8;;ngterm://session/{OTHER}\x1b\\new\x1b]8;;\x1b\\").as_bytes(),
+    );
+    fixture.dirty();
+    let tree = tree_tail(ngterm_core::remote::origin::OriginShell::Posix);
+    // unscripted, the next listing waits for the test, which ends a session on the machine first
+    fixture.transport.script_sequence(&tree, Vec::new());
+    let close = ngterm_core::remote::ssh::control_tail(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        &ngterm_core::remote::origin_replies::end_session_arguments(SESSION),
+    );
+    fixture
+        .transport
+        .script(&close, Script::ok(r#"{"ok": true, "result": {}}"#));
+
+    let tapped = std::thread::spawn({
+        let pane = std::sync::Arc::clone(&pane);
+        move || block_on(pane.session_link(CellPoint { x: 1, y: 0 })).unwrap()
+    });
+    let relisting = fixture.opened(|opened| opened.command == tree);
+    assert_eq!(
+        block_on(fixture.core.end_session(MACHINE.to_owned(), SESSION.to_owned())),
+        Ok(())
+    );
+    let fresh = two_sessions();
+    block_on(relisting.peer.data(fresh.stdout));
+    block_on(relisting.peer.end(fresh.end));
+
+    let found = tapped.join().unwrap().expect("the session the fresh listing holds");
+    assert_eq!(found.id, OTHER);
+}
