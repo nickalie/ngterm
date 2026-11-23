@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 use ngterm_core::remote::frames::{self, Body, PresentationFrame, PresentationHello, PresentationMode};
 use ngterm_core::remote::hub::PANE_INPUT_KIND;
-use ngterm_core::remote::ssh::present_tail;
+use ngterm_core::remote::ssh::{present_tail, tree_tail};
 
-use super::pane_tests::{Fixture, MACHINE, PANE, SESSION, contains, inputs_until, send};
+use super::pane_tests::{Fixture, MACHINE, PANE, SESSION, contains, inputs_until, listing, send};
 use crate::api::{CellPoint, PaneColorScheme};
 use crate::api::{PaneKey, PaneKeyAction};
 use crate::transport::ChannelEnd;
@@ -90,6 +90,44 @@ fn a_session_link_in_the_pane_names_a_session_the_machine_lists() {
     for (x, y) in [(1, 1), (1, 2), (1, 3), (10, 0)] {
         assert_eq!(at(x, y), None, "cell {x},{y}");
     }
+}
+
+#[test]
+fn a_link_to_a_session_made_after_the_listing_asks_the_machine_again() {
+    let mut fixture = Fixture::connected_with(vec![listing(true), two_sessions()]);
+    let pane = fixture.show();
+    let opened = fixture.attach();
+    fixture.attached();
+    let lines = format!(
+        "\x1b]8;;ngterm://session/{OTHER}\x1b\\new\x1b]8;;\x1b\\\r\n\
+         \x1b]8;;https://example.com\x1b\\web\x1b]8;;\x1b\\"
+    );
+    send(&opened.peer, lines.as_bytes());
+    fixture.dirty();
+    let listings = || {
+        let tree = tree_tail(ngterm_core::remote::origin::OriginShell::Posix);
+        fixture
+            .transport
+            .execs()
+            .iter()
+            .filter(|exec| exec.command == tree)
+            .count()
+    };
+    let before = listings();
+
+    let at = |x: u16, y: u32| block_on(pane.session_link(CellPoint { x, y })).unwrap();
+    assert_eq!(at(1, 1), None, "a web link");
+    assert_eq!(listings(), before, "a web link asks the machine nothing");
+    let found = at(1, 0).expect("the session made after the listing");
+    assert_eq!(found.id, OTHER);
+    assert_eq!(listings(), before + 1);
+    assert!(
+        fixture.events.try_iter().any(|event| matches!(
+            event,
+            crate::api::MobileEvent::Tree { sessions, .. } if sessions.iter().any(|session| session.id == OTHER)
+        )),
+        "the lists show the new session too"
+    );
 }
 
 fn key(name: &str, mods: u8, text: &str) -> PaneKey {

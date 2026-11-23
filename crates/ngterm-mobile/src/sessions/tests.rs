@@ -1161,3 +1161,20 @@ fn a_session_link_resolves_to_a_listed_session_of_the_tapped_panes_app() {
         assert_eq!(session_link_target(&both, from, &raw), None, "{from} {raw}");
     }
 }
+
+#[test]
+fn a_session_link_of_either_app_has_the_form_whatever_it_names() {
+    for raw in [
+        format!("ngterm://session/{COMPANION}"),
+        format!("AGTERM://session/{}", COMPANION.to_ascii_lowercase()),
+    ] {
+        assert!(is_session_link(&raw), "{raw}");
+    }
+    for raw in [
+        format!("ngterm://session/{COMPANION}/"),
+        format!("https://session/{COMPANION}"),
+        "ngterm://session/x".to_owned(),
+    ] {
+        assert!(!is_session_link(&raw), "{raw}");
+    }
+}

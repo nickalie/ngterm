@@ -134,6 +134,14 @@ pub fn session_link_target(tree: &ControlRemoteTree, from: &str, raw: &str) -> O
         .map(|session| RemoteSession::listed(session, peer))
 }
 
+/// Whether `raw` has the form of a session link, ngterm's or agterm's, whatever session it names.
+#[must_use]
+pub fn is_session_link(raw: &str) -> bool {
+    [RemotePeer::Ngterm, RemotePeer::Agterm]
+        .into_iter()
+        .any(|peer| link_policy::session_link(raw, peer).is_some())
+}
+
 /// `fresh`, a listing of one app alone (New Session's and Duplicate's), as the machine's whole listing: with the
 /// other app's sessions as `kept`, the machine's last listing, has them, when the machine runs both.
 #[must_use]

@@ -627,9 +627,9 @@ impl Pane {
     }
 
     /// The listed session the session link at `at` names: an OSC 8 hyperlink of exactly `ngterm://session/<id>`, or
-    /// `agterm://session/<id>` in a pane of an agterm origin's session, that the machine's last listing holds among the
-    /// sessions the app lists ([`crate::sessions::session_link_target`]). What a tap on the link opens; `None` for any
-    /// other cell.
+    /// `agterm://session/<id>` in a pane of an agterm origin's session, that the machine lists among the sessions the
+    /// app lists ([`crate::sessions::session_link_target`]): a link its last listing misses is looked for in a fresh
+    /// one. What a tap on the link opens; `None` for any other cell.
     ///
     /// # Errors
     ///

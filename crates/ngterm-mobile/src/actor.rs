@@ -489,9 +489,7 @@ async fn run<T: Transport>(
             Command::Typed { pane, key } => {
                 state.presentations.borrow_mut().typed(&pane, key);
             }
-            Command::SessionLink { pane, raw, reply } => {
-                let _ = reply.send(Ok(session_link(&state, &pane, &raw)));
-            }
+            Command::SessionLink { pane, raw, reply } => session_link(&state, pane, raw, reply),
             Command::NetworkChanged => network_changed(&state),
             Command::Suspend => suspend(&state).await,
             Command::Resume => resume(&state),
@@ -1182,23 +1180,53 @@ async fn tick<T: Transport>(state: Weak<State<T>>) {
     }
 }
 
+/// The listed session `raw`, a link tapped in `pane`, names. A session link the machine's kept listing misses is
+/// looked for again in a fresh listing: a program can make the session after the last one (upstream's viewer keeps
+/// its listing live, `WindowLibrary+SessionLink.swift`).
+fn session_link<T: Transport>(
+    state: &Rc<State<T>>,
+    pane: PaneRef,
+    raw: String,
+    reply: oneshot::Sender<Result<Option<RemoteSession>, PaneInputError>>,
+) {
+    let target = kept_link_target(state, &pane, &raw);
+    if target.is_some() || !sessions::is_session_link(&raw) {
+        noted_link(&pane, target.as_ref(), false);
+        let _ = reply.send(Ok(target));
+        return;
+    }
+    let (listed, listing) = oneshot::channel();
+    spawn_on_machine(state, pane.machine_id.clone(), listed, list_sessions);
+    let state = Rc::clone(state);
+    tokio::task::spawn_local(async move {
+        // a failed listing leaves the kept one, which misses the session
+        let _ = listing.await;
+        let target = kept_link_target(&state, &pane, &raw);
+        noted_link(&pane, target.as_ref(), true);
+        let _ = reply.send(Ok(target));
+    });
+}
+
 /// The listed session `raw`, a link tapped in `pane`, names in its machine's kept listing.
-fn session_link<T: Transport>(state: &State<T>, pane: &PaneRef, raw: &str) -> Option<RemoteSession> {
-    let target = state
+fn kept_link_target<T: Transport>(state: &State<T>, pane: &PaneRef, raw: &str) -> Option<RemoteSession> {
+    state
         .listings
         .borrow()
         .get(&pane.machine_id)
         .and_then(|kept| kept.tree.as_ref())
-        .and_then(|tree| sessions::session_link_target(tree, &pane.session_id, raw));
+        .and_then(|tree| sessions::session_link_target(tree, &pane.session_id, raw))
+}
+
+fn noted_link(pane: &PaneRef, target: Option<&RemoteSession>, relisted: bool) {
     note!(
         INFO,
         tag::PANE,
         "session link tapped",
         found = target.is_some(),
+        relisted = relisted,
         session = pane.session_id.as_str(),
         pane = pane.pane_id.as_str()
     );
-    target
 }
 
 /// The pane commands.
