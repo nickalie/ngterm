@@ -209,9 +209,9 @@ def _windows(ctl):
 @pytest.mark.covers(
     "events.read", "session.new", "session.rename", "window.rename", "window.close", "window.delete", "window.list"
 )
-def test_tree_and_window_list_show_each_change_at_once_while_followers_poll(ctl):
-    """A follower's poll skips the settle and the windows' sync (#955); the change a command makes still reads back in
-    the very next `tree` and `window.list`."""
+def test_commands_and_reads_answer_while_followers_poll(ctl):
+    """Twenty idle followers poll `events.read` while commands run; each change reads back in the very next `tree`
+    and `window.list`, and every poll answers ok."""
     stop = threading.Event()
 
     def follow():
@@ -234,7 +234,9 @@ def test_tree_and_window_list_show_each_change_at_once_while_followers_poll(ctl)
             assert _windows(ctl)[wid]["open"] is False
             assert_ok(ctl.request("window.delete", wid))
             assert wid not in _windows(ctl)
-            assert all(not follower.done() for follower in followers), "a follower's poll failed"
+            for follower in followers:
+                if follower.done():
+                    follower.result()
         finally:
             stop.set()
         for follower in followers:
