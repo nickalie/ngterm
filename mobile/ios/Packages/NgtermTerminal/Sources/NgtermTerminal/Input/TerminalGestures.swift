@@ -32,7 +32,7 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
 
     private unowned let view: TerminalView
     private var taps = ClickCounter()
-    // counts taps, so a link lookup that ends after a later tap does nothing
+    // counts taps, so a link lookup that ends after a later tap opens nothing and, outside mouse tracking, does no work
     private var tapGeneration = 0
     // what a drag holds: a handle's grip while it moves an end, none while it scrolls
     private var dragGrip: SelectionGrip?
