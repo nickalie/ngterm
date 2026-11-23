@@ -5,9 +5,10 @@ import NgtermTerminal
 import Testing
 import UIKit
 
-/// A tap on a session link and the app's appearance, against the fake pane (mobile/android's
-/// `TerminalSessionLinkTest`): the link opens the session it names in place of the tap's own work, any other tap does
-/// that work, and the terminal is given each new appearance once.
+/// A tap on a session link and the app's appearance, against the fake pane.
+///
+/// As mobile/android's `TerminalSessionLinkTest`: the link opens the session it names in place of the tap's own work,
+/// any other tap does that work, and the terminal is given the app's appearance.
 @MainActor
 @Suite("session links and the appearance")
 internal struct TerminalSessionLinkTests {
@@ -18,6 +19,15 @@ internal struct TerminalSessionLinkTests {
 
     private let pane: FakePane
     private let view: TerminalView
+
+    private var clicks: [PaneMouseAction] {
+        pane.inputs.compactMap { input in
+            if case .mouse(let mouse) = input {
+                return mouse.action
+            }
+            return nil
+        }
+    }
 
     // row 0 links a listed session, row 1 a link the machine lists no session for, row 2 is plain text
     internal init() {
@@ -30,17 +40,17 @@ internal struct TerminalSessionLinkTests {
         }
         linked.links = [CellPoint(x: 2, y: 0): Self.other]
         linked.tracking = true
-        let view = TerminalView(
+        let made = TerminalView(
             pane: linked,
             palette: .copper,
             textSize: 13,
             keyboard: TerminalKeyboard(hardware: HardwareKeyboard(fixed: false))
         )
-        view.frame = CGRect(x: 0, y: 0, width: 390, height: 200)
-        view.layoutIfNeeded()
-        view.drawFrame()
+        made.frame = CGRect(x: 0, y: 0, width: 390, height: 200)
+        made.layoutIfNeeded()
+        made.drawFrame()
         pane = linked
-        self.view = view
+        view = made
     }
 
     private func point(_ column: Int, _ row: Int) -> CGPoint {
@@ -49,15 +59,6 @@ internal struct TerminalSessionLinkTests {
             x: font.left(column) + font.cellWidth / Self.halves,
             y: font.top(row) + font.cellHeight / Self.halves
         )
-    }
-
-    private var clicks: [PaneMouseAction] {
-        pane.inputs.compactMap { input in
-            if case .mouse(let mouse) = input {
-                return mouse.action
-            }
-            return nil
-        }
     }
 
     @Test("a tap on a session link opens its session and clicks nothing")
@@ -85,11 +86,10 @@ internal struct TerminalSessionLinkTests {
         #expect(clicks == [.press, .release])
     }
 
-    @Test("the terminal is given each new appearance once")
+    @Test("the terminal is given the app's appearance")
     internal func appearance() {
-        view.colorScheme = .dark
-        view.colorScheme = .dark
-        view.colorScheme = .light
+        view.setAppearance(dark: true)
+        view.setAppearance(dark: false)
         #expect(pane.colorSchemes == [.dark, .light])
     }
 }

@@ -187,9 +187,11 @@
             state.withLock { $0.colorSchemes.append(scheme) }
         }
 
-        /// The session ``links`` holds for `at`.
-        public func sessionLink(at: CellPoint) throws -> RemoteSession? {
-            let read: RemoteSession?? = state.withLock { state in state.frames == nil ? nil : .some(state.links[at]) }
+        /// The session ``links`` holds for `point`.
+        public func sessionLink(at point: CellPoint) throws -> RemoteSession? {
+            let read: RemoteSession?? = state.withLock { state in
+                state.frames == nil ? nil : .some(state.links[point])
+            }
             guard let read else {
                 throw PaneInputError.Closed
             }
