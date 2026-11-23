@@ -1,5 +1,6 @@
 //! The app shell: who this build is, the core and its control server on the main loop, the windows brought in line
-//! with the model after every task (`windows.rs`), the frontend's work landed with the app context, and the quit path.
+//! with the model after every task but a follower's poll (`windows.rs`), the frontend's work landed with the app
+//! context, and the quit path.
 //! Ported from `agterm-gtk/src/app.rs`.
 //!
 //! Order on launch follows the GTK build (and upstream's `agtermApp`): the control server settles socket ownership
@@ -410,7 +411,8 @@ fn windows(context: PaneContext, resources: Option<PathBuf>, dark: bool, poster:
     )
 }
 
-/// Brings the windows in line with the model, then lands what the last task left to the frontend.
+/// Brings the windows in line with the model, then lands what the last task left to the frontend, unless the task
+/// was a follower's poll ([`ngterm_core::settles_after`]), which leaves the windows alone.
 fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
     if state.update(cx, |state, _| state.take_unchanged()) {
         return;

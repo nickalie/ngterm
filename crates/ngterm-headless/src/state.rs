@@ -230,7 +230,8 @@ impl HeadlessState {
         self.arm_remote_tick();
     }
 
-    /// After every task: the terminals follow the model, and what windows would take is dropped.
+    /// After every task but a follower's poll ([`ngterm_core::settles_after`]): the terminals follow the model, and
+    /// what windows would take is dropped.
     pub fn land(&mut self) {
         if std::mem::take(&mut self.unchanged) || self.quitting() {
             return;
