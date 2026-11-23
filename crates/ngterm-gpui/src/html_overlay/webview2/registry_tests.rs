@@ -800,9 +800,9 @@ fn the_models_value_and_the_terminals_colors_reach_every_page(cx: &mut TestAppCo
     let source = url_overlay();
     let model = Model::new(&source);
     let (page, probe) = realized(&source, &model);
-    cx.update(|cx| apply(&source, true, cx));
+    cx.update(|cx| apply(&source, None, true, cx));
     assert!(page.on_screen());
-    cx.update(|cx| apply(&overlay(HtmlSource::Image { path: "x".to_owned() }), false, cx));
+    cx.update(|cx| apply(&overlay(HtmlSource::Image { path: "x".to_owned() }), None, false, cx));
     assert!(page.on_screen(), "an unknown page changes nothing");
     let colors = TerminalColors {
         background: Some("#102030".to_owned()),
@@ -1320,7 +1320,7 @@ fn a_layer_over_a_window_covers_only_that_windows_pages(cx: &mut TestAppContext)
     let other_handle = other_cx.update(|window, _| window.window_handle());
     let _other_element =
         other_cx.update(|window, cx| cx.new(|cx| PageView::new(Rc::clone(&other_page), 8, window, cx)));
-    other_cx.update(|_, cx| apply(&other_source, true, cx));
+    other_cx.update(|_, cx| apply(&other_source, None, true, cx));
     other_page.place(native::Bounds {
         x: 0.,
         y: 0.,
@@ -1331,7 +1331,7 @@ fn a_layer_over_a_window_covers_only_that_windows_pages(cx: &mut TestAppContext)
     let cx = window_of(&mut root_cx);
     let handle = cx.update(|window, _| window.window_handle());
     let _element = cx.update(|window, cx| cx.new(|cx| PageView::new(Rc::clone(&page), 7, window, cx)));
-    cx.update(|_, cx| apply(&source, true, cx));
+    cx.update(|_, cx| apply(&source, None, true, cx));
     page.place(native::Bounds {
         x: 0.,
         y: 0.,
@@ -1366,7 +1366,7 @@ fn a_page_holds_the_windows_keyboard_through_its_element_or_its_web_view(cx: &mu
         root.element = Some(element.clone());
         cx.notify();
     });
-    cx.update(|_, cx| apply(&source, true, cx));
+    cx.update(|_, cx| apply(&source, None, true, cx));
     settle_until(cx, || engine.made() == 1);
     let page = page(source.id).unwrap();
     page.place(native::Bounds {

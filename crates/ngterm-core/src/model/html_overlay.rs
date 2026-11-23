@@ -556,6 +556,7 @@ impl WindowLibrary {
                 page.load_error = error;
                 changed = true;
             }
+            page.content_shown |= state == HtmlLoadState::Loaded;
         });
         changed
     }

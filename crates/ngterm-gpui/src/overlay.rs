@@ -425,7 +425,7 @@ fn apply_pages(layer: &mut OverlayLayer, session: &Session, plan: &PanePlan, sho
             Some(overlay) => layer.pane_page(overlay.generation).is_some_and(OverlayPage::is_shown),
             None => placed,
         };
-        crate::html_overlay::apply(page, on_screen, cx);
+        crate::html_overlay::apply(page, session.remote_host(), on_screen, cx);
     }
 }
 

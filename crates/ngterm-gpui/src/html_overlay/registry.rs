@@ -794,9 +794,11 @@ pub fn mount(
     Some(element)
 }
 
-/// Gives page `overlay.id` the model's latest value and whether it is on screen (upstream's `updateNSView`).
-pub fn apply(overlay: &HtmlOverlay, on_screen: bool, cx: &mut App) {
+/// Gives page `overlay.id` the model's latest value, the machine its session runs on (`host`, `None` for this one)
+/// and whether it is on screen (upstream's `updateNSView`).
+pub fn apply(overlay: &HtmlOverlay, host: Option<&str>, on_screen: bool, cx: &mut App) {
     if let Some(page) = page(overlay.id) {
+        page.set_origin_host(host);
         page.apply(overlay, on_screen, cx);
     }
 }

@@ -1,6 +1,6 @@
-//! When the keyboard layout is switched to the one Settings ▸ Key Mapping ▸ "Lock in terminals" names, and when the
-//! earlier one comes back (upstream's `InputSourceLock.swift`). The frontend feeds it the system's state (whether a
-//! terminal holds the keyboard, the layouts the system can select, the one selected) and performs the selection it
+//! When the keyboard layout is switched to the one Settings ▸ Key Mapping ▸ "Lock in ngterm" names, and when the
+//! earlier one comes back (upstream's `InputSourceLock.swift`). The frontend feeds it the system's state (whether ngterm
+//! holds the keyboard, the layouts the system can select, the one selected) and performs the selection it
 //! returns; the lock holds the layout that was selected when it engaged, so it can put it back.
 //!
 //! Layout ids are the platform's own: a Text Input Source id on macOS, the XKB layout name on Linux, a KLID on Windows.

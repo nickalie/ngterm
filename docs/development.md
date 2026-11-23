@@ -271,9 +271,9 @@ and how this build does it where the OS matters:
   them (a phone), while asks and sounds stay the presenter's (`PresentationHub::surface_holder`). A status sound on
   Linux, which has none of macOS's named sounds, rings the display's bell (Wayland's `xdg_system_bell_v1`, X11's core
   bell).
-- Settings ▸ Key Mapping ▸ "Lock in terminals" selects a keyboard layout while a terminal or an HTML overlay page (its
-  fields included) has the keyboard and restores the previous one when the keyboard goes to another app or to an ngterm
-  text field outside the page: macOS Text Input Source Services, Windows' keyboard layouts, and on Linux XKB's group
+- Settings ▸ Key Mapping ▸ "Lock in ngterm" selects a keyboard layout while an ngterm window has the keyboard, whatever
+  holds it inside the window, and only while ngterm is the active app, and restores the previous one when the keyboard
+  goes to another app: macOS Text Input Source Services, Windows' keyboard layouts, and on Linux XKB's group
   lock on X11 or, on Wayland, the compositor's own control (sway, Hyprland, niri, KDE Plasma); on GNOME, weston and any
   other compositor the setting is disabled with the reason shown (`crates/ngterm-gpui/src/input_source.rs`).
 - `notify` banners get a notification slot of their own per session, replaced and cleared as upstream's

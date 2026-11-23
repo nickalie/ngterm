@@ -26,6 +26,9 @@ const PILL_INSET_Y: f32 = 1.5;
 pub const PILL_RADIUS: f32 = 7.0;
 /// The content's inset from the row's edges: inside the pill, the icon two points in.
 pub const CONTENT_INSET: f32 = PILL_INSET_X + 2.0;
+/// The flat and plain flagged lists' leading content inset: their pill starts at the row's edge, with the icon this far
+/// inside it (upstream's `SidebarOutlineView.flatContentX` and the cell's icon inset, #954).
+pub const FLAT_CONTENT_INSET: f32 = 8.0;
 /// The gap between the leading icon and the name, and between the name and what trails it.
 pub const GAP: f32 = 6.0;
 /// The disclosure's slot before a workspace row's icon, and the indent of a nested session row: its icon sits under
@@ -101,6 +104,8 @@ pub struct Look {
     pub density: SidebarDensity,
     /// Workspace rows draw their disclosure chevron and reserve its strip (the `workspaceChevrons` interface element).
     pub chevrons: bool,
+    /// The list is the flat or plain flagged list (upstream's `listsSessionsFlat`): no workspace rows, no strip.
+    pub flat: bool,
 }
 
 impl Default for Look {
@@ -110,6 +115,7 @@ impl Default for Look {
             font_size: DEFAULT_FONT_SIZE,
             density: SidebarDensity::Default,
             chevrons: true,
+            flat: false,
         }
     }
 }
@@ -124,7 +130,21 @@ impl Look {
             font_size: font_size(settings.sidebar_font_size),
             density: settings.effective_sidebar_density(),
             chevrons: !settings.is_interface_element_hidden(InterfaceElement::WorkspaceChevrons),
+            flat: false,
         }
+    }
+
+    /// Where a row's selection pill (and the search ring, the drop frame) starts: the row's edge in the flat lists,
+    /// which have no strip to leave room for (upstream's `selectionMinX`).
+    #[must_use]
+    pub fn pill_left(&self) -> f32 {
+        if self.flat { 0.0 } else { PILL_INSET_X }
+    }
+
+    /// The row content's leading inset.
+    #[must_use]
+    pub fn content_left(&self) -> f32 {
+        if self.flat { FLAT_CONTENT_INSET } else { CONTENT_INSET }
     }
 
     /// The row geometry of the look's density.

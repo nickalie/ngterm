@@ -186,6 +186,8 @@ pub struct Page {
     theme: RefCell<HtmlOverlayTheme>,
     poster: Poster,
     state: RefCell<PageState>,
+    /// The machine its session runs on, for one shown here for another machine (the session's `remote_host`).
+    origin_host: RefCell<Option<String>>,
     storage: Storage,
     /// What ngterm's scripts in the page sign their messages with.
     nonce: String,
@@ -235,6 +237,7 @@ impl Page {
             theme: RefCell::new(colors.theme()),
             colors: RefCell::new(colors),
             poster: poster.clone(),
+            origin_host: RefCell::new(None),
             storage,
             nonce: bridge::nonce(),
             grant: Grant::default(),
@@ -280,6 +283,16 @@ impl Page {
 
     pub fn poster(&self) -> &Poster {
         &self.poster
+    }
+
+    /// The machine the page's session runs on, `None` for this one.
+    pub fn origin_host(&self) -> Option<String> {
+        self.origin_host.borrow().clone()
+    }
+
+    /// Follows the machine the page's session runs on.
+    pub fn set_origin_host(&self, host: Option<&str>) {
+        *self.origin_host.borrow_mut() = host.map(str::to_owned);
     }
 
     pub fn overlay(&self) -> HtmlOverlay {
@@ -416,7 +429,8 @@ impl Page {
             let state = self.state.borrow();
             (
                 state.active() && state.on_screen,
-                state.overlay.load_state == HtmlLoadState::Failed,
+                // the native window would cover the failure or the loading indicator the element draws
+                state.overlay.load_state == HtmlLoadState::Failed || state.overlay.awaits_first_content(),
             )
         };
         let covered = self.element_window.get().is_some_and(registry::is_covered);
@@ -862,11 +876,9 @@ impl Page {
         self.report_page();
     }
 
-    /// The web view took or lost the keyboard: a click into the page gives its element the window's keyboard too, and
-    /// the keyboard-layout lock re-evaluates (a field inside the page holds it, the palette or an ask dialog does not).
+    /// The web view took or lost the keyboard: a click into the page gives its element the window's keyboard too.
     fn native_focus(&self, focused: bool, cx: &mut App) {
         self.native_focused.set(focused);
-        crate::input_source::request_refresh(cx);
         if !focused {
             return;
         }

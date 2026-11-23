@@ -1,22 +1,20 @@
-//! The keyboard-layout lock's performer (upstream's `TerminalInputSource.swift`): while a terminal or an HTML overlay
-//! page (its fields included) holds the keyboard of an active ngterm window ([`keyboard_held`]) it selects the layout
-//! Settings ▸ Key Mapping ▸ "Lock in terminals" names and switches back any change made there; the layout selected
-//! before comes back when the keyboard goes to an ngterm text field outside a page (Settings, the palette, an ask
-//! dialog, the sidebar), another application or no ngterm window, when the setting goes off, and on quit.
-//! [`InputSourceLock`] decides; this is the only code that selects a layout.
+//! The keyboard-layout lock's performer (upstream's `TerminalInputSource.swift`): while an ngterm window is active and
+//! ngterm is the active application ([`keyboard_held`]), whatever has the keyboard inside the window (a terminal, a
+//! page, the palette, a picker, a dialog, the find bar, a rename field), it selects the layout Settings ▸ Key Mapping ▸
+//! "Lock in ngterm" names and switches back any change made there; the layout selected before comes back when another
+//! application or no ngterm window has the keyboard, when the setting goes off, and on quit. [`InputSourceLock`]
+//! decides; this is the only code that selects a layout.
 //!
-//! It re-evaluates on the next main-loop turn after a terminal or a page gains or loses its window's keyboard or its
-//! window's activation (`crate::terminal`'s focus listeners: main, split, scratch, overlay and quick terminals alike;
-//! the page element's; on Windows and macOS also the web view's own focus reports, `WebView2`'s `GotFocus` and
-//! `LostFocus` and the `WKWebView` delegate's first-responder watch), after any ngterm window closes (a main window or
-//! the quick terminal's: a removed window reports neither a blur nor a deactivation to the terminals it held), after
+//! It re-evaluates on the next main-loop turn after an ngterm window's activation changes (a main window's or the
+//! quick terminal's), on macOS also after the application's activation changes (a window can stay key after another
+//! application came to the front), after any ngterm window closes (a removed window reports no deactivation), after
 //! GPUI's `on_keyboard_layout_change` (on Linux a group change that changes the effective XKB layout's name, and every
 //! new keymap, X11's `XkbNewKeyboardNotify` and `XkbMapNotify` or Wayland's `wl_keyboard.keymap`, the way a changed
 //! layout list arrives, reported even when the effective layout keeps its name by `gpui-pre-linux`'s patch 0004; on
 //! macOS a change of the selected input source; on Windows `WM_INPUTLANGCHANGE`), and at once when the setting changes.
-//! The selectable layouts are read at each evaluation, so a layout no longer enabled releases the lock, and re-read for
-//! the picker when Settings opens and when an ngterm window is activated (enabling one is a trip to the system's
-//! settings and back).
+//! Focus moves inside a window change nothing. The selectable layouts are read at each evaluation, so a layout no
+//! longer enabled releases the lock, and re-read for the picker when Settings opens and when an ngterm window is
+//! activated (enabling one is a trip to the system's settings and back).
 //!
 //! Selection is the platform's, so its restore is what keeps other applications on the user's own layout; a crash
 //! runs none and leaves the locked layout selected, and the baseline is never persisted (it would overwrite a choice
@@ -30,6 +28,9 @@
 //!   any other the setting is disabled with the reason shown.
 //! - Windows ([`windows`]): the installed layouts (`GetKeyboardLayoutList`), the stored id the KLID,
 //!   `ActivateKeyboardLayout` for the process on the UI thread.
+//!
+//! An active window is the application's on Linux (the compositor's keyboard focus) and on Windows (the foreground
+//! window); on macOS a key window is not (upstream's `NSApp.isActive`, `crate::macos::app_active`).
 //!
 //! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is built and tested
 //! on the macOS runner.
@@ -222,6 +223,8 @@ impl Performer {
 /// Installs the performer over this platform's backend, probed on first use; a changed list reaches the Settings popup
 /// through `poster`.
 pub fn init(poster: Poster, cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    crate::macos::watch_app_activation(request_refresh, cx);
     let compositor = cx.compositor_name();
     install(Box::new(move || probe(compositor)), Some(poster), cx);
 }
@@ -298,23 +301,23 @@ fn refresh(cx: &mut App) {
     performer.reconcile(held);
 }
 
-/// Whether the lock holds (upstream's `holdsLock` over the key window's first responder): a terminal (a main, split,
-/// scratch, overlay or quick one) or an HTML overlay page, the fields inside it included, holds the keyboard of an
-/// active ngterm window. Reads the windows, so it runs outside any window's update.
+/// Whether the lock holds (upstream's `appFocused`): ngterm is the active application and one of its windows is
+/// active, whatever has the keyboard inside it. Reads the windows, so it runs outside any window's update.
 pub(crate) fn keyboard_held(cx: &mut App) -> bool {
-    crate::terminal::terminal_holds_keyboard(cx) || page_holds_keyboard(cx)
+    app_active()
+        && cx.windows().into_iter().any(|handle| {
+            handle
+                .update(cx, |_, window, _| window.is_window_active())
+                .unwrap_or(false)
+        })
 }
 
-/// Whether an HTML overlay page holds the keyboard of an active ngterm window (`crate::html_overlay`'s
-/// `page_holds_keyboard`: the page's element, or on Windows and macOS its web view itself).
-fn page_holds_keyboard(cx: &mut App) -> bool {
-    cx.windows().into_iter().any(|handle| {
-        handle
-            .update(cx, |_, window, cx| {
-                window.is_window_active() && crate::html_overlay::page_holds_keyboard(window, cx)
-            })
-            .unwrap_or(false)
-    })
+/// Whether ngterm is the active application, beyond one of its windows being active.
+fn app_active() -> bool {
+    #[cfg(target_os = "macos")]
+    return crate::macos::app_active();
+    #[cfg(not(target_os = "macos"))]
+    true
 }
 
 /// The setting's layout, `None` for off: applied to the keyboard's holder at once when it changed.

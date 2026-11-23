@@ -374,7 +374,7 @@ impl Fixture {
             })
             .map_err(|error| format!("the window is gone: {error:#}"))?
             .ok_or("the build mounts no page")?;
-        self.cx.update(|cx| html_overlay::apply(overlay, true, cx));
+        self.cx.update(|cx| html_overlay::apply(overlay, None, true, cx));
         Ok(element)
     }
 
@@ -696,7 +696,7 @@ fn replica_image(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         .insert("/shots/shot.png", png(320, 240, blue)?);
     overlay.reload_revision += 1;
     overlay.reload_target = ngterm_core::html::HtmlReloadTarget::Current;
-    fixture.cx.update(|cx| html_overlay::apply(&overlay, true, cx));
+    fixture.cx.update(|cx| html_overlay::apply(&overlay, None, true, cx));
     fixture.until("the picture read again", &element, |_, width, pixels| {
         close(pixel(pixels, width, 160, 130), blue)
     })?;
@@ -1754,7 +1754,7 @@ fn image_document(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     write(blue)?;
     overlay.reload_revision += 1;
     overlay.reload_target = ngterm_core::html::HtmlReloadTarget::Current;
-    fixture.cx.update(|cx| html_overlay::apply(&overlay, true, cx));
+    fixture.cx.update(|cx| html_overlay::apply(&overlay, None, true, cx));
     fixture.until(
         "current image reload rereads the source",
         &element,
@@ -1822,7 +1822,7 @@ fn markdown_link_followed(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> 
     })?;
     overlay.reload_revision += 1;
     overlay.reload_target = ngterm_core::html::HtmlReloadTarget::Current;
-    fixture.cx.update(|cx| html_overlay::apply(&overlay, true, cx));
+    fixture.cx.update(|cx| html_overlay::apply(&overlay, None, true, cx));
     for _ in 0..50 {
         let (width, pixels) = fixture.frame()?;
         check(!close(pixel(&pixels, width, 160, 130), RED), || {
@@ -1988,7 +1988,7 @@ fn text_wrap(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         .is_some()
     })?;
     overlay.text_wrap = true;
-    fixture.cx.update(|cx| html_overlay::apply(&overlay, true, cx));
+    fixture.cx.update(|cx| html_overlay::apply(&overlay, None, true, cx));
     fixture.until("the long line wrapped onto later rows", &element, |_, width, pixels| {
         !band_is_blank(width, pixels)
     })?;
@@ -2005,7 +2005,7 @@ fn text_wrap(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         close(pixel(pixels, width, 20 * scale, 230 * scale), themed) && !band_is_blank(width, pixels)
     })?;
     overlay.text_wrap = false;
-    fixture.cx.update(|cx| html_overlay::apply(&overlay, true, cx));
+    fixture.cx.update(|cx| html_overlay::apply(&overlay, None, true, cx));
     fixture.until("the long line back on its one row", &element, |_, width, pixels| {
         band_is_blank(width, pixels)
     })

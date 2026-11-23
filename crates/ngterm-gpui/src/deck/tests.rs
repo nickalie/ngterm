@@ -538,6 +538,45 @@ fn a_shown_split_lays_both_panes_out_at_the_ratio_and_focus_follows_the_model(cx
     h.until("the lone pane's grid again", |h| h.cols(session, &primary) == 79);
 }
 
+/// Upstream's `TerminalDeckTests` and `SplitRatioAccessorTests` for #995: switching to or from a left/right split
+/// session leaves both panes' grids alone, as every page lays out at the deck's own bounds, shown or not, whatever the
+/// toolbar above it (the compact one included).
+#[gpui_kit::test]
+fn switching_to_and_from_a_left_right_split_keeps_both_panes_grids(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let (split, plain) = (ids[0], ids[1]);
+    h.dispatch(Command::Session(SessionCmd::Split), split, |_| {});
+    h.until("both panes to start", |h| {
+        h.realized(split, StatusPane::Left) && h.realized(split, StatusPane::Right)
+    });
+    let panes = [h.token(split, StatusPane::Left), h.token(split, StatusPane::Right)];
+    h.until("the even split", |h| panes.iter().all(|pane| h.cols(split, pane) == 39));
+    let grids = |h: &mut Harness<'_>| -> Vec<(u16, usize)> {
+        panes
+            .iter()
+            .map(|pane| {
+                h.shared(split, pane).pane().map_or((0, 0), |pane| {
+                    let frame = pane.frame();
+                    (frame.frame.cols, frame.frame.rows.len())
+                })
+            })
+            .collect()
+    };
+    h.quiet();
+    let laid_out = grids(&mut h);
+    for selected in [plain, split, plain, split] {
+        h.store().select_session(Some(selected));
+        h.state.settle();
+        h.quiet();
+        assert_eq!(
+            grids(&mut h),
+            laid_out,
+            "a switch to {selected} resized the split's panes"
+        );
+    }
+}
+
 /// Two mounted splits with distinct axes and divider positions, as upstream's offscreen cursor regressions require.
 fn two_split_sessions(cx: &mut TestAppContext) -> (Harness<'_>, [Uuid; 2]) {
     let (library, window, ids) = three_sessions();

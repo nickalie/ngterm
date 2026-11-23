@@ -414,6 +414,7 @@ impl WindowView {
             .detach();
         });
         let activation = cx.observe_window_activation(window, move |view, window, cx| {
+            crate::input_source::request_refresh(cx);
             if !window.is_window_active() {
                 // a walk ends when the window loses the keyboard
                 view.switcher.update(cx, SessionSwitcher::reset);

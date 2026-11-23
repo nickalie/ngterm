@@ -542,6 +542,10 @@ pub struct HtmlPageFlags {
 /// persisted with its session ([`HtmlOverlay::persisted`], an extension beyond upstream, which keeps every overlay
 /// ephemeral): its source, flags and slot, never its id or what it loaded since.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "upstream's page flags, each independent: a row page, a clicked one, its wrap, its first content"
+)]
 pub struct HtmlOverlay {
     pub id: uuid::Uuid,
     /// The page's id on the machine that opened it, set only on a page shown here for it (upstream's `replicaOf`).
@@ -550,6 +554,9 @@ pub struct HtmlOverlay {
     pub flags: HtmlPageFlags,
     pub load_state: HtmlLoadState,
     pub load_error: Option<String>,
+    /// Set by the first finished load and kept through reloads and navigation, which keep the shown document on screen
+    /// while they load (upstream's `contentShown`).
+    pub content_shown: bool,
     /// What the web view shows now, as last reported; `None` until the first load finishes and after a reload of the
     /// original.
     pub current: Option<HtmlPageInfo>,
@@ -623,6 +630,7 @@ impl HtmlOverlay {
             flags,
             load_state: HtmlLoadState::Loading,
             load_error: None,
+            content_shown: false,
             current: None,
             reload_revision: 0,
             reload_target: HtmlReloadTarget::Original,
@@ -669,6 +677,13 @@ impl HtmlOverlay {
     #[must_use]
     pub fn saved_as_row(&self) -> bool {
         self.replica_of.is_none() && matches!(self.source, HtmlSource::File { .. } | HtmlSource::Url(_))
+    }
+
+    /// A page shown here for another machine waiting for its first successful load (upstream's `awaitsFirstContent`):
+    /// a slow remote load shows a loading indicator, not a blank page.
+    #[must_use]
+    pub fn awaits_first_content(&self) -> bool {
+        self.replica_of.is_some() && self.load_state == HtmlLoadState::Loading && !self.content_shown
     }
 
     /// Whether ngterm themes the page: a file page, replica, Markdown, text or clicked HTML document (upstream's

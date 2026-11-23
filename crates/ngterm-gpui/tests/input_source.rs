@@ -3,7 +3,7 @@
 //! socket's peer, listed, switched and read back), the X backend failing without its server, a fake KDE keyboard
 //! service on the sandbox's private session bus (alone, refusing, gone, reached on the session bus the environment
 //! names, and found by the Wayland probe when Plasma's `kwin_wayland_wrapper` serves the display, which without the
-//! service gives no backend), and the app end to end on the Xvfb: with "Lock in terminals" on Russian, the group
+//! service gives no backend), and the app end to end on the Xvfb: with "Lock in ngterm" on Russian, the group
 //! locks while the terminal holds the keyboard, a manual switch there is switched back, and the earlier group returns
 //! when the keyboard goes elsewhere and on quit; and a keymap that only changes the layout list (`setxkbmap`, the
 //! selected layout's name unchanged) is seen while the terminal keeps the keyboard: Russian enabled again locks it.

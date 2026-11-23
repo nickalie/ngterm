@@ -26,8 +26,6 @@
 //!   only while the page holds the keyboard: one opening while it does not is refused, and the page losing it (a
 //!   modal opening: Settings, an alert, a picker, an ask, the palette) or leaving the screen closes it, so a popup is
 //!   never drawn over a modal.
-//! - The keyboard-layout lock (`crate::input_source`) holds while the page holds the keyboard: the element taking or
-//!   losing it, or its window's activation changing, asks the lock to re-evaluate.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -108,7 +106,6 @@ impl PageView {
         let focused = cx.on_focus(&focus, window, |view, _, cx| view.focus_changed(true, cx));
         let blurred = cx.on_blur(&focus, window, |view, _, cx| view.focus_changed(false, cx));
         let hide_shown = panel::observe_hide_shown(cx);
-        let activation = cx.observe_window_activation(window, |_, _, cx| crate::input_source::request_refresh(cx));
         page.set_element(cx.entity().downgrade(), window.window_handle());
         let (import_failed, failures) = async_channel::unbounded();
         cx.spawn(async move |view, cx| {
@@ -138,7 +135,7 @@ impl PageView {
             released: false,
             import_failed,
             error: None,
-            _subscriptions: vec![focused, blurred, hide_shown, activation],
+            _subscriptions: vec![focused, blurred, hide_shown],
         }
     }
 
@@ -194,7 +191,6 @@ impl PageView {
 
     fn focus_changed(&mut self, focused: bool, cx: &mut Context<Self>) {
         self.focused = focused;
-        crate::input_source::request_refresh(cx);
         // kept by the page too: GPUI says it once, maybe before the engine's page exists (the engine still starting)
         self.page.set_focused(focused);
         if focused {
@@ -745,7 +741,8 @@ impl Render for PageView {
             .flatten()
         {
             Some(wait) => Some(super::engine_wait::element(&wait, &colors, error)),
-            None => panel::failure(&overlay, &colors, error, &poster),
+            None => panel::failure(&overlay, &colors, error, &poster)
+                .or_else(|| panel::loading(&overlay, self.page.origin_host().as_deref(), &colors)),
         };
         div()
             .id(SharedString::from(format!("html-page-{}", overlay.id)))

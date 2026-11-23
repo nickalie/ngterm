@@ -188,7 +188,8 @@ impl Sidebar {
         let selected = matches!(row.kind, RowKind::Session { selected: true, .. });
         let workspace = row.is_workspace();
         #[expect(clippy::cast_possible_truncation, reason = "sidebar width is at most 560 points")]
-        let info_width = self.width() as f32 - 2. * CONTENT_INSET - row_lead(row, &look) - icon_width(row);
+        let info_width =
+            self.width() as f32 - look.content_left() - CONTENT_INSET - row_lead(row, &look) - icon_width(row);
         let mut element = div()
             .id(ElementId::Uuid(id))
             .debug_selector(|| format!("row:{}", row.label))
@@ -201,7 +202,8 @@ impl Sidebar {
                 } else {
                     info::line_height(look, window)
                 }))
-            .px(px(CONTENT_INSET))
+            .pl(px(look.content_left()))
+            .pr(px(CONTENT_INSET))
             .text_color(look.text(selected))
             .when(selected, |element| element.child(pill(look.pill(key), &look)))
             .when(cursor_shown && row.search.cursor, |element| {
@@ -214,7 +216,7 @@ impl Sidebar {
                     div()
                         .absolute()
                         .top(px(look.row_height() - look.metrics().info_spacing))
-                        .left(px(CONTENT_INSET + row_lead(row, &look) + icon_width(row)))
+                        .left(px(look.content_left() + row_lead(row, &look) + icon_width(row)))
                         .right(px(CONTENT_INSET))
                         .child(info::element(&row.info, look, selected, info_width, window)),
                 )
@@ -292,7 +294,7 @@ impl Sidebar {
         let trailing = trailing_width(window, row, status.is_some(), shows_add);
         let lead = row_lead(row, &look);
         #[expect(clippy::cast_possible_truncation, reason = "a sidebar width is a few hundred points")]
-        let available = self.width() as f32 - 2.0 * CONTENT_INSET - lead - icon_width(row) - trailing;
+        let available = self.width() as f32 - look.content_left() - CONTENT_INSET - lead - icon_width(row) - trailing;
         let content = div()
             .flex()
             .flex_row()
@@ -316,8 +318,14 @@ impl Sidebar {
         };
         content
             .when(row.icon_visible, |content| {
+                let id = row.id;
                 content
-                    .child(leading_icon(row, glyph_ink))
+                    .child(leading_icon(row, glyph_ink).when(workspace, |icon| {
+                        icon.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.icon_clicked(id);
+                        }))
+                    }))
                     .child(div().flex_none().w(px(GAP)))
             })
             .child(self.name(row, name_ink, available, window, cx))
@@ -459,7 +467,7 @@ impl Sidebar {
         let marker = match self.drag.highlight? {
             Highlight::OnRow(on) if on == index => div()
                 .absolute()
-                .left(px(PILL_INSET_X))
+                .left(px(self.look.pill_left()))
                 .right(px(PILL_INSET_X))
                 .top(px(self.look.metrics().pill_inset_y))
                 .bottom(px(self.look.metrics().pill_inset_y))
@@ -697,7 +705,7 @@ fn pill(fill: Hsla, look: &Look) -> impl IntoElement {
     div()
         .debug_selector(|| "selection-pill".to_owned())
         .absolute()
-        .left(px(PILL_INSET_X))
+        .left(px(look.pill_left()))
         .right(px(PILL_INSET_X))
         .top(px(inset_y))
         .bottom(px(inset_y))
@@ -707,7 +715,7 @@ fn pill(fill: Hsla, look: &Look) -> impl IntoElement {
 
 /// A row's leading glyph, with a remote row's stream notice as its hover text and its tint as its accessibility value
 /// (`<color> tint`, upstream's `SidebarCellView.tint`).
-fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
+fn leading_icon(row: &SidebarRow, color: Hsla) -> gpui_kit::Stateful<gpui_kit::Div> {
     let tooltip = row.icon_tooltip.clone().map(SharedString::from);
     let (id, name) = if row.is_workspace() {
         ("workspace-icon", "Workspace")
@@ -719,6 +727,7 @@ fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
         .accessibility_id(id)
         .role(gpui_kit::Role::Image)
         .aria_label(tooltip.clone().unwrap_or(SharedString::from(name)))
+        .debug_selector(move || id.to_owned())
         .when_some(row.tint, |icon, tint| {
             let value = format!("{} tint", tint.color().wire());
             icon.debug_selector({
@@ -908,7 +917,7 @@ fn cursor_ring(look: &Look) -> impl IntoElement {
     div()
         .debug_selector(|| "search-cursor".to_owned())
         .absolute()
-        .left(px(PILL_INSET_X))
+        .left(px(look.pill_left()))
         .right(px(PILL_INSET_X))
         .top(px(inset_y))
         .bottom(px(inset_y))

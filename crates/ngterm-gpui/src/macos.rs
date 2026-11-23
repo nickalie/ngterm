@@ -43,6 +43,8 @@ unsafe extern "C" {
         capacity: u32,
     );
     fn ngterm_accessibility_start(changed: extern "C" fn(bool, bool));
+    fn ngterm_app_active() -> bool;
+    fn ngterm_app_activation_start(changed: extern "C" fn());
 }
 
 /// Ghostty's macOS and XKB columns joined by physical key (keycodes.zig, Chromium BSD table).
@@ -229,6 +231,37 @@ pub fn watch(poster: Poster, cx: &mut gpui_kit::App) {
                     post(&poster, AppState::settle);
                 }
             });
+        }
+    })
+    .detach();
+}
+
+/// Whether ngterm is the active application (`NSApp.isActive`), or its key window is a nonactivating panel (the quick
+/// terminal) taking the keyboard over another application.
+#[must_use]
+pub fn app_active() -> bool {
+    // SAFETY: reads the application's state on the main thread.
+    unsafe { ngterm_app_active() }
+}
+
+static APP_ACTIVATION: OnceLock<async_channel::Sender<()>> = OnceLock::new();
+extern "C" fn app_activation_changed() {
+    if let Some(changes) = APP_ACTIVATION.get() {
+        let _ = changes.try_send(());
+    }
+}
+
+/// Runs `changed` after each change of the application's activation.
+pub fn watch_app_activation(changed: fn(&mut gpui_kit::App), cx: &mut gpui_kit::App) {
+    let (changes, queue) = async_channel::unbounded();
+    if APP_ACTIVATION.set(changes).is_err() {
+        return;
+    }
+    // SAFETY: main-thread registration retains only a static callback.
+    unsafe { ngterm_app_activation_start(app_activation_changed) };
+    cx.spawn(async move |cx| {
+        while queue.recv().await.is_ok() {
+            cx.update(changed);
         }
     })
     .detach();

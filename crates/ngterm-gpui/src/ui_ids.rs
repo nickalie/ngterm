@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// Catalog ids whose element is not ported yet: each must still be in the catalog and must not be carried yet, so the
 /// change that adds the element also takes its id off this list.
-const PENDING: &[&str] = &["htmlOverlay.loading", "remote-connection", "remote-unknown"];
+const PENDING: &[&str] = &["remote-connection", "remote-unknown"];
 
 /// The catalog's ids, both the generated (`ids:`) and the hand-maintained (`manual:`) ones.
 fn catalog() -> Vec<String> {

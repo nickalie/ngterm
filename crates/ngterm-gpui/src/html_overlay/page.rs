@@ -117,6 +117,8 @@ pub(super) struct Page {
     theme: RefCell<HtmlOverlayTheme>,
     poster: Poster,
     state: RefCell<PageState>,
+    /// The machine its session runs on, for one shown here for another machine (the session's `remote_host`).
+    origin_host: RefCell<Option<String>>,
     storage: Storage,
     /// The engine's page, once the engine runs.
     view: Cell<Option<ViewId>>,
@@ -159,6 +161,7 @@ impl Page {
             theme: RefCell::new(colors.theme()),
             colors: RefCell::new(colors),
             poster: poster.clone(),
+            origin_host: RefCell::new(None),
             storage,
             state: RefCell::new(PageState {
                 overlay: overlay.clone(),
@@ -213,6 +216,16 @@ impl Page {
 
     pub(super) fn grant_root(&self) -> Option<policy::GrantRoot> {
         self.state.borrow().grant_root.clone()
+    }
+
+    /// The machine the page's session runs on, `None` for this one.
+    pub(super) fn origin_host(&self) -> Option<String> {
+        self.origin_host.borrow().clone()
+    }
+
+    /// Follows the machine the page's session runs on.
+    pub(super) fn set_origin_host(&self, host: Option<&str>) {
+        *self.origin_host.borrow_mut() = host.map(str::to_owned);
     }
 
     pub(super) fn overlay(&self) -> HtmlOverlay {

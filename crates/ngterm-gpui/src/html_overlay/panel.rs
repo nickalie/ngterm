@@ -3,6 +3,8 @@
 //! the failure shown over a page that did not load. A chromeless page has no strip. The element is
 //! [`super::view::PageView`].
 
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, Global, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Role,
@@ -458,6 +460,52 @@ pub fn failure(
 
 /// The failure's Reload (upstream's `htmlOverlay.failureReload`).
 pub const FAILURE_RELOAD: &str = "htmlOverlay.failureReload";
+
+/// The loading indicator (upstream's `htmlOverlay.loading`).
+pub const LOADING: &str = "htmlOverlay.loading";
+
+/// The loading indicator's text (upstream's `Loading \(identity) from \(host)`).
+#[must_use]
+pub fn loading_text(overlay: &HtmlOverlay, host: Option<&str>) -> String {
+    let identity = overlay.identity();
+    match host {
+        Some(host) => format!("Loading {identity} from {host}"),
+        None => format!("Loading {identity}"),
+    }
+}
+
+/// What a page shown here for another machine draws until its first load finishes, so a slow remote load never reads
+/// as an ignored click (upstream's `loading` over `awaitsFirstContent`): "Loading <identity>", with "from <host>" when
+/// its session runs on another machine (`host`). `None` unless the page awaits its first content.
+#[must_use]
+pub fn loading(overlay: &HtmlOverlay, host: Option<&str>, colors: &PanelColors) -> Option<AnyElement> {
+    if !overlay.awaits_first_content() {
+        return None;
+    }
+    let text = SharedString::from(loading_text(overlay, host));
+    let ink = colors.ink(0.7);
+    Some(
+        div()
+            .id(LOADING)
+            .debug_selector(|| LOADING.to_owned())
+            .accessibility_id(LOADING)
+            .role(Role::Status)
+            .aria_label(text.clone())
+            .occlude()
+            .absolute()
+            .inset_0()
+            .bg(colors.background())
+            .text_color(ink)
+            .p(px(24.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(8.))
+            .child(Spinner::new().small().color(ink))
+            .child(div().min_w(px(0.)).text_size(px(12.)).truncate().child(text))
+            .into_any_element(),
+    )
+}
 
 #[cfg(test)]
 mod tests {

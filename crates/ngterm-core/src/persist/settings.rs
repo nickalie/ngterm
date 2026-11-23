@@ -408,8 +408,8 @@ pub struct AppSettings {
     pub sidebar_density: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_open_mode: Option<String>,
-    /// The keyboard layout held while a terminal has the keyboard, `None` for off (Settings ▸ Key Mapping ▸ "Lock in
-    /// terminals"): the platform's layout id ([`crate::input_source_lock`]). Not a ghostty key.
+    /// The keyboard layout held while ngterm has the keyboard, `None` for off (Settings ▸ Key Mapping ▸ "Lock in
+    /// ngterm"): the platform's layout id ([`crate::input_source_lock`]). Not a ghostty key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_input_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

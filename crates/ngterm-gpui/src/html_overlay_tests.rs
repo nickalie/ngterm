@@ -14,7 +14,7 @@ fn hiding_a_mounted_page_hides_its_engine_view(cx: &mut gpui_kit::TestAppContext
     let (_, cx) = cx.add_window_view(|_, _| gpui_kit::EmptyView);
     let page = cx.update(|window, cx| mount(&overlay, None, window, cx)).unwrap();
     cx.update(|window, cx| {
-        apply(&overlay, true, cx);
+        apply(&overlay, None, true, cx);
         set_covered(window, true, cx);
     });
     web.take();

@@ -18,8 +18,8 @@ use ngterm_wpe_client::{
 };
 
 use super::PageView;
-use crate::html_overlay::registry;
 use crate::html_overlay::testing::{self, Call, Recorder};
+use crate::html_overlay::{panel, registry};
 
 /// The window's content: a stand-in popover (a strip on top that closes on any press outside it) over the page.
 struct Root {
@@ -89,7 +89,7 @@ fn harness_of(overlay: HtmlOverlay, cx: &mut TestAppContext) -> (Harness, &mut V
         root.element = Some(element.clone());
         cx.notify();
     });
-    cx.update(|_, cx| registry::apply(&overlay, true, cx));
+    cx.update(|_, cx| registry::apply(&overlay, None, true, cx));
     cx.run_until_parked();
     let harness = Harness {
         web,
@@ -168,7 +168,7 @@ fn a_mounted_page_is_made_loaded_shown_and_laid_out_at_its_content(cx: &mut Test
         "the content's size, below the strip, at the window's scale"
     );
     // off screen: the engine renders nothing, and gets no size while the page is out of sight
-    cx.update(|_, cx| registry::apply(&harness.overlay, false, cx));
+    cx.update(|_, cx| registry::apply(&harness.overlay, None, false, cx));
     assert!(harness.web.take().contains(&Call::Visible(false)));
     cx.simulate_scale_factor_change(1.5);
     harness.root.update(cx, |_, cx| cx.notify());
@@ -179,7 +179,7 @@ fn a_mounted_page_is_made_loaded_shown_and_laid_out_at_its_content(cx: &mut Test
         "{hidden:?}"
     );
     // back on screen, the new scale reaches the engine
-    cx.update(|_, cx| registry::apply(&harness.overlay, true, cx));
+    cx.update(|_, cx| registry::apply(&harness.overlay, None, true, cx));
     harness.root.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     let rescaled = harness.web.take();
@@ -222,7 +222,7 @@ fn the_page_and_its_strip_carry_upstreams_accessibility_ids(cx: &mut TestAppCont
     };
     failed.load_state = ngterm_core::html::HtmlLoadState::Failed;
     failed.load_error = Some("not found".to_owned());
-    cx.update(|_, cx| registry::apply(&failed, true, cx));
+    cx.update(|_, cx| registry::apply(&failed, None, true, cx));
     harness.root.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     assert!(
@@ -265,7 +265,7 @@ fn the_page_and_its_strip_carry_upstreams_accessibility_ids(cx: &mut TestAppCont
 
     // a long one wraps at the card's width, inside its padding
     failed.load_error = Some("Error receiving data: Connection reset by peer. ".repeat(6));
-    cx.update(|_, cx| registry::apply(&failed, true, cx));
+    cx.update(|_, cx| registry::apply(&failed, None, true, cx));
     harness.root.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     let text = cx
@@ -280,6 +280,48 @@ fn the_page_and_its_strip_carry_upstreams_accessibility_ids(cx: &mut TestAppCont
 
 /// A page waiting for the engine: its area shows the download, then why there is none with a retry, and neither hides
 /// the strip above it.
+/// Upstream's `HtmlOverlayView.loading` (#949): a page shown here for another machine draws the loading indicator until
+/// its first load finishes, naming the machine, and never again on a later load.
+#[gpui_kit::test]
+fn a_replica_shows_the_loading_indicator_until_its_first_load(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let apply = |overlay: &HtmlOverlay, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| registry::apply(overlay, Some("build-box"), true, cx));
+        harness.root.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    };
+    assert!(
+        cx.debug_bounds("htmlOverlay.loading").is_none(),
+        "a local page shows none"
+    );
+    let mut replica = harness.overlay.clone();
+    replica.replica_of = Some(uuid::Uuid::new_v4());
+    replica.source = HtmlSource::Replica {
+        path: "/origin/docs/index.html".to_owned(),
+        content: ngterm_core::html::ReplicaContent::Html,
+    };
+    replica.load_state = ngterm_core::html::HtmlLoadState::Loading;
+    apply(&replica, cx);
+    assert!(
+        cx.debug_bounds("htmlOverlay.loading").is_some(),
+        "the first load shows it"
+    );
+    assert_eq!(
+        panel::loading_text(&replica, Some("build-box")),
+        "Loading index.html from build-box"
+    );
+    replica.load_state = ngterm_core::html::HtmlLoadState::Loaded;
+    replica.content_shown = true;
+    apply(&replica, cx);
+    assert!(cx.debug_bounds("htmlOverlay.loading").is_none(), "loaded");
+    replica.load_state = ngterm_core::html::HtmlLoadState::Loading;
+    apply(&replica, cx);
+    assert!(
+        cx.debug_bounds("htmlOverlay.loading").is_none(),
+        "a reload keeps the shown document"
+    );
+}
+
 #[gpui_kit::test]
 fn a_waiting_page_shows_the_download_and_a_failure_with_its_retry(cx: &mut TestAppContext) {
     use crate::html_overlay::engine_wait::{Unavailable, Wait};
@@ -311,7 +353,7 @@ fn a_waiting_page_shows_the_download_and_a_failure_with_its_retry(cx: &mut TestA
     overlay.load_state = ngterm_core::html::HtmlLoadState::Failed;
     overlay.load_error = Some(failed.reason.clone());
     registry::wait_on_test_engine(&page, Wait::Unavailable(failed));
-    cx.update(|_, cx| registry::apply(&overlay, true, cx));
+    cx.update(|_, cx| registry::apply(&overlay, None, true, cx));
     harness.root.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     assert!(cx.debug_bounds("htmlOverlay.engine-progress").is_none());
@@ -563,8 +605,8 @@ fn a_released_page_closes_its_engine_page(cx: &mut TestAppContext) {
     cx.update(|_, cx| page.close(cx));
     assert!(harness.web.take().contains(&Call::CloseView(view)));
     // the model reaching it changes nothing any more
-    cx.update(|_, cx| registry::apply(&harness.overlay, false, cx));
-    cx.update(|_, cx| registry::apply(&harness.overlay, true, cx));
+    cx.update(|_, cx| registry::apply(&harness.overlay, None, false, cx));
+    cx.update(|_, cx| registry::apply(&harness.overlay, None, true, cx));
     assert_eq!(harness.web.take(), [], "a released page sends nothing");
 }
 
@@ -776,13 +818,13 @@ fn the_terminal_under_a_hidden_page_gets_the_pointer(cx: &mut TestAppContext) {
     });
     cx.simulate_resize(size(px(800.), px(500.)));
     cx.update(|window, _| window.activate_window());
-    cx.update(|_, cx| registry::apply(&overlay, true, cx));
+    cx.update(|_, cx| registry::apply(&overlay, None, true, cx));
     cx.run_until_parked();
     let at = point(px(300.), px(300.));
     cx.simulate_click(at, Modifiers::none());
     assert_eq!(presses.get(), 0, "a page on screen takes the press");
     // the slot hides the page: the terminal under it gets the pointer back
-    cx.update(|_, cx| registry::apply(&overlay, false, cx));
+    cx.update(|_, cx| registry::apply(&overlay, None, false, cx));
     stack.update(cx, |stack, cx| {
         stack.shown = false;
         cx.notify();
@@ -847,7 +889,7 @@ fn a_page_given_the_keyboard_while_the_engine_starts_holds_the_engine_s_once_rea
         root.element = Some(element.clone());
         cx.notify();
     });
-    cx.update(|_, cx| registry::apply(&overlay, true, cx));
+    cx.update(|_, cx| registry::apply(&overlay, None, true, cx));
     cx.run_until_parked();
     harness.web.take();
     // the deck gives it the keyboard, and an input method starts composing in it, before the engine runs
@@ -1362,11 +1404,11 @@ fn hiding_a_page_withdraws_its_external_link_prompt(cx: &mut TestAppContext) {
     Harness::dispatch(&external_link(view), cx);
     assert!(cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
     // the deck applies visibility while its window is being updated
-    cx.update(|_, cx| registry::apply(&harness.overlay, false, cx));
+    cx.update(|_, cx| registry::apply(&harness.overlay, None, false, cx));
     cx.run_until_parked();
     assert!(!cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
     // the withdrawal was no answer: the page asks again once shown
-    cx.update(|_, cx| registry::apply(&harness.overlay, true, cx));
+    cx.update(|_, cx| registry::apply(&harness.overlay, None, true, cx));
     Harness::dispatch(&external_link(view), cx);
     assert!(cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
     cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
@@ -1383,8 +1425,8 @@ fn a_late_withdrawal_leaves_the_prompt_that_replaced_its_own(cx: &mut TestAppCon
     // a hand-off asked before a hide and a show in one flush opens its prompt before the hide withdraws the first
     cx.update(|_, cx| {
         registry::dispatch(&external_link(view), cx);
-        registry::apply(&harness.overlay, false, cx);
-        registry::apply(&harness.overlay, true, cx);
+        registry::apply(&harness.overlay, None, false, cx);
+        registry::apply(&harness.overlay, None, true, cx);
     });
     cx.run_until_parked();
     let second = cx
@@ -1392,58 +1434,11 @@ fn a_late_withdrawal_leaves_the_prompt_that_replaced_its_own(cx: &mut TestAppCon
         .unwrap();
     assert_ne!(first, second);
     // the page still holds the new prompt: hiding withdraws it, unanswered, so the page asks again once shown
-    cx.update(|_, cx| registry::apply(&harness.overlay, false, cx));
+    cx.update(|_, cx| registry::apply(&harness.overlay, None, false, cx));
     cx.run_until_parked();
     assert!(!cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
-    cx.update(|_, cx| registry::apply(&harness.overlay, true, cx));
+    cx.update(|_, cx| registry::apply(&harness.overlay, None, true, cx));
     Harness::dispatch(&external_link(view), cx);
     assert!(cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
     cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
-}
-
-/// Upstream's `TerminalInputSourceTests` (`testPageAndItsSubviewsHoldTheLock`, `testTextFieldsAndChromeReleaseTheLock`):
-/// the keyboard-layout lock holds while the page has the keyboard and lets go when a text field outside the page
-/// (Settings, the palette, an ask dialog) takes it or the window loses its activation; each move re-evaluates by
-/// itself, with no terminal involved.
-#[gpui_kit::test]
-fn the_layout_lock_holds_while_the_page_has_the_keyboard_and_not_a_field_outside_it(cx: &mut TestAppContext) {
-    use crate::input_source::fake::{RU, US, installed};
-
-    let system = installed(cx, RU);
-    let (harness, cx) = harness(cx);
-    let field = cx.new(|cx| Modal {
-        focus: cx.focus_handle(),
-    });
-    cx.update(|_, cx| crate::input_source::set_target(Some(US.to_owned()), cx));
-    cx.run_until_parked();
-    assert!(system.borrow().selected.is_empty(), "nothing holds the keyboard yet");
-
-    harness.focus_page(cx);
-    assert_eq!(
-        system.borrow().selected,
-        [US],
-        "the page taking the keyboard engages the lock"
-    );
-    let focus = field.read_with(cx, |field, _| field.focus.clone());
-    cx.update(|window, cx| window.focus(&focus, cx));
-    cx.run_until_parked();
-    assert_eq!(
-        system.borrow().selected,
-        [US, RU],
-        "a field outside the page releases it"
-    );
-
-    harness.focus_page(cx);
-    assert_eq!(
-        system.borrow().selected,
-        [US, RU, US],
-        "back in the page, it engages again"
-    );
-    cx.deactivate_window();
-    cx.run_until_parked();
-    assert_eq!(
-        system.borrow().selected,
-        [US, RU, US, RU],
-        "an inactive window's page holds nothing"
-    );
 }

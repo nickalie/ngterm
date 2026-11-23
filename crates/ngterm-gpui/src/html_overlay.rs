@@ -203,7 +203,7 @@ mod unavailable {
         None
     }
 
-    pub fn apply(_: &HtmlOverlay, _: bool, _: &mut App) {}
+    pub fn apply(_: &HtmlOverlay, _: Option<&str>, _: bool, _: &mut App) {}
 
     pub fn hide(_: &Entity<PageView>, _: &mut App) {}
 

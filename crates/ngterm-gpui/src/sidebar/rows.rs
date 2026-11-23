@@ -99,13 +99,6 @@ impl SidebarRow {
         matches!(self.kind, RowKind::Workspace { .. })
     }
 
-    /// What decides whether the list is rebuilt rather than updated in place: the row's id, its kind and its depth
-    /// (upstream's `TreeShape`, its `parentIDs` while companions nest).
-    #[must_use]
-    pub fn shape(&self) -> (Uuid, bool, usize) {
-        (self.id, self.is_workspace(), self.depth())
-    }
-
     /// How many levels the row is indented: a workspace row and a flat-list row none, a session under its workspace
     /// one, a companion under its parent two.
     #[must_use]

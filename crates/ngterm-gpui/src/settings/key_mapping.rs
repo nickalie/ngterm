@@ -29,7 +29,7 @@ pub fn sections(snapshot: &Snapshot) -> Vec<Section> {
     ]
 }
 
-/// "Lock in terminals": Off first, then the layouts the system can select, then a saved layout it no longer can,
+/// "Lock in ngterm": Off first, then the layouts the system can select, then a saved layout it no longer can,
 /// as "<id> (unavailable)", so the picker still shows the stored choice; disabled with the reason where this desktop
 /// has no way to switch layouts.
 fn keyboard_layout(snapshot: &Snapshot) -> Vec<Item> {
@@ -52,7 +52,7 @@ fn keyboard_layout(snapshot: &Snapshot) -> Vec<Item> {
     let mut items = vec![
         Item::new(
             "settings-terminal-input-source",
-            "Lock in terminals",
+            "Lock in ngterm",
             Control::Picker(picker),
         )
         .enabled(layouts.unavailable.is_none()),

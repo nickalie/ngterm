@@ -37,6 +37,7 @@ use gpui_kit::{
 };
 use ngterm_core::Core;
 use ngterm_core::model::{SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN};
+use ngterm_core::persist::settings::FlaggedViewLayout;
 use ngterm_core::sidebar_actions::SidebarAction;
 use uuid::Uuid;
 
@@ -84,6 +85,21 @@ struct Editing {
     workspace: bool,
     input: Entity<InputState>,
     _events: Subscription,
+}
+
+impl Editing {
+    /// The rename the field's text commits, to the row the edit began on.
+    fn action(&self, cx: &App) -> SidebarAction {
+        let name = self.input.read(cx).value().to_string();
+        if self.workspace {
+            SidebarAction::RenameWorkspace {
+                workspace: self.id,
+                name,
+            }
+        } else {
+            SidebarAction::RenameSession { session: self.id, name }
+        }
+    }
 }
 
 /// What a drag over the list has done to the rows.
@@ -313,6 +329,7 @@ impl Sidebar {
         self.expansion.apply_requests(store);
         let layout = rows::shown_flagged_layout(store, &settings);
         let open = self.expansion.sync(store, layout).clone();
+        self.look.flat = layout.is_some_and(|layout| layout != FlaggedViewLayout::Tree);
         let rows = rows::rows(store, &open, RowSettings { settings: &settings });
         store.note_sidebar_expansion(open.workspaces);
         self.context = SidebarContext::take(store, &settings, tint_placement);
@@ -321,18 +338,21 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// Shows `rows`. A change of the list's shape (a row added, removed or moved) closes a rename in progress, as the
-    /// row it edits may be gone; a content change keeps it, so the row being renamed updates too (its glyph and badge
-    /// live, its name behind the field) and is current when the field closes. The list scrolls to a newly selected
+    /// Shows `rows`. A rename in progress survives every change that keeps its row, a row added, removed or moved
+    /// included, so the row being renamed updates too (its glyph and badge live, its name behind the field) and is
+    /// current when the field closes; once its row is gone (its workspace folded, the session closed) the rename ends,
+    /// keeping the typed name for the row it began on (upstream's `editingNode`). The list scrolls to a newly selected
     /// session. A selection made elsewhere (the keymap, `ngtermctl`, auto-follow) that leaves the Shift-click anchor
     /// out moves the anchor to the selected session, as GTK's list moves its range anchor with each row it selects;
     /// the sidebar's own Shift-click keeps it.
     fn show(&mut self, rows: Vec<SidebarRow>, selected: Option<Uuid>, cx: &mut Context<Self>) {
-        let reshaped =
-            self.rows.len() != rows.len() || self.rows.iter().zip(&rows).any(|(old, new)| old.shape() != new.shape());
         self.rows = rows;
-        if reshaped && self.editing.is_some() {
-            self.finish_rename(false, cx);
+        if self
+            .editing
+            .as_ref()
+            .is_some_and(|editing| self.index_of(editing.id).is_none())
+        {
+            self.finish_rename(true, cx);
         }
         let selection = self.selected_ids();
         if self.anchor.is_none_or(|anchor| !selection.contains(&anchor)) {
@@ -465,12 +485,23 @@ impl Sidebar {
         }
     }
 
+    /// A click on workspace row `id`'s icon, each click of a double-click too: folds or opens it at once, whatever the
+    /// row-click setting, and never renames (upstream's `clickHitsWorkspaceIcon`, #952).
+    fn icon_clicked(&mut self, id: Uuid) {
+        self.cancel_toggle();
+        // a search shows every row it keeps open: a fold would change nothing on screen
+        if !self.searching() {
+            self.toggle(id);
+        }
+    }
+
     fn cancel_toggle(&mut self) {
         self.pending_toggle = None;
     }
 
-    /// A single click on a workspace row: toggles it after the double-click interval, unless a double-click renames
-    /// first or the setting turns the whole-row target off (re-read when the interval ends).
+    /// A single click on a workspace row outside its icon and disclosure: toggles it after the double-click interval,
+    /// unless a double-click renames first or the setting turns the whole-row target off (re-read when the interval
+    /// ends).
     fn schedule_toggle(&mut self, id: Uuid, cx: &mut Context<Self>) {
         // a search shows every row it keeps open: a fold would change nothing on screen
         if !self.context.row_click_expands || self.searching() {
@@ -494,22 +525,27 @@ impl Sidebar {
     /// a workspace row click, or the row menu's Collapse Workspace / Expand Workspace). A parent row follows at once,
     /// the fold persisting through the store (upstream's `parentExpansionChanged`).
     pub fn toggle(&mut self, id: Uuid) {
-        match self.row(id).map(|row| row.kind) {
-            Some(RowKind::Workspace { expanded }) => {
-                let window = self.window;
-                self.post(move |state: &mut AppState| state.sidebar_toggle_workspace(window, id, !expanded));
-            }
-            Some(RowKind::Session {
+        let Some(row) = self.rows.iter_mut().find(|row| row.id == id) else {
+            return;
+        };
+        // the row follows at once, so a second click before the next sync toggles back
+        let expanded = match &mut row.kind {
+            RowKind::Workspace { expanded }
+            | RowKind::Session {
                 group: RowGroup::Parent { expanded },
                 ..
-            }) => {
-                self.expansion.set_parent(id, !expanded);
-                self.act(SidebarAction::SetSessionExpanded {
-                    session: id,
-                    expanded: !expanded,
-                });
+            } => {
+                *expanded = !*expanded;
+                *expanded
             }
-            _ => {}
+            RowKind::Session { .. } => return,
+        };
+        if row.is_workspace() {
+            let window = self.window;
+            self.post(move |state: &mut AppState| state.sidebar_toggle_workspace(window, id, expanded));
+        } else {
+            self.expansion.set_parent(id, expanded);
+            self.act(SidebarAction::SetSessionExpanded { session: id, expanded });
         }
     }
 
@@ -535,9 +571,10 @@ impl Sidebar {
 
     /// Starts the inline rename of session or workspace row `id` (a double-click, the row menu's Rename, the Rename
     /// Session and Rename Workspace actions), seeded with the bare name (never the flat layout's ` : workspace`), all of
-    /// it selected; nothing when the row is not shown or an edit is already open.
+    /// it selected; nothing when the row is not shown. A rename of another row commits the open one first; a repeat for
+    /// the row being renamed keeps its edit.
     pub fn begin_rename(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editing.is_some() {
+        if self.editing.as_ref().is_some_and(|editing| editing.id == id) {
             return;
         }
         let Some(row) = self.row(id) else { return };
@@ -550,6 +587,8 @@ impl Sidebar {
                 None => return,
             }
         };
+        // the open edit's end keeps auto-follow suppressed and the keyboard here, for the edit that follows
+        let committed = self.editing.take().map(|open| open.action(cx));
         let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
         input.update(cx, |input, cx| {
             input.focus(window, cx);
@@ -566,9 +605,13 @@ impl Sidebar {
             input,
             _events: events,
         });
-        // an armed auto-follow jump would move the selection off this row mid-edit
-        let window_id = self.window;
-        self.post(move |state: &mut AppState| state.sidebar_rename_began(window_id));
+        if let Some(action) = committed {
+            self.act(action);
+        } else {
+            // an armed auto-follow jump would move the selection off this row mid-edit
+            let window_id = self.window;
+            self.post(move |state: &mut AppState| state.sidebar_rename_began(window_id));
+        }
         cx.notify();
     }
 
@@ -576,20 +619,7 @@ impl Sidebar {
     /// and hands the keyboard back to the terminal.
     pub fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
         let Some(editing) = self.editing.take() else { return };
-        let action = commit.then(|| {
-            let name = editing.input.read(cx).value().to_string();
-            if editing.workspace {
-                SidebarAction::RenameWorkspace {
-                    workspace: editing.id,
-                    name,
-                }
-            } else {
-                SidebarAction::RenameSession {
-                    session: editing.id,
-                    name,
-                }
-            }
-        });
+        let action = commit.then(|| editing.action(cx));
         let window = self.window;
         self.post(move |state: &mut AppState| state.sidebar_rename_ended(window, action));
         cx.notify();

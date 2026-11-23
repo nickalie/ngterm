@@ -228,6 +228,84 @@ fn submit_and_the_page_commands_need_a_page() {
     );
 }
 
+/// A page shown here for another machine, opened in session `id`'s session-wide slot; its id.
+fn open_replica(fixture: &mut Fixture, id: Uuid) -> Uuid {
+    let replica = crate::html::HtmlOverlay {
+        replica_of: Some(Uuid::new_v4()),
+        ..crate::html::HtmlOverlay::new(
+            crate::html::HtmlSource::Replica {
+                path: "/origin/docs/index.html".to_owned(),
+                content: crate::html::ReplicaContent::Html,
+            },
+            crate::html::HtmlPageFlags::default(),
+        )
+    };
+    let page = replica.id;
+    fixture
+        .store_mut()
+        .unwrap()
+        .open_html_overlay(id, None, replica, None, None)
+        .unwrap();
+    page
+}
+
+fn awaits_first_content(fixture: &Fixture, id: Uuid) -> bool {
+    fixture
+        .store()
+        .session(id)
+        .unwrap()
+        .overlay
+        .html
+        .as_ref()
+        .unwrap()
+        .awaits_first_content()
+}
+
+/// Upstream's `aReplicaAwaitsItsFirstContentUntilItLoadsOnce`: a reload after the first load keeps the shown document.
+#[test]
+fn a_replica_awaits_its_first_content_until_it_loads_once() {
+    let (mut fixture, _) = fixture_with_host(1);
+    let id = fixture.sessions[0];
+    let page = open_replica(&mut fixture, id);
+    let info = HtmlPageInfo {
+        page: "ngterm-page://x/index.html".to_owned(),
+        title: None,
+        can_go_back: false,
+        can_go_forward: false,
+    };
+    fixture.core.set_html_page(page, Some(info));
+    assert!(awaits_first_content(&fixture, id));
+    fixture.core.set_html_load_state(page, HtmlLoadState::Loaded, None);
+    assert!(!awaits_first_content(&fixture, id));
+    for target in [HtmlReloadTarget::Original, HtmlReloadTarget::Current] {
+        fixture
+            .store_mut()
+            .unwrap()
+            .reload_html_overlay(id, None, target)
+            .unwrap();
+        fixture.core.set_html_load_state(page, HtmlLoadState::Loading, None);
+        assert!(!awaits_first_content(&fixture, id), "{target:?}");
+    }
+}
+
+/// Upstream's `aReplicaWhoseFirstLoadFailedNoLongerAwaitsContent` and `aLocalPageNeverAwaitsContent`.
+#[test]
+fn a_failed_replica_and_a_local_page_await_no_content() {
+    let (mut fixture, _) = fixture_with_host(1);
+    let id = fixture.sessions[0];
+    let page = open_replica(&mut fixture, id);
+    fixture
+        .core
+        .set_html_load_state(page, HtmlLoadState::Failed, Some("gone".to_owned()));
+    assert!(!awaits_first_content(&fixture, id));
+
+    let local = fixture.sessions[1];
+    open_page(&mut fixture, local, |_| {});
+    let shown = fixture.store().session(local).unwrap().overlay.html.clone().unwrap();
+    assert_eq!(shown.load_state, HtmlLoadState::Loading);
+    assert!(!shown.awaits_first_content());
+}
+
 #[test]
 fn reload_moves_the_revision_and_navigate_reaches_the_web_view() {
     let (mut fixture, log) = fixture_with_host(1);

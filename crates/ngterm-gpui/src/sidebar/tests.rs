@@ -646,6 +646,67 @@ fn a_workspace_row_folds_after_the_double_click_interval_and_through_its_disclos
     assert_eq!(h.names(cx).len(), 5);
 }
 
+/// The center of workspace row `name`'s icon, past its disclosure's strip.
+fn workspace_icon_at(h: &Harness, cx: &mut VisualTestContext, name: &'static str) -> Point<Pixels> {
+    let look = h.view.read_with(cx, |sidebar, _| sidebar.look);
+    let row: &'static str = Box::leak(format!("row:{name}").into_boxed_str());
+    let row = bounds(cx, row);
+    let x = look::CONTENT_INSET + look.metrics().nested_indent + crate::row_icon::SLOT / 2.0;
+    point(row.origin.x + px(x), row.origin.y + px(look.row_height() / 2.0))
+}
+
+/// Presses and releases the primary button at `at` as the `count`th click in a row.
+fn click_at(cx: &mut VisualTestContext, at: Point<Pixels>, count: usize) {
+    cx.simulate_event(gpui_kit::MouseDownEvent {
+        button: MouseButton::Left,
+        position: at,
+        modifiers: Modifiers::default(),
+        click_count: count,
+        first_mouse: false,
+    });
+    cx.simulate_event(gpui_kit::MouseUpEvent {
+        button: MouseButton::Left,
+        position: at,
+        modifiers: Modifiers::default(),
+        click_count: count,
+    });
+}
+
+/// Upstream's `testWorkspaceIconClickTogglesWhenRowClickIsOff` and `testWorkspaceIconDoubleClickFoldsTwiceWithoutRename`
+/// (#952): a click on a workspace row's icon folds or opens it at once, with the row-click setting off too, and each
+/// click of a double-click toggles, never renaming.
+#[gpui_kit::test]
+fn a_click_on_a_workspace_icon_folds_at_once_and_a_double_click_never_renames(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let two = h.id_of("two", cx);
+    h.state
+        .core
+        .update_settings(|settings| settings.workspace_row_click_expands = Some(false));
+    h.settle(cx);
+    let icon = workspace_icon_at(&h, cx, "two");
+    click_at(cx, icon, 1);
+    h.settle(cx);
+    assert!(!h.store().workspace(two).unwrap().is_expanded, "folded with no wait");
+    assert_eq!(h.names(cx), ["w:workspace 1", "s:u", "s:srv*", "w:two"]);
+    click_at(cx, icon, 1);
+    h.settle(cx);
+    assert!(h.store().workspace(two).unwrap().is_expanded, "opened again");
+
+    h.state
+        .core
+        .update_settings(|settings| settings.workspace_row_click_expands = None);
+    h.settle(cx);
+    // the second click lands before the first one's fold is synced back
+    click_at(cx, icon, 1);
+    click_at(cx, icon, 2);
+    cx.executor().advance_clock(DOUBLE_CLICK);
+    h.settle(cx);
+    assert_eq!(h.view.read_with(cx, |sidebar, _| sidebar.editing()), None, "no rename");
+    assert!(h.store().workspace(two).unwrap().is_expanded, "folded and opened again");
+    assert_eq!(h.names(cx).len(), 5);
+}
+
 #[gpui_kit::test]
 fn a_double_click_renames_enter_commits_and_escape_cancels(cx: &mut TestAppContext) {
     let (library, _) = library();
@@ -1853,9 +1914,8 @@ fn clicks_on_the_row_being_renamed_or_on_no_row_change_nothing(cx: &mut TestAppC
         .update_in(cx, |sidebar, window, cx| sidebar.begin_rename(u, window, cx));
     h.settle(cx);
     h.view.update_in(cx, |sidebar, window, cx| {
-        // a click inside the field selects nothing; a second rename waits for the first
+        // a click inside the field selects nothing
         sidebar.row_clicked(u, 1, Modifiers::default(), window, cx);
-        sidebar.begin_rename(srv, window, cx);
         sidebar.row_clicked(Uuid::new_v4(), 1, Modifiers::default(), window, cx);
         // a plain session row has nothing to fold
         sidebar.toggle(srv);
@@ -1866,21 +1926,141 @@ fn clicks_on_the_row_being_renamed_or_on_no_row_change_nothing(cx: &mut TestAppC
     assert_eq!(h.names(cx).len(), 5);
 }
 
-/// A row added while a rename is open closes it uncommitted: the row it edits may have moved.
+fn begin_rename(h: &Harness, cx: &mut VisualTestContext, id: Uuid) {
+    h.view
+        .update_in(cx, |sidebar, window, cx| sidebar.begin_rename(id, window, cx));
+}
+
+fn editing(h: &Harness, cx: &mut VisualTestContext) -> (Option<Uuid>, Option<String>) {
+    h.view
+        .read_with(cx, |sidebar, cx| (sidebar.editing(), sidebar.edited_text(cx)))
+}
+
+/// Upstream's `testStructuralChangeWaitsForRenameToFinish` (#924): a row added while a rename is open leaves the edit
+/// and its typed text in place, and Enter still commits it.
 #[gpui_kit::test]
-fn a_reshaped_list_closes_the_rename_without_committing_it(cx: &mut TestAppContext) {
+fn a_row_added_while_a_rename_is_open_keeps_the_edit(cx: &mut TestAppContext) {
     let (library, _) = library();
     let (mut h, cx) = harness(cx, library, AppSettings::default());
-    let u = h.id_of("u", cx);
-    h.view
-        .update_in(cx, |sidebar, window, cx| sidebar.begin_rename(u, window, cx));
+    let (u, two) = (h.id_of("u", cx), h.id_of("two", cx));
+    begin_rename(&h, cx, u);
     h.settle(cx);
     cx.simulate_input("build");
-    let two = h.id_of("two", cx);
-    h.store_mut().add_session(two, NewSession::at_cwd("/opt")).unwrap();
+    let added = h.store_mut().add_session(two, NewSession::at_cwd("/opt")).unwrap();
+    h.store_mut().rename_session(added, "added");
     h.settle(cx);
-    assert_eq!(h.view.read_with(cx, |sidebar, _| sidebar.editing()), None);
-    assert_eq!(h.store().session(u).unwrap().display_name(), "u", "not committed");
+    assert_eq!(editing(&h, cx), (Some(u), Some("build".to_owned())));
+    let names = h.names(cx);
+    assert!(
+        names.iter().any(|name| name.starts_with("s:added")),
+        "the new row shows: {names:?}"
+    );
+    cx.simulate_keystrokes("enter");
+    h.settle(cx);
+    assert_eq!(h.store().session(u).unwrap().display_name(), "build");
+}
+
+/// Upstream's `testCollapsingTheRenamedRowsWorkspaceKeepsTheTypedName`: a fold that takes the renamed row away ends the
+/// edit, renaming the row it began on.
+#[gpui_kit::test]
+fn folding_the_renamed_rows_workspace_ends_the_edit_with_the_typed_name(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let (u, first) = (h.id_of("u", cx), h.id_of("workspace 1", cx));
+    begin_rename(&h, cx, u);
+    h.settle(cx);
+    cx.simulate_input("build");
+    h.view.update(cx, |sidebar, _| sidebar.toggle(first));
+    h.settle(cx);
+    assert_eq!(editing(&h, cx), (None, None), "the fold ended the edit");
+    assert_eq!(h.store().session(u).unwrap().display_name(), "build");
+}
+
+/// Upstream's `testDeletedRenamedSessionDoesNotRenameAnotherRow`: closing the renamed session ends the edit and
+/// renames no row that takes its place.
+#[gpui_kit::test]
+fn closing_the_renamed_session_renames_no_other_row(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let (u, srv) = (h.id_of("u", cx), h.id_of("srv", cx));
+    begin_rename(&h, cx, u);
+    h.settle(cx);
+    cx.simulate_input("other");
+    h.store_mut().close_session(u);
+    h.settle(cx);
+    assert_eq!(editing(&h, cx), (None, None));
+    assert!(h.store().session(u).is_none());
+    assert_eq!(h.store().session(srv).unwrap().display_name(), "srv");
+}
+
+/// Upstream's `testRenamingAnotherRowCommitsTheOpenEdit` and `testARepeatRenameRequestKeepsTheOpenEdit`: a rename of
+/// another row commits the open edit and opens its own; a repeat for the row being renamed keeps the edit as typed.
+#[gpui_kit::test]
+fn renaming_another_row_commits_the_open_edit_and_a_repeat_keeps_it(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let (u, two) = (h.id_of("u", cx), h.id_of("two", cx));
+    begin_rename(&h, cx, u);
+    h.settle(cx);
+    cx.simulate_input("unfinished");
+    begin_rename(&h, cx, u);
+    h.settle(cx);
+    assert_eq!(editing(&h, cx), (Some(u), Some("unfinished".to_owned())));
+    assert_eq!(
+        h.store().session(u).unwrap().display_name(),
+        "u",
+        "a repeat commits nothing"
+    );
+
+    begin_rename(&h, cx, two);
+    h.settle(cx);
+    assert_eq!(h.store().session(u).unwrap().display_name(), "unfinished");
+    assert_eq!(editing(&h, cx), (Some(two), Some("two".to_owned())));
+    assert!(
+        h.view.update_in(cx, |sidebar, window, cx| {
+            sidebar.keyboard_owner(cx).is_some_and(|focus| focus.is_focused(window))
+        }),
+        "the new field keeps the keyboard"
+    );
+    cx.simulate_input("ops");
+    cx.simulate_keystrokes("enter");
+    h.settle(cx);
+    assert_eq!(h.store().workspace(two).unwrap().name, "ops");
+}
+
+/// Upstream's `SidebarRowIndentTests` for #954: the flat and plain flagged lists start the selection pill at the row's
+/// edge, the row icon eight points inside it, while the tree keeps the pill's inset.
+#[gpui_kit::test]
+fn the_flat_flagged_lists_keep_the_row_icon_inside_a_pill_from_the_row_edge(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let srv = h.id_of("srv", cx);
+    let tree_row = row_bounds(&h, srv, cx);
+    let tree_pill = bounds(cx, "selection-pill");
+    assert!(
+        near(tree_pill.left(), tree_row.left() + px(look::PILL_INSET_X)),
+        "the tree keeps its inset"
+    );
+    h.store_mut().set_flag(true, srv);
+    h.store_mut().set_sidebar_mode(SidebarMode::Flagged);
+    for layout in [FlaggedViewLayout::Flat, FlaggedViewLayout::Plain] {
+        h.state
+            .core
+            .update_settings(|settings| settings.flagged_view_layout = Some(layout.raw().to_owned()));
+        h.settle(cx);
+        let row = row_bounds(&h, srv, cx);
+        let pill = bounds(cx, "selection-pill");
+        let icon = bounds(cx, "session-icon");
+        assert!(
+            near(pill.left(), row.left()),
+            "{layout:?}: the pill starts at the edge: {pill:?} in {row:?}"
+        );
+        assert!(
+            near(icon.left(), pill.left() + px(8.)),
+            "{layout:?}: the icon {icon:?} in {pill:?}"
+        );
+        assert!(pill.right() >= icon.right(), "{layout:?}: the icon inside the pill");
+    }
 }
 
 // MARK: - drags

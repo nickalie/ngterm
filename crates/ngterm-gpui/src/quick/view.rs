@@ -253,6 +253,7 @@ impl QuickView {
     /// it dismisses a panel the user summoned. A window the panel is closing reports nothing: its keyboard is the next
     /// window's (a reopen) or nobody's (a hide), which the panel settled as it closed it.
     fn activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::input_source::request_refresh(cx);
         if self.links.closing.get() {
             self.holds_key = false;
             return;

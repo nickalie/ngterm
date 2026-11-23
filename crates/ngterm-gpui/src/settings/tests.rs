@@ -795,7 +795,7 @@ fn the_keyboard_layout_lock_picker_offers_the_layouts_and_a_saved_unavailable_on
     let row = &sections[0].items[0];
     assert_eq!(
         (row.id.as_str(), row.title.as_str(), row.enabled),
-        ("settings-terminal-input-source", "Lock in terminals", true)
+        ("settings-terminal-input-source", "Lock in ngterm", true)
     );
     assert_eq!(sections[0].items.len(), 1, "no reason shown");
     let Control::Picker(picker) = &row.control else {

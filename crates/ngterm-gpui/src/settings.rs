@@ -174,7 +174,7 @@ pub struct Snapshot {
     /// The active session's focused directory, where a directory chooser starts when no directory is set yet
     /// (upstream's `DirectoryPanelDefaults.url(paths:…, activeSessionCwd)`).
     pub session_cwd: Option<String>,
-    /// The keyboard layouts the "Lock in terminals" picker offers, or why it cannot work here
+    /// The keyboard layouts the "Lock in ngterm" picker offers, or why it cannot work here
     /// (`crate::input_source`).
     pub layouts: crate::input_source::Layouts,
     /// The system asks for reduced transparency (`crate::reduce_transparency`): the Window section's hint names it.

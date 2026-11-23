@@ -78,25 +78,6 @@ pub(super) fn window_of(key: u64) -> Option<AnyWindowHandle> {
     })
 }
 
-/// Whether a terminal holds the keyboard of an active ngterm window: an owner view (a main, split, scratch, overlay or
-/// quick terminal) is focused in the window it painted in last and that window is active. A web overlay, a text field,
-/// another application or no ngterm window holding the keyboard is no terminal holding it. Reads the windows, so it
-/// runs outside any window's update.
-pub(crate) fn terminal_holds_keyboard(cx: &mut App) -> bool {
-    let owners: Vec<(FocusHandle, AnyWindowHandle)> = OWNERS.with_borrow(|owners| {
-        owners
-            .iter()
-            .filter(|owner| owner.shared.strong_count() > 0 && owner.view.upgrade().is_some())
-            .filter_map(|owner| Some((owner.focus.clone(), owner.window?)))
-            .collect()
-    });
-    owners.into_iter().any(|(focus, handle)| {
-        handle
-            .update(cx, |_, window, _| window.is_window_active() && focus.is_focused(window))
-            .unwrap_or(false)
-    })
-}
-
 /// The owner views of every other live terminal than `key`.
 fn other_views(key: u64) -> Vec<WeakEntity<TerminalView>> {
     OWNERS.with_borrow(|owners| {
@@ -363,7 +344,6 @@ impl TerminalView {
             if !focused {
                 self.drop_dead_key();
             }
-            crate::input_source::request_refresh(cx);
             if focused {
                 window.invalidate_character_coordinates();
             }

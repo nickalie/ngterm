@@ -119,6 +119,25 @@ fn a_closed_window_re_evaluates_while_another_stays(cx: &mut TestAppContext) {
     assert_eq!(system.borrow().selected, [US, RU], "no terminal holds the keyboard now");
 }
 
+/// Upstream's `appFocused` (#925): the lock holds while an ngterm window is active, whatever has its keyboard (nothing,
+/// a field such as the palette's or a rename's), and not once no ngterm window is active.
+#[gpui_kit::test]
+fn an_active_window_holds_the_lock_whatever_has_its_keyboard(cx: &mut TestAppContext) {
+    let held = |cx: &mut gpui_kit::VisualTestContext| cx.cx.update(keyboard_held);
+    let (_, cx) = cx.add_window_view(|_, _| Blank);
+    assert!(!held(cx), "an inactive window holds nothing");
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert!(held(cx), "an active window holds it with nothing focused");
+    let field = cx.update(|_, cx| cx.focus_handle());
+    cx.update(|window, cx| window.focus(&field, cx));
+    cx.run_until_parked();
+    assert!(held(cx), "a field inside the window keeps it");
+    cx.deactivate_window();
+    cx.run_until_parked();
+    assert!(!held(cx), "another application's window releases it");
+}
+
 #[gpui_kit::test]
 fn refresh_requests_coalesce_into_one_turn(cx: &mut TestAppContext) {
     let system = installed(cx, US);

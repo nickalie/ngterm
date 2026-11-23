@@ -58,6 +58,28 @@ void ngterm_network_start(void (*report)(int)) {
                 report(2);
               }];
 }
+// A key nonactivating panel (the quick terminal) leaves the application
+// inactive while it takes the keyboard over another application.
+bool ngterm_app_active(void) {
+  NSWindow *key = NSApp.keyWindow;
+  return NSApp.isActive ||
+         (key && (key.styleMask & NSWindowStyleMaskNonactivatingPanel));
+}
+void ngterm_app_activation_start(void (*changed)(void)) {
+  for (NSNotificationName name in @[
+         NSApplicationDidBecomeActiveNotification,
+         NSApplicationDidResignActiveNotification
+       ]) {
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *note) {
+                  changed();
+                }];
+  }
+}
+
 void ngterm_accessibility_start(void (*changed)(bool, bool)) {
   changed(ngterm_reduce_transparency(), ngterm_reduce_motion());
   [NSWorkspace.sharedWorkspace.notificationCenter
