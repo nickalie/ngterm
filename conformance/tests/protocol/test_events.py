@@ -1,5 +1,9 @@
 """`events.read`: the cursor contract and the core lifecycle events."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+
 import pytest
 from agterm_conformance.match import (
     ANY,
@@ -11,6 +15,7 @@ from agterm_conformance.match import (
     find_session,
     window_ids,
 )
+from agterm_conformance.wait import Cursor
 
 # The ring keeps this many events; a cursor further behind has expired.
 RING_CAPACITY = 4096
@@ -189,3 +194,48 @@ def test_local_rows_and_events_omit_the_remote_session_id(ctl):
         assert "remoteSessionID" not in event["payload"]
     finally:
         assert_ok(ctl.request("session.close", sid))
+
+
+# Idle `events` followers, each on its own connection, polling as `ngtermctl events` does.
+FOLLOWERS = 20
+FOLLOWER_POLL_SECONDS = 0.25
+
+
+def _windows(ctl):
+    return {window["id"]: window for window in assert_ok(ctl.request("window.list"))["windows"]}
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers(
+    "events.read", "session.new", "session.rename", "window.rename", "window.close", "window.delete", "window.list"
+)
+def test_tree_and_window_list_show_each_change_at_once_while_followers_poll(ctl):
+    """A follower's poll skips the settle and the windows' sync (#955); the change a command makes still reads back in
+    the very next `tree` and `window.list`."""
+    stop = threading.Event()
+
+    def follow():
+        cursor = ctl.events_baseline()
+        while not stop.is_set():
+            batch = _batch(_read(ctl, cursor))
+            cursor = Cursor(cursor.run, int(batch["next"]))
+            stop.wait(FOLLOWER_POLL_SECONDS)
+
+    with ThreadPoolExecutor(FOLLOWERS) as pool:
+        followers = [pool.submit(copy_context().run, follow) for _ in range(FOLLOWERS)]
+        try:
+            wid = assert_ok(ctl.request("window.new"))["id"]
+            sid = assert_ok(ctl.request("session.new", window=wid))["id"]
+            assert_ok(ctl.request("window.rename", wid, name="followed window"))
+            assert _windows(ctl)[wid]["name"] == "followed window"
+            assert_ok(ctl.request("session.rename", sid, name="followed session"))
+            assert find_session(ctl.request("tree", window=wid), sid)["name"] == "followed session"
+            assert_ok(ctl.request("window.close", wid))
+            assert _windows(ctl)[wid]["open"] is False
+            assert_ok(ctl.request("window.delete", wid))
+            assert wid not in _windows(ctl)
+            assert all(not follower.done() for follower in followers), "a follower's poll failed"
+        finally:
+            stop.set()
+        for follower in followers:
+            follower.result()
