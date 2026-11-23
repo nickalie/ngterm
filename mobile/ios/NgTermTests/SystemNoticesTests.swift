@@ -194,19 +194,19 @@ internal struct SystemNoticesTests {
         }
     }
 
-    @Test("a kind turned off through the system's list leaves none of its notices there")
-    internal func withdrawKindsFromTheSystemList() async {
-        let notices = SystemNotices()
-        var done = ask("system-done", actions: [])
+    @Test("a notice withdrawn by its id leaves the delivered list")
+    internal func withdrawByIdLeavesTheList() async throws {
+        let presented = PresentedNotices()
+        defer { presented.restore() }
+        let notices = SystemNotices(delivered: presented)
+        var done = ask("id-done", actions: [])
         done.kind = .done
-        notices.post(done)
-        await notices.delivered()
-        notices.withdraw(kinds: [.done])
-        await notices.delivered()
-        let center = UNUserNotificationCenter.current()
-        #expect(await !center.deliveredNotifications().contains { $0.request.identifier == done.id })
-        notices.withdraw([done.id])
-        await notices.delivered()
+        try await Self.withPosted([done], on: notices) {
+            _ = try await presented.presented(done.id)
+            notices.withdraw([done.id])
+            await notices.delivered()
+            #expect(presented.requests().isEmpty)
+        }
     }
 
     @Test("a notice posted again right after its kind is turned off keeps its buttons through later changes")

@@ -29,7 +29,7 @@ public final class SystemNotices: NoticeCenter {
         self.init(delivered: SystemDeliveredNotices())
     }
 
-    /// The system's notifications, with `delivered` as the list a switch turned off searches by kind.
+    /// The system's notifications, with `delivered` as the list that a withdrawal searches by kind and removes from.
     public init(delivered: any DeliveredNotices) {
         deliveredList = delivered
     }
@@ -103,17 +103,6 @@ public final class SystemNotices: NoticeCenter {
         .map(\.identifier)
     }
 
-    // takes the notices `ids` down and leaves the categories `wanted`
-    private static func remove(
-        _ ids: [String],
-        from center: UNUserNotificationCenter,
-        keeping wanted: Set<UNNotificationCategory>
-    ) {
-        center.removePendingNotificationRequests(withIdentifiers: ids)
-        center.removeDeliveredNotifications(withIdentifiers: ids)
-        center.setNotificationCategories(wanted)
-    }
-
     /// Posts `notice`, replacing one with its id.
     public func post(_ notice: Notice) {
         let content = Self.content(of: notice)
@@ -145,7 +134,7 @@ public final class SystemNotices: NoticeCenter {
         forget(ids)
         let wanted = Set(categories.values)
         enqueue { center in
-            Self.remove(ids, from: center, keeping: wanted)
+            self.remove(ids, from: center, keeping: wanted)
         }
     }
 
@@ -159,9 +148,7 @@ public final class SystemNotices: NoticeCenter {
         enqueue { center in
             let ids = Self.ids(of: await self.deliveredList.requests(), ofKinds: kinds)
             self.forget(ids, unlessChangedSince: known)
-            center.removePendingNotificationRequests(withIdentifiers: ids)
-            self.deliveredList.remove(ids)
-            center.setNotificationCategories(Set(self.categories.values))
+            self.remove(ids, from: center, keeping: Set(self.categories.values))
         }
     }
 
@@ -187,6 +174,17 @@ public final class SystemNotices: NoticeCenter {
     /// Asks the user, once, whether the app may notify: alerts, sounds and the badge.
     public func requestPermission() async -> Bool {
         (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+    }
+
+    // takes the notices `ids` down and leaves the categories `wanted`
+    private func remove(
+        _ ids: [String],
+        from center: UNUserNotificationCenter,
+        keeping wanted: Set<UNNotificationCategory>
+    ) {
+        center.removePendingNotificationRequests(withIdentifiers: ids)
+        deliveredList.remove(ids)
+        center.setNotificationCategories(wanted)
     }
 
     // drops the categories of the notices `ids`

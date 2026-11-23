@@ -1,7 +1,7 @@
 import UserNotifications
 
-/// The notices the system shows as delivered, which a switch turned off searches by kind (``SystemNotices``): the
-/// system's list, or a test's, as a test app's own notices need not reach the system's list.
+/// The notices the system shows as delivered, which ``SystemNotices`` searches by kind and takes withdrawn notices out
+/// of: the system's list, or a test's, as a test app's own notices need not reach the system's list.
 @preconcurrency
 @MainActor
 public protocol DeliveredNotices: AnyObject {
