@@ -11,6 +11,7 @@ public struct StatusGlyph: View {
     public var body: some View {
         Image(systemName: shape.symbolName)
             .font(Typography.statusWord)
+            .fontWeight(shape.isStroke ? .heavy : nil)
             .imageScale(.small)
             .rowForeground(color)
             .accessibilityHidden(true)

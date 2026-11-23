@@ -148,13 +148,15 @@ class ContrastTest {
         assertEquals(StatusShape.Seal, StatusShape.fromWire("seal"))
         assertEquals(StatusShape.Bolt, StatusShape.fromWire("bolt"))
         assertEquals(StatusShape.Bell, StatusShape.fromWire("Bell"))
+        // the shape upstream added in v0.42.0
+        assertEquals(StatusShape.Checkmark, StatusShape.fromWire("checkmark"))
     }
 
     @Test
     fun everyWireShapeHasItsOwnGlyph() {
-        val names = "circle square triangle triangle-down play diamond capsule seal star bolt bell"
+        val names = "circle square triangle triangle-down play diamond capsule seal star bolt bell checkmark"
         val wire = names.split(" ").map { StatusShape.fromWire(it) }
-        assertEquals("each of upstream's eleven shapes reads as its own", wire.size, wire.toSet().size)
+        assertEquals("each of upstream's twelve shapes reads as its own", wire.size, wire.toSet().size)
         assertEquals("and draws its own drawable", wire.size, wire.map { it.drawable }.toSet().size)
     }
 
