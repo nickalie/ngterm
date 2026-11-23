@@ -37,11 +37,7 @@ pub(super) struct SocketFileIdentity {
 pub(super) fn bind(endpoint: &Endpoint) -> io::Result<Listener> {
     let socket = endpoint.socket_path();
     check_socket_path_length(socket)?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(DIRECTORY_MODE)
-        .create(endpoint.directory())?;
-    make_directory_private(endpoint.directory())?;
+    prepare_directory(endpoint)?;
     let lock = lock_namespace(endpoint)?;
     prepare_socket_path(socket)?;
     let inner = ListenerOptions::new()
@@ -153,6 +149,14 @@ fn check_socket_path_length(socket: &Path) -> io::Result<()> {
             socket.display()
         ),
     ))
+}
+
+pub(super) fn prepare_directory(endpoint: &Endpoint) -> io::Result<()> {
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(DIRECTORY_MODE)
+        .create(endpoint.directory())?;
+    make_directory_private(endpoint.directory())
 }
 
 /// Makes sure only this user reaches the namespace directory. Its name is derived, so another user could have made

@@ -570,7 +570,7 @@ impl Starts {
         }
         if !self.job_tried && starter.launchd_supported() {
             self.job_tried = true;
-            self.job = submit_job(starter, &options.executable, endpoint.directory(), deadline);
+            self.job = submit_job(starter, &options.executable, endpoint, deadline);
             if self.job.is_some() {
                 return Ok(());
             }
@@ -590,10 +590,16 @@ impl Starts {
     }
 }
 
-/// Loads a job that starts the server of `directory`; its label when it loaded or may have loaded. `launchctl` gets
-/// [`job::LAUNCHCTL_BUDGET`], cut to the time left before `deadline`.
-fn submit_job(starter: &dyn Starter, executable: &Path, directory: &Path, deadline: Instant) -> Option<String> {
+/// Loads a job that starts the server of `endpoint`; its label when it loaded or may have loaded. The job's plist goes
+/// in the namespace directory, made here as the server makes it. `launchctl` gets [`job::LAUNCHCTL_BUDGET`], cut to
+/// the time left before `deadline`.
+fn submit_job(starter: &dyn Starter, executable: &Path, endpoint: &Endpoint, deadline: Instant) -> Option<String> {
+    let directory = endpoint.directory();
     let job = job::Job::new(executable, directory, job::current_umask());
+    if let Err(error) = endpoint.prepare_directory() {
+        tracing::error!(label = %job.label, %error, "no namespace directory for the live session server's launchd job; spawning the server");
+        return None;
+    }
     let budget = deadline.min(Instant::now() + job::LAUNCHCTL_BUDGET);
     match starter.bootstrap(&job, directory, budget) {
         job::Outcome::Succeeded => Some(job.label),

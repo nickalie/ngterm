@@ -42,8 +42,12 @@ fn pipe_path(endpoint: &Endpoint) -> String {
     format!(r"\\.\pipe\{}", endpoint.pipe_name())
 }
 
+pub(super) fn prepare_directory(endpoint: &Endpoint) -> io::Result<()> {
+    fs::create_dir_all(endpoint.directory())
+}
+
 pub(super) fn bind(endpoint: &Endpoint) -> io::Result<Listener> {
-    fs::create_dir_all(endpoint.directory())?;
+    prepare_directory(endpoint)?;
     let inner = pipe_options(endpoint)?
         .create_duplex::<Bytes>()
         .map_err(|error| name_taken_error(endpoint, error))?;

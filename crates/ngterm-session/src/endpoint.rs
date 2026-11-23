@@ -109,6 +109,16 @@ impl Endpoint {
         sys::bind(self)
     }
 
+    /// Creates the namespace directory as [`Endpoint::bind`] does, for a file a client puts there before any server
+    /// runs.
+    ///
+    /// # Errors
+    ///
+    /// As [`Endpoint::bind`]'s for the directory.
+    pub fn prepare_directory(&self) -> io::Result<()> {
+        sys::prepare_directory(self)
+    }
+
     /// Connects to the server, waiting while every pipe instance is busy.
     ///
     /// # Errors

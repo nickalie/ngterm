@@ -12,6 +12,8 @@ struct Fake {
     launchd: bool,
     outcome: job::Outcome,
     jobs: RefCell<Vec<(job::Job, PathBuf, Instant)>>,
+    /// Whether the plist's directory was there at each bootstrap.
+    directories: RefCell<Vec<bool>>,
     spawns: RefCell<Vec<PathBuf>>,
 }
 
@@ -21,6 +23,7 @@ impl Fake {
             launchd,
             outcome,
             jobs: RefCell::default(),
+            directories: RefCell::default(),
             spawns: RefCell::default(),
         }
     }
@@ -35,6 +38,7 @@ impl Starter for Fake {
         self.jobs
             .borrow_mut()
             .push((job.clone(), directory.to_path_buf(), deadline));
+        self.directories.borrow_mut().push(directory.is_dir());
         self.outcome.clone()
     }
 
@@ -169,4 +173,22 @@ fn the_server_of_the_loaded_job_counts_as_started_here() {
     assert_eq!(job_started(Some("a.1"), &welcome(Some("a.2"))), None);
     assert_eq!(job_started(Some("a.1"), &welcome(None)), None);
     assert_eq!(job_started(None, &welcome(None)), None);
+}
+
+#[test]
+fn the_job_finds_the_namespace_directory_made_before_any_server() {
+    let namespace = Namespace::new();
+    assert!(!namespace.endpoint.directory().exists());
+    let starter = Fake::new(true, job::Outcome::Failed("x".to_owned()));
+    let _ = namespace.start(&starter, Duration::from_secs(10));
+    assert_eq!(*starter.directories.borrow(), [true]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(namespace.endpoint.directory())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+    }
 }
