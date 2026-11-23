@@ -7,7 +7,9 @@
 //! first (a pane just created reads as backed before its daemon exists), every replay refusal is decided before
 //! anything is ended, the kill must be confirmed, the old program gets a second to act on the hangup and is then
 //! killed, and only once it is gone does the new terminal start, so it cannot meet a held port or lock. The pane's exit
-//! is claimed from the kill on, so the dying client cannot close the pane the restart rebuilds.
+//! is claimed from the kill on, so the dying client cannot close the pane the restart rebuilds. Once the new leader is
+//! listed, the restart publishes it as a respawn (`Core::publish_respawn`), so each viewer whose attach the kill ended
+//! attaches again; a restart that observes no new leader publishes nothing.
 
 use std::collections::HashSet;
 use std::path::Path;

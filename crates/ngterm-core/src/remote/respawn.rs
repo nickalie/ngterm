@@ -3,7 +3,9 @@
 //! On the origin, a parent whose exiting shell restarts while it has companions (`close_primary_pane`'s respawn)
 //! keeps its pane identity, so its live-session daemon comes back under the same name. Once a different live leader
 //! runs under that name, the origin publishes `pane.respawn` with the pane's new count, and every snapshot carries
-//! all of the session's counts under this app run's epoch.
+//! all of the session's counts under this app run's epoch. `session.restart` publishes its new shell the same way
+//! (`Core::publish_respawn`) once it observes the new leader (`commands::restart_live`); upstream's
+//! `restartSessionPane` publishes nothing.
 //!
 //! On a viewer, [`RemoteRespawnBook`] joins what an origin reports with each local pane's held exit: a clean exit the
 //! origin has respawned since the pane's baseline is attached again, attach-only; one with no respawn keeps its exit

@@ -1790,10 +1790,14 @@ fn an_installed_replacement_s_exit_closes_the_pane_before_the_first_probe() {
     assert!(live.fixture.store().session(session).is_none());
 }
 
+/// A restart that observes no new leader publishes no respawn: a viewer attached again would find no shell.
 #[test]
 fn a_dropped_restart_replacement_closes_the_ended_pane() {
+    use super::remote::{OLDER_KINDS, subscribe_listing};
+
     let mut live = live();
     let session = live.session;
+    let (_, viewer) = subscribe_listing(live.core(), session, "mirror", &OLDER_KINDS);
     let dispatched = begin_restart(&mut live);
     let response = drive(live.core(), dispatched, |core, _| {
         for replacement in core.take_pane_replacements() {
@@ -1804,8 +1808,10 @@ fn a_dropped_restart_replacement_closes_the_ended_pane() {
         response,
         failure("the old shell ended (pid 100) and no new one was observed")
     );
+    live.core().commit();
     assert!(live.fixture.store().session(session).is_none());
     assert!(live.core().live.claimed_exits.is_empty());
+    assert!(viewer.frames("pane.respawn").is_empty(), "{:?}", viewer.kinds());
 }
 
 #[test]
