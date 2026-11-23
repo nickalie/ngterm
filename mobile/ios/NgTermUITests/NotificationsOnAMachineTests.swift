@@ -59,6 +59,14 @@ internal final class NotificationsOnAMachineTests: XCTestCase {
         }
     }
 
+    // every session's title has the same identifier, so only its label tells the sessions apart
+    @MainActor
+    private static func title(of name: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "session-title", name))
+            .firstMatch
+    }
+
     @MainActor
     internal func testSwitchesTurnedOffTakeTheirNotificationsDownAndPostNothing() throws {
         let machine = try E2EMachine.fromEnvironment()
@@ -305,7 +313,7 @@ internal final class NotificationsOnAMachineTests: XCTestCase {
         } else if allowing {
             XCTFail("no question about notifying at the first attach")
         }
-        FakeApp.expect(app.descendants(matching: .any)["session-title"].firstMatch, "the session view of \(name)")
+        FakeApp.expect(Self.title(of: name, in: app), "the session view of \(name)")
         let terminal = app.textViews.firstMatch
         ScreenRead.expect("the terminal of \(name) never showed a prompt", lasting: Self.wait) {
             ScreenRead.shows(terminal) { snapshot in
@@ -331,7 +339,7 @@ internal final class NotificationsOnAMachineTests: XCTestCase {
             let row = app.descendants(matching: .any)["session-\(Self.other)"].firstMatch
             FakeApp.expect(row, "the other session's row")
             row.tap()
-            FakeApp.expect(app.descendants(matching: .any)["session-title"].firstMatch, "the other session")
+            FakeApp.expect(Self.title(of: Self.other, in: app), "the other session's title")
             return
         }
         let add = app.buttons["add-machine"]
@@ -357,6 +365,7 @@ internal final class NotificationsOnAMachineTests: XCTestCase {
             takeControl.tap()
             FakeApp.expectGone(takeControl, "Take control")
         }
+        FakeApp.expect(Self.title(of: Self.session, in: app), "the session's title")
         FakeApp.expect(app.textViews.firstMatch, "the session's terminal")
     }
 
