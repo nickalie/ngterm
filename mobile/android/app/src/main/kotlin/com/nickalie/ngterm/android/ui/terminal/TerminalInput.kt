@@ -44,8 +44,8 @@ private inline fun <T> guarded(call: () -> T): T? =
  */
 @Stable
 class TerminalInput internal constructor(
-    private val state: TerminalState,
-    private val scope: CoroutineScope,
+    internal val state: TerminalState,
+    internal val scope: CoroutineScope,
 ) {
     /** The font the view draws with; the cells are its. */
     internal var font: TerminalFont? = null
@@ -73,26 +73,6 @@ class TerminalInput internal constructor(
 
     /** Whether the program takes pointer events: a click and a drag are then the program's. */
     val tracking: Boolean get() = state.pane.mouseTracking()
-
-    /**
-     * A finger's tap at [position]: on a hyperlinked cell whose link names a session its machine lists, that session
-     * goes to [sessionLink]; any other tap does [otherwise].
-     */
-    fun tap(
-        position: Offset,
-        otherwise: () -> Unit,
-    ) {
-        val open = sessionLink
-        val cell = cell(position)
-        if (open == null || cell == null || !state.screen.linked(cell.y.toInt(), cell.x.toInt())) {
-            otherwise()
-            return
-        }
-        scope.launch {
-            val target = state.sessionLink(cell)
-            if (target != null) open(target) else otherwise()
-        }
-    }
 
     /** The cell under [position] (view pixels), kept inside the grid; `null` before the view has a grid. */
     fun cell(position: Offset): CellPoint? {
@@ -379,4 +359,24 @@ internal fun TerminalKeyboard.endsCompositionsFor(
     input.endComposition = { endComposition(state) }
     selection.endHeldComposition = { endHeldComposition(state) }
     selection.endComposition = { endComposition(state) }
+}
+
+/**
+ * A finger's tap at [position]: on a hyperlinked cell whose link names a session its machine lists, that session
+ * goes to [sessionLink]; any other tap does [otherwise].
+ */
+internal fun TerminalInput.tap(
+    position: Offset,
+    otherwise: () -> Unit,
+) {
+    val open = sessionLink
+    val cell = cell(position)
+    if (open == null || cell == null || !state.screen.linked(cell.y.toInt(), cell.x.toInt())) {
+        otherwise()
+        return
+    }
+    scope.launch {
+        val target = state.sessionLink(cell)
+        if (target != null) open(target) else otherwise()
+    }
 }
