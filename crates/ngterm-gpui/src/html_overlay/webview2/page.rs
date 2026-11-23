@@ -178,9 +178,10 @@ impl PageState {
         url.fragment().is_some() && shown[..url::Position::AfterQuery] == url[..url::Position::AfterQuery]
     }
 
-    /// Whether `url` moves to another place in the shown document; the shown address itself is a reload.
-    fn moves_in_document(&self, url: &Url) -> bool {
-        self.same_document(url) && self.engine.uri.as_deref().and_then(app_url).as_ref() != Some(url)
+    /// Whether a navigation to `url` only moves in the shown document: a click on the shown address with a fragment
+    /// scrolls, but any other navigation to the shown address is a reload.
+    fn moves_in_document(&self, url: &Url, user: bool) -> bool {
+        self.same_document(url) && (user || self.engine.uri.as_deref().and_then(app_url).as_ref() != Some(url))
     }
 }
 
@@ -875,7 +876,10 @@ impl Page {
             return;
         };
         let url = app_url(&navigation.uri);
-        if url.as_ref().is_some_and(|url| state.moves_in_document(url)) {
+        if url
+            .as_ref()
+            .is_some_and(|url| state.moves_in_document(url, navigation.user))
+        {
             return;
         }
         state.link_read.take_if(|held| *held < navigation.id);

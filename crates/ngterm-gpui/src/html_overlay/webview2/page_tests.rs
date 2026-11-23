@@ -1054,6 +1054,31 @@ fn a_replica_link_pages_anchor_keeps_a_held_link(cx: &mut TestAppContext) {
     assert_eq!(driven.page.take_link_document(&path).as_deref(), Some("<p>guide</p>"));
 }
 
+/// A click on the shown anchor only scrolls to it again, so it keeps a held link.
+#[gpui_kit::test]
+fn a_replica_link_pages_click_on_the_shown_anchor_keeps_a_held_link(cx: &mut TestAppContext) {
+    let (mut driven, source, readme) = realized_replica_link_page(cx);
+    let anchor = format!("{readme}#usage");
+    driven.report(Report::Source(anchor.clone()), cx);
+    let path = "/nowhere/docs/sub/guide.md".to_owned();
+    let guide = scheme::replica_link_address(source.id, &path).unwrap();
+    let follow = navigation(&guide, true, true, false, 2);
+    assert!(!driven.page.allows(&follow), "held until the origin read the link");
+    driven.report(
+        Report::Navigation {
+            navigation: follow,
+            allowed: false,
+        },
+        cx,
+    );
+    assert!(driven.page.allows(&navigation(&anchor, true, true, false, 3)));
+    driven
+        .page
+        .link_read(2, path.clone(), &guide, Ok("<p>guide</p>".to_owned()));
+    assert_eq!(driven.view.take(), [Call::Load(guide.clone())]);
+    assert_eq!(driven.page.take_link_document(&path).as_deref(), Some("<p>guide</p>"));
+}
+
 /// A reload of a shown address with a fragment loads the document again, so it replaces a held link.
 #[gpui_kit::test]
 fn a_replica_link_pages_reload_at_an_anchor_replaces_a_held_link(cx: &mut TestAppContext) {
