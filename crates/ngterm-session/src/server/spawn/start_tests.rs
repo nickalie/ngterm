@@ -66,8 +66,13 @@ impl Namespace {
     }
 
     fn start(&self, starter: &Fake, timeout: Duration) -> Result<Connected, StartError> {
+        self.start_with(starter, timeout, true)
+    }
+
+    fn start_with(&self, starter: &Fake, timeout: Duration, launchd: bool) -> Result<Connected, StartError> {
         let options = StartOptions {
             timeout,
+            launchd,
             ..StartOptions::new("/opt/ngterm/bin/ngterm-session")
         };
         let hello = Hello {
@@ -191,4 +196,16 @@ fn the_job_finds_the_namespace_directory_made_before_any_server() {
             .mode();
         assert_eq!(mode & 0o077, 0, "{mode:o}");
     }
+}
+
+#[test]
+fn a_caller_that_keeps_the_spawn_loads_no_job() {
+    let namespace = Namespace::new();
+    let starter = Fake::new(true, job::Outcome::Succeeded);
+    let error = namespace
+        .start_with(&starter, Duration::from_secs(10), false)
+        .unwrap_err();
+    assert!(matches!(error, StartError::Spawn { .. }), "{error}");
+    assert!(starter.jobs.borrow().is_empty());
+    assert_eq!(*starter.spawns.borrow(), [namespace.endpoint.directory()]);
 }

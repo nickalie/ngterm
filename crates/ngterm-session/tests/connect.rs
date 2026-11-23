@@ -234,7 +234,8 @@ fn hello(role: Role) -> Hello {
     }
 }
 
-/// Options expecting the build `new` of `executable`, waiting `timeout` for a server.
+/// Options expecting the build `new` of `executable`, waiting `timeout` for a server it spawns, whose start checks
+/// these tests are about.
 fn expecting_new(executable: &Path, timeout: Duration) -> StartOptions {
     StartOptions {
         executable: executable.to_path_buf(),
@@ -242,6 +243,7 @@ fn expecting_new(executable: &Path, timeout: Duration) -> StartOptions {
         build: Some("new".to_owned()),
         handoff_timeout: PATIENCE,
         login: None,
+        launchd: false,
     }
 }
 
@@ -612,6 +614,7 @@ fn a_server_that_exits_before_it_is_ready_fails_the_start_or_is_started_again() 
         build: None,
         handoff_timeout: PATIENCE,
         login: None,
+        launchd: false,
     };
     let failing = script_executable(root.path(), "exit 1")?;
     let found = connect_or_start(&endpoint, &hello(Role::Api), &options(failing, PATIENCE));
@@ -662,6 +665,7 @@ fn a_server_started_here_that_is_not_detached_is_stopped() -> TestResult {
         build: None,
         handoff_timeout: PATIENCE,
         login: None,
+        launchd: false,
     };
     let starting = {
         let endpoint = endpoint.clone();

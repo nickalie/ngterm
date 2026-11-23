@@ -120,6 +120,9 @@ pub struct StartOptions {
     /// The client's login session ([`crate::login::current`]): a server of an earlier one is retired when it holds no
     /// session.
     pub login: Option<i64>,
+    /// Whether a server may start as a launchd job where this OS starts one ([`job::supported`]); `false` keeps the
+    /// spawn.
+    pub launchd: bool,
 }
 
 impl StartOptions {
@@ -134,6 +137,7 @@ impl StartOptions {
             timeout: READY_TIMEOUT,
             handoff_timeout: HANDOFF_TIMEOUT,
             login: crate::login::current(),
+            launchd: true,
         }
     }
 }
@@ -568,7 +572,7 @@ impl Starts {
         if self.job.is_some() || !needs_start(endpoint, self.child.as_mut())? {
             return Ok(());
         }
-        if !self.job_tried && starter.launchd_supported() {
+        if !self.job_tried && options.launchd && starter.launchd_supported() {
             self.job_tried = true;
             self.job = submit_job(starter, &options.executable, endpoint, deadline);
             if self.job.is_some() {

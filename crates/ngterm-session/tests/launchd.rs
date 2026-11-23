@@ -120,7 +120,7 @@ fn the_server_starts_as_a_launchd_job_and_removes_it_when_it_stops() -> TestResu
     assert_eq!(started.path, SpawnPath::LaunchdJob);
     let label = connected.welcome.job.clone().expect("the welcome names the job");
     assert!(job::is_own(&label, namespace.directory()), "{label}");
-    assert_eq!(namespace.jobs()?, [label.clone()]);
+    assert_eq!(namespace.jobs()?, std::slice::from_ref(&label));
     assert!(
         connected
             .welcome
