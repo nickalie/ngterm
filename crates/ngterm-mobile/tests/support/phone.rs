@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ngterm_mobile::{
     ChatEvent, ChatState, EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileEvent, Pane,
-    PaneEnd, PaneKey, PaneKeyAction, PaneRole, PaneSize, PeerKind, RemoteLayout, VaultError,
+    PaneEnd, PaneKey, PaneKeyAction, PaneRole, PaneSize, PeerKind, RemoteLayout, StreamState, VaultError,
 };
 
 use crate::machine::{World, account};
@@ -39,7 +39,11 @@ pub(crate) struct Seen {
     pub(crate) roles: Vec<Option<PaneRole>>,
     pub(crate) attached: usize,
     pub(crate) lost: usize,
+    /// How many times a shown pane's program exited.
+    pub(crate) exited: usize,
     pub(crate) states: Vec<MachineState>,
+    /// Every state an attached session's presentation stream took, in order.
+    pub(crate) connections: Vec<StreamState>,
     /// Every `PaneAgent`, in order: the pane, its agent and its conversation.
     pub(crate) agents: Vec<(String, Option<String>, Option<String>)>,
     /// Every chat event, in order, of every batch.
@@ -63,7 +67,9 @@ impl std::fmt::Debug for Seen {
             .field("roles", &self.roles)
             .field("attached", &self.attached)
             .field("lost", &self.lost)
+            .field("exited", &self.exited)
             .field("states", &self.states)
+            .field("connections", &self.connections)
             .field("agents", &self.agents)
             .field("chat_events", &self.chat.len())
             .field("chat_recent", &recent)
@@ -88,7 +94,12 @@ impl Seen {
                 end: PaneEnd::Lost { .. },
                 ..
             } => self.lost += 1,
+            MobileEvent::PaneEnded {
+                end: PaneEnd::Exited { .. },
+                ..
+            } => self.exited += 1,
             MobileEvent::MachineState { state, .. } => self.states.push(state),
+            MobileEvent::SessionConnection { state, .. } => self.connections.push(state),
             MobileEvent::PaneAgent {
                 pane_id,
                 agent,

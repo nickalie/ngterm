@@ -16,7 +16,9 @@
 //! socket. The phone hears the agent announced, reads its chat, follows, pages back and resumes it after a severed
 //! link, sends a prompt while the other client leads, sees an approval, and sees the agent cleared once it exits
 //! ([`chat`]). On the way the phone's lone Left arrow is held back from the agent's empty prompt, where Claude Code
-//! would move the conversation to the background, and reaches it everywhere else ([`left_arrow`]).
+//! would move the conversation to the background, and reaches it everywhere else ([`left_arrow`]). Then
+//! `ngtermctl session restart` on the machine, with a command and without one, replaces the pane's shell: the phone
+//! attaches the new shell by itself, with no detach of the session, and types into it ([`steps::restart`]).
 //!
 //! A second test puts the phone in front of a Mac running upstream agterm (`support/agterm.rs`: the conformance
 //! suite's stand-in, whose own window leads every pane it lists): the pane follows and is covered, what is typed while
@@ -75,7 +77,9 @@ use self::both::{
 use self::chat::Scene;
 use self::machine::World;
 use self::phone::{Client, MACHINE_ID, block_on, poll};
-use self::steps::{assert_isolated, create_and_read, leadership, reconnect, type_into_agterm_after_taking_control};
+use self::steps::{
+    assert_isolated, create_and_read, leadership, reconnect, restart, type_into_agterm_after_taking_control,
+};
 
 /// The `sshd` to run a machine behind; `None` is a skip, marked for the script, and a failure on CI.
 fn sshd_or_skip() -> Option<PathBuf> {
@@ -156,6 +160,7 @@ fn the_mobile_core_drives_a_real_headless_machine_over_ssh() {
     .agent_chat();
 
     drop(second);
+    restart(&world, &mut first, &session, &pane);
     block_on(first.core.end_session(MACHINE_ID.to_owned(), session.clone())).expect("end the session");
     let listed = first.list();
     assert!(

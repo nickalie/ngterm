@@ -5,12 +5,22 @@ use std::time::Duration;
 use ngterm_mobile::{MachineState, PaneRole};
 
 use crate::machine::World;
-use crate::phone::{Client, GRID, MACHINE_ID, PRINTED, block_on, enter, nanos, poll};
+use crate::phone::{Client, GRID, MACHINE_ID, PRINTED, WAIT, block_on, enter, nanos, poll};
 use crate::sshd::Proxy;
 
 /// The line typed into an agterm pane, and what it prints, which the line itself doesn't hold.
 const AGTERM_TYPED: &str = "echo typed-$((6*7))-on-agterm";
 const AGTERM_PRINTED: &str = "typed-42-on-agterm";
+
+/// The line a restart's new shell runs, and what it prints, which the line itself doesn't hold.
+const RESTARTED: &str = "printf 'restarted-%s\\n' 7";
+const RESTARTED_PRINTED: &str = "restarted-7";
+/// What the phone types into the restarted pane, and the line it reads back on the machine.
+const AFTER_RESTART: &str = "printf 'after-%s\\n' restart";
+const AFTER_RESTART_PRINTED: &str = "after-restart";
+/// The program the pane runs when it is restarted with no command, which the restart runs again.
+const REPLAYED: &str = "cat";
+const REPLAYED_ECHO: &str = "replayed-cat-line";
 
 /// How long a client listens for events a step should not have caused.
 const SETTLE: Duration = Duration::from_millis(500);
@@ -162,4 +172,109 @@ pub(crate) fn type_into_agterm_after_taking_control(phone: &mut Client, session:
     assert!(leading.type_text(AGTERM_TYPED.to_owned()).expect("type"));
     assert!(leading.key(enter()).expect("press enter"));
     phone.wait_screen(AGTERM_PRINTED);
+}
+
+/// `ngtermctl session restart` on the machine ends the shell of the shown pane and starts a new one, with `--command`
+/// and then with none (the pane's program runs again): each time the pane ends, attaches to the new shell by itself,
+/// and what the phone types runs there. The session stays attached all along.
+pub(crate) fn restart(world: &World, client: &mut Client, session: &str, pane: &str) {
+    client.drain();
+    let (lost, connections) = (client.seen.lost, client.seen.connections.len());
+
+    restart_and_follow(world, client, session, Some(RESTARTED));
+    client.wait_screen(RESTARTED_PRINTED);
+    type_after_restart(client, session, pane, AFTER_RESTART);
+    machine_reads(world, session, AFTER_RESTART_PRINTED, 1);
+
+    type_after_restart(client, session, pane, REPLAYED);
+    poll("the replayed program in the foreground", || {
+        (foreground(world, session)? == [REPLAYED]).then_some(())
+    });
+    restart_and_follow(world, client, session, None);
+    type_after_restart(client, session, pane, REPLAYED_ECHO);
+    // the terminal echoes the line, and the replayed program prints it again
+    machine_reads(world, session, REPLAYED_ECHO, 2);
+
+    client.settle(SETTLE);
+    assert_eq!(client.seen.lost, lost, "a restart lost the pane's link");
+    assert!(
+        client.seen.connections[connections..].is_empty(),
+        "a restart moved the session's stream: {:?}",
+        &client.seen.connections[connections..]
+    );
+}
+
+/// Restarts the session's left pane (`command`, or the pane's program again) and waits for the phone to see the old
+/// shell exit and to attach the new one by itself.
+fn restart_and_follow(world: &World, client: &mut Client, session: &str, command: Option<&str>) {
+    client.drain();
+    let (exited, attached) = (client.seen.exited, client.seen.attached);
+    let mut arguments = vec!["session", "restart", "--target", session, "--pane", "left"];
+    if let Some(command) = command {
+        arguments.extend(["--command", command]);
+    }
+    world
+        .headless
+        .ctl(&arguments)
+        .unwrap_or_else(|error| panic!("restart the pane with {command:?}: {error}"));
+    client.wait("the old shell's exit", |seen| seen.exited > exited);
+    client.wait("the pane attached to the new shell", |seen| seen.attached > attached);
+}
+
+/// Takes control of the pane when the machine's own attach leads it, then types `line` and Enter.
+fn type_after_restart(client: &mut Client, session: &str, pane: &str, line: &str) {
+    client.settle(SETTLE);
+    if client.seen.role != Some(PaneRole::Leader) {
+        client.take_lead(session, pane);
+    }
+    let shown = client.terminal.clone().expect("a shown pane");
+    assert!(shown.type_text(line.to_owned()).expect("type"));
+    assert!(shown.key(enter()).expect("press enter"));
+}
+
+/// The foreground program of the session's left pane, as `tree` reports it.
+fn foreground(world: &World, session: &str) -> Option<Vec<String>> {
+    let output = world.headless.ctl(&["tree", "--json"]).ok()?;
+    let tree: serde_json::Value = serde_json::from_str(&output).ok()?;
+    let mut found = None;
+    find_session(&tree["result"], session, &mut found);
+    serde_json::from_value(found?.get("foreground")?.clone()).ok()
+}
+
+/// The tree node whose `id` is `session`, anywhere under `node`.
+fn find_session<'a>(node: &'a serde_json::Value, session: &str, found: &mut Option<&'a serde_json::Value>) {
+    match node {
+        serde_json::Value::Object(map) => {
+            if map
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| id.eq_ignore_ascii_case(session))
+                && map.contains_key("surfaces")
+            {
+                *found = Some(node);
+            }
+            map.values().for_each(|child| find_session(child, session, found));
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|child| find_session(child, session, found)),
+        _ => {}
+    }
+}
+
+/// Waits until the machine's own read of the session's left pane holds `needle` on `count` lines.
+fn machine_reads(world: &World, session: &str, needle: &str, count: usize) {
+    let deadline = std::time::Instant::now() + WAIT;
+    loop {
+        let text = world
+            .headless
+            .ctl(&["session", "text", "--target", session, "--pane", "left"])
+            .unwrap_or_default();
+        if text.lines().filter(|line| line.trim_end() == needle).count() >= count {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the machine never read {needle:?} {count} times:\n{text}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
