@@ -663,6 +663,49 @@ fn config_reload_reports_for_the_owner_alone_even_with_identical_metadata() -> T
     Ok(())
 }
 
+/// A program in mode 2031 reads each report an appearance change makes before the keys the client sent after the
+/// change, as a terminal writes both into one input stream.
+#[cfg(unix)]
+#[test]
+fn a_scheme_report_reaches_the_program_before_the_keys_sent_after_the_change() -> TestResult {
+    const ROUNDS: usize = 10;
+    let dir = tempfile::tempdir()?;
+    let script = format!(
+        "stty raw -echo; printf '\\033[?2031h'; printf 'armed\\r\\n'; \
+         head -c {} | tr '\\033' 'E'; printf '\\r\\nread-all\\r\\n'; sleep 10",
+        ROUNDS * (DARK_REPORT.len() + 1)
+    );
+    let spec = support::spec(&["sh", "-c", &script]);
+    let (pane, creator) = Pane::spawn(pane_config("ordered", dir.path(), spec))?;
+    let owner = creator.subscription.id();
+    server_expects(&pane, "armed");
+    let mut expected = String::new();
+    for round in 0..ROUNDS {
+        let (scheme, report) = if round % 2 == 0 {
+            (ColorScheme::Dark, DARK_REPORT)
+        } else {
+            (ColorScheme::Light, LIGHT_REPORT)
+        };
+        pane.set_metadata(
+            owner,
+            ReplyMetadata {
+                color_scheme: Some(scheme),
+                ..metadata()
+            },
+        );
+        assert!(pane.input(owner, b"K")?);
+        expected.push('E');
+        expected.push_str(&String::from_utf8_lossy(&report[1..]));
+        expected.push('K');
+    }
+    let text: String = server_expects(&pane, "read-all")
+        .chars()
+        .filter(|ch| *ch != '\n')
+        .collect();
+    assert!(text.contains(&expected), "{expected:?} in {text:?}");
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn a_clipboard_read_goes_to_the_owner_alone_and_the_output_after_it_waits_for_the_answer() -> TestResult {

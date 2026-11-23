@@ -421,19 +421,26 @@ fn a_snapshot_stops_the_deadline_of_the_role_that_waited_for_ground() {
 }
 
 #[test]
-fn an_appearance_change_asks_the_colours_again() {
+fn an_appearance_change_is_sent_at_once_and_asks_the_colours_again() {
     let (mut relay, _) = probed(
         None,
-        vec![Answer::Dynamic {
-            which: Dynamic::Background,
-            color: Some(rgb(0, 0, 0)),
-        }],
+        vec![
+            Answer::Dynamic {
+                which: Dynamic::Background,
+                color: Some(rgb(0, 0, 0)),
+            },
+            Answer::ColorScheme(ColorScheme::Dark),
+        ],
     );
     let now = Instant::now();
     let mut fx = Effects::default();
     relay.answer(Answer::ColorScheme(ColorScheme::Light), now, &mut fx);
     assert!(String::from_utf8_lossy(&fx.stdout).contains("\x1b]11;?"));
-    assert!(fx.outgoing.is_empty(), "sent once the refresh's fence comes");
+    let sent = metadata_sent(&fx);
+    assert_eq!(sent.len(), 1, "a query typed next gets the new appearance");
+    assert_eq!(sent[0].color_scheme, Some(ColorScheme::Light));
+    assert_eq!(sent[0].background, Some(rgb(0, 0, 0)), "the colours as last answered");
+    let mut fx = Effects::default();
     relay.answer(
         Answer::Dynamic {
             which: Dynamic::Background,

@@ -56,7 +56,9 @@
 //! The colours from the answers, the 256 colours only when all came; the cell's pixels from the window size the
 //! terminal reports with the grid (`TIOCGWINSZ`, from the start), else from `CSI 16 t`; the appearance;
 //! Kitty graphics when the outer terminal answered the query and answers fences. It is sent when the probe's fence
-//! comes, again when a refresh's does, and whenever the cell size changes.
+//! comes, again when a refresh's does, and whenever the cell size changes. A new appearance is sent at once, before
+//! the keys typed after its report, so a query among them gets it (upstream's zmx passes the query to the outer
+//! terminal, which answers with its appearance of the moment).
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::VecDeque;
@@ -393,6 +395,15 @@ impl Relay {
         }
     }
 
+    /// The new appearance sent at once, with the other facts as last sent: a query the program makes from here on gets
+    /// it, while the colours of the new appearance are asked for again.
+    fn send_scheme(&mut self, fx: &mut Effects) {
+        if self.sent.color_scheme != self.draft.scheme {
+            self.sent.color_scheme = self.draft.scheme;
+            fx.outgoing.push(Outgoing::Metadata(self.sent.clone()));
+        }
+    }
+
     /// Program output excludes clipboard operations resolved through delegation. Snapshots replay recovery values.
     pub fn delegated_output(&mut self, bytes: &[u8], fx: &mut Effects) {
         let mut filtered = Vec::new();
@@ -617,7 +628,11 @@ impl Relay {
             Answer::Bridge(envelope) => self.bridge_answer(envelope, fx),
             Answer::ColorScheme(scheme) => {
                 self.draft.scheme = Some(scheme);
-                if !self.probing() && !self.fences.iter().any(|fence| matches!(fence, Fence::Refresh)) {
+                if self.probing() {
+                    return;
+                }
+                self.send_scheme(fx);
+                if !self.fences.iter().any(|fence| matches!(fence, Fence::Refresh)) {
                     self.refresh(now, fx);
                 }
             }

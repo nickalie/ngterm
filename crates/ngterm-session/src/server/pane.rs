@@ -147,6 +147,8 @@ const END_LIMIT: Duration = EXIT_GRACE.saturating_add(REAP_HOLD_LIMIT);
 const _: () = assert!(KILL_LIMIT.as_millis() <= TERMINATION_LIMIT.as_millis());
 /// How long the replies' helper thread sleeps with nothing to do (it is woken for whatever it does).
 const HELPER_IDLE: Duration = Duration::from_secs(60);
+/// How often a client's input waiting for the replies before it looks whether a handoff froze the helper.
+const REPLIES_WRITTEN_POLL: Duration = Duration::from_millis(20);
 
 /// The pane ids of this process, for the PTY threads' names and to tell a session from a later one of its name.
 static NEXT_PANE: AtomicU64 = AtomicU64::new(1);
@@ -343,6 +345,8 @@ struct Hold {
     frozen: bool,
     /// The replies' helper is writing a batch it took: a freeze waits for it, so no reply it took lands behind the cut.
     helper_busy: bool,
+    /// The batches the replies' helper wrote: a client's input waits for those taking the replies made before it.
+    batches_written: u64,
     /// The child's waiter saw the program end and is publishing it: no handoff takes the pane any more.
     ending: bool,
 }
@@ -393,6 +397,21 @@ impl Core {
     fn wake_helper(&self) {
         if self.outlet.ready() {
             self.timer.notify_all();
+        }
+    }
+
+    /// Wait until the helper wrote the replies made ready so far (the batch it is writing, and the next one when
+    /// replies wait), so a client's input queued next reaches the program after them, as a terminal writes its reports
+    /// and its user's keys into one stream. Not while a handoff holds the helper, nor once the program ended.
+    fn await_replies_written(&self) {
+        let mut state = self.lock();
+        let target = state.hold.batches_written + u64::from(state.hold.helper_busy) + u64::from(self.outlet.ready());
+        while state.hold.batches_written < target && !state.hold.frozen && state.exit.is_none() {
+            self.timer.notify_all();
+            state = self
+                .changed
+                .wait_timeout(state, REPLIES_WRITTEN_POLL)
+                .map_or_else(|poisoned| poisoned.into_inner().0, |(guard, _)| guard);
         }
     }
 
@@ -789,6 +808,7 @@ impl Pane {
         if !input.forward {
             return Ok(false);
         }
+        self.core.await_replies_written();
         self.actor.write_input(data)?;
         Ok(true)
     }
@@ -1566,6 +1586,7 @@ fn run_helper(core: &Core, actor: &ActorHandle) {
             }
             state = core.lock();
             state.hold.helper_busy = false;
+            state.hold.batches_written += 1;
             core.changed.notify_all();
             continue;
         }

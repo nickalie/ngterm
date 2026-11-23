@@ -42,7 +42,9 @@
 //!
 //! Every reply, whichever thread makes it (a read of the PTY, a client's answer or completion, a resize, a deadline),
 //! is queued in the pane's [`Outlet`] under the pane's lock, in that lock's order; one thread, the pane's helper, takes
-//! them and writes them to the program, so it reads them in the order of its queries.
+//! them and writes them to the program, so it reads them in the order of its queries. A client's input waits until
+//! the helper wrote the replies made ready before it, so a mode 2031 report the client's new appearance made reaches
+//! the program before the keys the client sent next, as from one terminal (zmx's client wrote both in one stream).
 //!
 //! # The reply owner
 //!

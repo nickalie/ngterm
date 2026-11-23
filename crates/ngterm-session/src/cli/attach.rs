@@ -508,18 +508,14 @@ impl<'a> Loop<'a> {
     }
 
     fn tokens(&mut self, tokens: Vec<Token>) -> Result<(), Outcome> {
-        let mut fx = Effects::default();
-        for token in tokens {
-            match token {
-                Token::Input(bytes) => self.input(&bytes),
-                Token::Answer(answer) => self.relay.answer(answer, Instant::now(), &mut fx),
-                Token::Detach => {
-                    self.emit(fx)?;
-                    return Err(self.detach());
-                }
+        for step in steps(&mut self.relay, tokens, Instant::now()) {
+            match step {
+                Step::Emit(fx) => self.emit(fx)?,
+                Step::Input(bytes) => self.input(&bytes),
+                Step::Detach => return Err(self.detach()),
             }
         }
-        self.emit(fx)
+        Ok(())
     }
 
     fn input(&mut self, bytes: &[u8]) {
@@ -627,6 +623,37 @@ impl<'a> Loop<'a> {
         }
         Ok(())
     }
+}
+
+/// One step of handling the outer terminal's tokens ([`steps`]).
+#[derive(Debug)]
+enum Step {
+    Emit(Effects),
+    Input(Vec<u8>),
+    Detach,
+}
+
+/// What `tokens` do, in order: what the answers before a key produced goes before it, so the server has the facts an
+/// answer changed (a new appearance) before a query the keys run.
+fn steps(relay: &mut Relay, tokens: Vec<Token>, now: Instant) -> Vec<Step> {
+    let mut steps = Vec::new();
+    let mut fx = Effects::default();
+    for token in tokens {
+        match token {
+            Token::Input(bytes) => {
+                steps.push(Step::Emit(std::mem::take(&mut fx)));
+                steps.push(Step::Input(bytes));
+            }
+            Token::Answer(answer) => relay.answer(answer, now, &mut fx),
+            Token::Detach => {
+                steps.push(Step::Emit(fx));
+                steps.push(Step::Detach);
+                return steps;
+            }
+        }
+    }
+    steps.push(Step::Emit(fx));
+    steps
 }
 
 /// The outer terminal's input on its way to the session: the parser, and when the input last came, which a cut

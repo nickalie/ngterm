@@ -599,3 +599,31 @@ fn explicit_bridge_prepare_requires_a_supported_nonce_and_strips_it_from_the_ses
             .any(|(key, _)| key == ngterm_core::attach_bridge::VARIABLE)
     );
 }
+
+#[test]
+fn what_an_answer_sends_the_server_goes_before_the_keys_typed_after_it() {
+    let now = Instant::now();
+    let mut relay = Relay::new(None, GridSize { cols: 80, rows: 24 }, None);
+    relay.start(true, now, &mut Effects::default());
+    relay.answer(Answer::PrimaryAttributes, now, &mut Effects::default());
+    let tokens = vec![
+        Token::Answer(Answer::ColorScheme(crate::protocol::ColorScheme::Dark)),
+        Token::Input(b"ask\r".to_vec()),
+    ];
+    let steps = steps(&mut relay, tokens, now);
+    let input = steps
+        .iter()
+        .position(|step| matches!(step, Step::Input(bytes) if bytes == b"ask\r"))
+        .expect("the keys");
+    let scheme = steps
+        .iter()
+        .position(|step| {
+            matches!(step, Step::Emit(fx) if fx.outgoing.iter().any(|outgoing| matches!(
+                outgoing,
+                Outgoing::Metadata(metadata)
+                    if metadata.color_scheme == Some(crate::protocol::ColorScheme::Dark)
+            )))
+        })
+        .expect("the new appearance");
+    assert!(scheme < input, "{steps:?}");
+}
