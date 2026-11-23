@@ -3,10 +3,12 @@ import SwiftUI
 import Testing
 import UIKit
 
-/// The checkmark status shape as the badge draws it: an origin that sets `--shape checkmark` gets a glyph of its own,
-/// not the status's default star or the circle an unknown shape falls back to, light and dark. The bell, another
-/// shape, stays its own glyph. The glyph alone is a heavy check: it has ink, it is none of the other shapes, and it
-/// paints more than the symbol at the weight of the word.
+/// The checkmark status shape as the badge draws it.
+///
+/// An origin that sets `--shape checkmark` gets a glyph of its own, not the status's default star or the circle an
+/// unknown shape falls back to, light and dark. The bell, another shape, stays its own glyph. The glyph alone is a
+/// heavy check: it has ink, it is none of the other shapes, and it paints more than the symbol at the weight of the
+/// word.
 @MainActor
 @Suite("checkmark glyph")
 internal struct CheckmarkGlyphTests {
