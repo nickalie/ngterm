@@ -121,16 +121,21 @@ impl Core {
         }
     }
 
-    /// Moves every split change on whose answer arrived: the next line goes out, or a failure shows over the row.
+    /// Moves every split change on whose answer arrived: the next line goes out, or a failure shows over the row. A
+    /// closed row's changes are dropped.
     pub(super) fn advance_split_mirrors(&mut self) {
         for mut run in std::mem::take(&mut self.remote.viewer.split_mirrors) {
+            if self.library().held_session(run.session).is_none() {
+                continue;
+            }
             let Some(result) = run.answer.as_ref().and_then(take_answer) else {
                 self.remote.viewer.split_mirrors.push(run);
                 continue;
             };
-            if let Some(reason) = mirror_failure(&result, &run.host) {
-                self.mirror_failed(&run, &reason);
-                run.changes.pop_front();
+            if let Some(reason) = mirror_failure(&result, &run.host)
+                && let Some(change) = run.changes.pop_front()
+            {
+                self.mirror_failed(run.session, change.action, &reason);
             }
             if self.send_next_mirror_line(&mut run) {
                 self.remote.viewer.split_mirrors.push(run);
@@ -157,8 +162,9 @@ impl Core {
                 return true;
             }
             let reason = format!("the remote command failed on {}", run.host);
-            self.mirror_failed(run, &reason);
+            let action = change.action;
             run.changes.pop_front();
+            self.mirror_failed(run.session, action, &reason);
         }
     }
 
@@ -167,15 +173,12 @@ impl Core {
         self.remote.viewer.split_mirrors.iter().any(|run| run.session == id)
     }
 
-    fn mirror_failed(&mut self, run: &MirrorRun, reason: &str) {
-        let Some(action) = run.changes.front().map(|change| change.action) else {
-            return;
-        };
+    fn mirror_failed(&mut self, session: Uuid, action: &'static str, reason: &str) {
         tracing::info!(reason, action, "a split change did not reach the origin");
-        let Some(window) = self.library().window_holding_session(run.session) else {
+        let Some(window) = self.library().window_holding_session(session) else {
             return;
         };
-        self.action_failed(action, window, Some(run.session), reason);
+        self.action_failed(action, window, Some(session), reason);
     }
 }
 

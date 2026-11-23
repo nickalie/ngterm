@@ -791,23 +791,7 @@ fn an_origin_that_refuses_the_close_shows_why_over_the_row() {
         .session(SessionCmd::SplitClose, Some(&wire(remote.row)), args(|_| {}));
     assert!(reply.ok);
     remote.origin_lines(1);
-    for _ in 0..400 {
-        remote.fixture.core.remote_tick(Instant::now());
-        if remote.fixture.core.remote_wake() != Some(Duration::from_millis(100)) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let spec = remote
-        .fixture
-        .core
-        .library()
-        .held_session(remote.row)
-        .unwrap()
-        .overlay
-        .effective_hud_spec()
-        .unwrap();
-    assert_eq!(spec.message, "Close Split: no such session");
+    assert_eq!(remote.settled_hud(), "Close Split: no such session");
 }
 
 #[test]
@@ -969,4 +953,107 @@ fn a_split_closed_before_the_origin_refused_it_sends_no_close() {
     let (mut remote, before) = close_during_creation(result(&json!({"ok": false, "error": "refused"})));
     assert_eq!(before, 1);
     assert_eq!(remote.settled_calls(), 1);
+}
+
+impl Remote {
+    /// The failure message over the row once no split change is left on its way to the origin.
+    fn settled_hud(&mut self) -> String {
+        for _ in 0..400 {
+            self.fixture.core.remote_tick(Instant::now());
+            if self.fixture.core.remote_wake() != Some(Duration::from_millis(100)) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.fixture
+            .core
+            .library()
+            .held_session(self.row)
+            .unwrap()
+            .overlay
+            .effective_hud_spec()
+            .unwrap()
+            .message
+            .clone()
+    }
+
+    /// Hides and then shows the row's split while the origin holds its answers.
+    fn hide_then_show_held(&mut self) {
+        self.runner.hold();
+        let row = Some(wire(self.row));
+        let hide = args(|args| args.mode = Some("off".to_owned()));
+        assert!(self.fixture.session(SessionCmd::Split, row.as_deref(), hide).ok);
+        let show = args(|args| args.mode = Some("on".to_owned()));
+        assert!(self.fixture.session(SessionCmd::Split, row.as_deref(), show).ok);
+        assert_eq!(self.settled_calls(), 1);
+    }
+}
+
+#[test]
+fn a_refused_split_change_shows_why_and_the_next_change_still_reaches_the_origin() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    let bodies = tempfile::tempdir().unwrap();
+    remote.fixture.core.set_hud_body_dir(bodies.path().to_path_buf());
+    remote.script([
+        result(&json!({"ok": false, "error": "busy"})),
+        result(&json!({"ok": true})),
+    ]);
+    remote.hide_then_show_held();
+    remote.runner.release();
+    let lines = remote.origin_lines(2);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(
+        lines[1],
+        origin_line(&[
+            "session",
+            "split",
+            "visibility",
+            "on",
+            "--target",
+            ORIGIN,
+            "--axis",
+            "vertical"
+        ])
+    );
+    assert_eq!(remote.settled_hud(), "Hide Split: busy");
+}
+
+#[test]
+fn a_refused_swap_keeps_the_origin_split_the_viewer_kept() {
+    let target = Uuid::from_u128(2);
+    let mut remote = Remote::attached(target);
+    remote.fixture.core.apply_remote_layout(
+        &PresentationLayout {
+            panes: vec![remote.origin_pane, target],
+            primary: remote.origin_pane,
+            axis: Some("vertical".to_owned()),
+            shown: true,
+        },
+        remote.row,
+    );
+    remote.fixture.store_mut().unwrap().swap_panes(remote.row).unwrap();
+    remote.script([
+        result(&json!({"ok": false, "error": "refused"})),
+        result(&json!({"ok": true})),
+    ]);
+    let reply = remote
+        .fixture
+        .session(SessionCmd::SplitClose, Some(&wire(remote.row)), args(|_| {}));
+    assert!(reply.ok);
+    remote.origin_lines(1);
+    assert_eq!(remote.settled_calls(), 1, "no split close may follow a refused swap");
+}
+
+#[test]
+fn a_closed_row_sends_none_of_its_queued_split_changes() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    remote.script([result(&json!({"ok": true})), result(&json!({"ok": true}))]);
+    remote.hide_then_show_held();
+    remote.fixture.store_mut().unwrap().close_session(remote.row);
+    remote.runner.release();
+    assert_eq!(
+        remote.settled_calls(),
+        1,
+        "a closed row's queued show must not reach the origin"
+    );
 }
