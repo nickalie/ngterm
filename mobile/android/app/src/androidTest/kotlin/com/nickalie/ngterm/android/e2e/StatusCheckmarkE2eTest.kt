@@ -11,6 +11,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -115,21 +116,23 @@ class StatusCheckmarkE2eTest {
         type(TARGET)
         type(status(DONE_WIRE, "checkmark"))
         awaitBadge(done())
-        inBothThemes("session-bar") { assertGlyph("the session bar, $it", done(), StatusShape.Checkmark) }
+        inBothThemes("session-bar", done()) { assertGlyph("the session bar, $it", done(), StatusShape.Checkmark) }
 
         // back from the session view: the Sessions list of attached sessions (a tablet shows it in the sidebar)
         val back = compose.onAllNodesWithContentDescription(text(R.string.action_back))
         if (back.fetchSemanticsNodes().isNotEmpty()) back[0].performClick()
         awaitText(SESSION)
-        inBothThemes("sessions-list") { assertGlyph("the Sessions list, $it", done(), StatusShape.Checkmark) }
+        inBothThemes("sessions-list", done()) { assertGlyph("the Sessions list, $it", done(), StatusShape.Checkmark) }
 
         // the machine's session list, as the origin lists it
         tap(text(R.string.nav_machines))
         awaitText(MACHINE)
+        // a tablet's sidebar keeps its own badge on screen: wait for the machine's list to add one more
+        val before = displayed(done())
         tap(MACHINE)
         awaitText(SESSION)
-        awaitBadge(done())
-        inBothThemes("machine-sessions") {
+        compose.waitUntil(CONNECT_WAIT_MS) { displayed(done()) > before }
+        inBothThemes("machine-sessions", done()) {
             assertGlyph("the machine's session list, $it", done(), StatusShape.Checkmark)
         }
 
@@ -143,7 +146,10 @@ class StatusCheckmarkE2eTest {
             runCatching { bestShapes(done()).let { it.isNotEmpty() && it.all(StatusShape.Bell::equals) } }
                 .getOrDefault(false)
         }
-        inBothThemes("session-bar-bell") { assertGlyph("the session bar after bell, $it", done(), StatusShape.Bell) }
+        inBothThemes(
+            "session-bar-bell",
+            done(),
+        ) { assertGlyph("the session bar after bell, $it", done(), StatusShape.Bell) }
     }
 
     private fun done() = text(R.string.agent_completed)
@@ -164,10 +170,11 @@ class StatusCheckmarkE2eTest {
     // runs [check] with the theme's name and saves a screenshot named after [shot], light and then dark
     private fun inBothThemes(
         shot: String,
+        label: String,
         check: (String) -> Unit,
     ) {
         for (theme in listOf(ThemeChoice.Light, ThemeChoice.Dark)) {
-            useTheme(theme)
+            useTheme(theme, label)
             val name = theme.name.lowercase()
             check(name)
             screenshot("$name-$shot")
@@ -191,11 +198,25 @@ class StatusCheckmarkE2eTest {
         badges.forEachIndexed { index, scores ->
             val top = scores.entries.sortedByDescending { it.value }.take(TOP)
             Log.i(TAG, "$where, badge $index: $top")
+            assertTrue("no glyph drawn in $where (best matches $top)", top.first().value > MIN_MATCH)
             assertEquals("the glyph in $where (best matches $top)", expected, scores.maxBy { it.value }.key)
         }
     }
 
     private fun bestShapes(label: String): List<StatusShape> = scores(label).map { it.maxBy { e -> e.value }.key }
+
+    // the badges on screen read as [label], not those of a screen on its way out
+    private fun shownBadges(label: String): List<SemanticsNodeInteraction> {
+        val matches = compose.onAllNodes(hasContentDescription(label), useUnmergedTree = true)
+        return matches
+            .fetchSemanticsNodes()
+            .indices
+            .map { matches[it] }
+            .filter { it.isDisplayed() }
+    }
+
+    // a node may leave between the lookup and the read: then the screen is still changing
+    private fun displayed(label: String): Int = runCatching { shownBadges(label).size }.getOrDefault(0)
 
     /**
      * For each badge on screen read as [label], how well each shape's drawable matches its glyph: the intersection
@@ -205,27 +226,31 @@ class StatusCheckmarkE2eTest {
         compose.waitForIdle()
         val side = (GLYPH_DP * context.resources.displayMetrics.density).toInt()
         // the badge itself, not a row that merges its description
-        val matches = compose.onAllNodes(hasContentDescription(label), useUnmergedTree = true)
-        // a screen on its way out keeps its nodes a moment, off screen
-        val shown = matches.fetchSemanticsNodes().indices.filter { matches[it].isDisplayed() }
-        return shown.map { index ->
-            val bitmap = matches[index].captureToImage().asAndroidBitmap()
-            val ink = inkMask(bitmap)
+        return shownBadges(label).map { badge ->
+            val ink = inkMask(badge.captureToImage().asAndroidBitmap())
             StatusShape.entries.associateWith { shape -> bestOverlap(ink, shapeMask(shape, side)) }
         }
     }
 
-    // the badge's pixels that are not its ground: the ground is its most common color
-    private fun inkMask(bitmap: Bitmap): Mask {
+    private fun pixels(bitmap: Bitmap): IntArray {
         val pixels = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-        val ground =
-            pixels
-                .toList()
-                .groupingBy { it }
-                .eachCount()
-                .maxBy { it.value }
-                .key
+        return pixels
+    }
+
+    // a badge's ground is its most common color
+    private fun ground(pixels: IntArray): Int =
+        pixels
+            .toList()
+            .groupingBy { it }
+            .eachCount()
+            .maxBy { it.value }
+            .key
+
+    // the badge's pixels that are not its ground
+    private fun inkMask(bitmap: Bitmap): Mask {
+        val pixels = pixels(bitmap)
+        val ground = ground(pixels)
         return Mask(
             BooleanArray(pixels.size) { distance(pixels[it], ground) > INK_DISTANCE },
             bitmap.width,
@@ -286,12 +311,24 @@ class StatusCheckmarkE2eTest {
         val height: Int,
     )
 
-    private fun useTheme(theme: ThemeChoice) {
+    // sets [theme] and waits until every badge read as [label] stands on a ground of that theme
+    private fun useTheme(
+        theme: ThemeChoice,
+        label: String,
+    ) {
         runBlocking { graph().settings.update { it.copy(theme = theme) } }
-        // the theme reaches the screen on the next frames
-        Thread.sleep(SETTLE_MS)
-        compose.waitForIdle()
+        val dark = theme == ThemeChoice.Dark
+        compose.waitUntil(CONNECT_WAIT_MS) {
+            runCatching {
+                shownBadges(label).let { badges ->
+                    badges.isNotEmpty() &&
+                        badges.all { isDark(ground(pixels(it.captureToImage().asAndroidBitmap()))) == dark }
+                }
+            }.getOrDefault(false)
+        }
     }
+
+    private fun isDark(color: Int): Boolean = Color.red(color) + Color.green(color) + Color.blue(color) < MID_GREY
 
     private fun awaitBadge(label: String) =
         compose.waitUntil(CONNECT_WAIT_MS) { nodes(hasContentDescription(label)) > 0 }
@@ -407,6 +444,9 @@ class StatusCheckmarkE2eTest {
         const val MAX_X_OFFSET = 8
         const val INK_DISTANCE = 96
         const val HALF_ALPHA = 128
+
+        /** The sum of the red, green and blue of a mid grey: a darker ground is a dark theme's. */
+        const val MID_GREY = 3 * 128
         const val TOP = 3
 
         /** The overlap any drawn glyph reaches with its own shape and the shapes like it. */
@@ -414,7 +454,6 @@ class StatusCheckmarkE2eTest {
 
         const val EVIDENCE_DIR = "/data/local/tmp/ngterm-e2e"
         const val CONNECT_WAIT_MS = 60_000L
-        const val SETTLE_MS = 1_000L
         const val PING_WAIT_MS = 3_000L
     }
 }
