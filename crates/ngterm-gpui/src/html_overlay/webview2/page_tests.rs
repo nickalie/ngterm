@@ -957,7 +957,7 @@ fn realized_replica_link_page(cx: &mut TestAppContext) -> (Driven, HtmlOverlay, 
         content: ReplicaContent::Markdown,
     };
     let source = HtmlOverlay::linked(replica, flags, Some(grant.clone()));
-    let mut driven = realized(&source);
+    let driven = realized(&source);
     let readme = scheme::replica_link_address(source.id, &grant.path).unwrap();
     driven.view.take();
     assert!(driven.page.allows(&navigation(&readme, true, false, false, 1)));
@@ -970,7 +970,7 @@ fn realized_replica_link_page(cx: &mut TestAppContext) -> (Driven, HtmlOverlay, 
 /// nothing, and a read document whose load was replaced is not served to a later load of that file.
 #[gpui_kit::test]
 fn a_replica_link_pages_later_load_replaces_a_held_link(cx: &mut TestAppContext) {
-    let (mut driven, source, readme) = realized_replica_link_page(cx);
+    let (driven, source, readme) = realized_replica_link_page(cx);
     let path = "/nowhere/docs/sub/guide.md".to_owned();
     let guide = scheme::replica_link_address(source.id, &path).unwrap();
     let follow = navigation(&guide, true, true, false, 2);
@@ -1022,10 +1022,10 @@ fn a_replica_link_pages_anchor_in_its_own_document_is_not_held(cx: &mut TestAppC
     );
 }
 
-/// WKWebView decides a move to an anchor in the shown document; that move loads nothing and keeps a held link.
+/// `WKWebView` decides a move to an anchor in the shown document; that move loads nothing and keeps a held link.
 #[gpui_kit::test]
 fn a_replica_link_pages_anchor_keeps_a_held_link(cx: &mut TestAppContext) {
-    let (mut driven, source, readme) = realized_replica_link_page(cx);
+    let (driven, source, readme) = realized_replica_link_page(cx);
     let path = "/nowhere/docs/sub/guide.md".to_owned();
     let guide = scheme::replica_link_address(source.id, &path).unwrap();
     let follow = navigation(&guide, true, true, false, 2);
@@ -1057,7 +1057,7 @@ fn a_replica_link_pages_anchor_keeps_a_held_link(cx: &mut TestAppContext) {
 /// A click on the shown anchor only scrolls to it again, so it keeps a held link.
 #[gpui_kit::test]
 fn a_replica_link_pages_click_on_the_shown_anchor_keeps_a_held_link(cx: &mut TestAppContext) {
-    let (mut driven, source, readme) = realized_replica_link_page(cx);
+    let (driven, source, readme) = realized_replica_link_page(cx);
     let anchor = format!("{readme}#usage");
     driven.report(Report::Source(anchor.clone()), cx);
     let path = "/nowhere/docs/sub/guide.md".to_owned();
@@ -1082,7 +1082,7 @@ fn a_replica_link_pages_click_on_the_shown_anchor_keeps_a_held_link(cx: &mut Tes
 /// A reload of a shown address with a fragment loads the document again, so it replaces a held link.
 #[gpui_kit::test]
 fn a_replica_link_pages_reload_at_an_anchor_replaces_a_held_link(cx: &mut TestAppContext) {
-    let (mut driven, source, readme) = realized_replica_link_page(cx);
+    let (driven, source, readme) = realized_replica_link_page(cx);
     let anchor = format!("{readme}#usage");
     driven.report(Report::Source(anchor.clone()), cx);
     let path = "/nowhere/docs/sub/guide.md".to_owned();
