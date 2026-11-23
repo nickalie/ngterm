@@ -121,13 +121,11 @@ impl Core {
         }
     }
 
-    /// Moves every split change on whose answer arrived: the next line goes out, or a failure shows over the row. A
-    /// closed row's changes are dropped.
+    /// Moves every split change on whose answer arrived: the next line goes out, or a failure shows over the row.
+    /// The changes of a row that closed still go out: its origin keeps the split, and a reopened window or a
+    /// recent-closed entry brings the row back with the split the viewer left.
     pub(super) fn advance_split_mirrors(&mut self) {
         for mut run in std::mem::take(&mut self.remote.viewer.split_mirrors) {
-            if self.library().held_session(run.session).is_none() {
-                continue;
-            }
             let Some(result) = run.answer.as_ref().and_then(take_answer) else {
                 self.remote.viewer.split_mirrors.push(run);
                 continue;

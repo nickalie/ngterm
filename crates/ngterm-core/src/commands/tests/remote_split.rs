@@ -1045,15 +1045,52 @@ fn a_refused_swap_keeps_the_origin_split_the_viewer_kept() {
 }
 
 #[test]
-fn a_closed_row_sends_none_of_its_queued_split_changes() {
+fn a_closed_row_still_sends_its_queued_split_changes_to_the_origin() {
     let mut remote = Remote::attached(Uuid::from_u128(2));
     remote.script([result(&json!({"ok": true})), result(&json!({"ok": true}))]);
     remote.hide_then_show_held();
     remote.fixture.store_mut().unwrap().close_session(remote.row);
     remote.runner.release();
+    let lines = remote.origin_lines(2);
+    assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(
-        remote.settled_calls(),
-        1,
-        "a closed row's queued show must not reach the origin"
+        lines[1],
+        origin_line(&[
+            "session",
+            "split",
+            "visibility",
+            "on",
+            "--target",
+            ORIGIN,
+            "--axis",
+            "vertical"
+        ])
+    );
+}
+
+#[test]
+fn a_split_closed_just_before_its_window_closes_is_closed_on_the_origin() {
+    let mut remote = Remote::attached(Uuid::from_u128(2));
+    remote.script([result(&json!({"ok": true})), result(&json!({"ok": true}))]);
+    remote.runner.hold();
+    let row = Some(wire(remote.row));
+    let hide = args(|args| args.mode = Some("off".to_owned()));
+    assert!(remote.fixture.session(SessionCmd::Split, row.as_deref(), hide).ok);
+    assert!(
+        remote
+            .fixture
+            .session(SessionCmd::SplitClose, row.as_deref(), args(|_| {}))
+            .ok
+    );
+    assert_eq!(remote.settled_calls(), 1);
+    let window = remote.fixture.window;
+    remote.fixture.core.close_window(window);
+    assert!(!remote.fixture.core.library().is_open(window));
+    remote.runner.release();
+    let lines = remote.origin_lines(2);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(
+        lines[1],
+        origin_line(&["session", "split", "close", "--target", ORIGIN])
     );
 }
