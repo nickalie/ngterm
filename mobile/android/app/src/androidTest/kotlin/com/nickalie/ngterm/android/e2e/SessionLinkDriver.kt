@@ -14,11 +14,13 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.printToString
 import androidx.test.platform.app.InstrumentationRegistry
 import com.nickalie.ngterm.android.MainActivity
 import com.nickalie.ngterm.android.R
@@ -85,6 +87,11 @@ internal class SessionLinkDriver {
             ) {
                 screenshot("${description.methodName}-failed")
                 Log.e(TAG, "terminal at the failure:\n${terminalText()}")
+                // the key screens are secure, so their screenshots are black: their texts say where the test stopped
+                Log.e(
+                    TAG,
+                    "screen at the failure:\n${runCatching { compose.onRoot().printToString() }.getOrDefault("")}",
+                )
             }
         }
 
