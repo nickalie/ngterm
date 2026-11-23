@@ -5,7 +5,8 @@
 //! that multiplex the page's resource transfers and its bridge calls by request id. A resource is read here off the
 //! main loop, from a file page's own file or from inside its grant, or for an image, Markdown, text or document page
 //! the files its kind may read under its kind's cap ([`content`]; a Markdown page under the link grant it was handed
-//! with), in chunks of at most [`MAX_CHUNK_BYTES`]; a file
+//! with), in chunks of at most [`MAX_CHUNK_BYTES`]; a log page's end goes as the raw tail bytes a local page would read
+//! (`log.tail`, upstream's `serveLog`), or `log.unchanged` while the file keeps the stamp the presenter names; a file
 //! page's bridge request runs here against the page's place at that moment, as a local page's request would, and a
 //! content page has no bridge. The helper's
 //! connection closing parks the page for the next presenter (an extension beyond upstream, which ends it), and sending
@@ -29,14 +30,17 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ngterm_proto::{Request, Response};
+use serde::Deserialize as _;
 use serde_json::Value;
 use uuid::Uuid;
 
 use super::companion_page::{CompanionPageRuntime, CompanionPageServing};
 use super::frames::{self, FrameError};
 use crate::Core;
+use crate::bounded_file::FileStamp;
 use crate::html::bridge::{self, HtmlBridgePage};
 use crate::html::markdown_page::MarkdownLinkGrant;
+use crate::html::text_page::{self, TextLog};
 use crate::html::{self, HtmlSource};
 use crate::pane_env::uuid_string;
 
@@ -74,6 +78,8 @@ const PAGE_CLOSED: &str = "page closed";
 const URL_NO_BRIDGE: &str = "a URL page has no bridge";
 const ANSWER_TOO_LARGE: &str = "answer too large for the channel";
 const UNENCODABLE: &str = "reply could not be encoded";
+/// A log tail asked of a channel that serves no log page (upstream's `serveLog`).
+const NOT_A_LOG_PAGE: &str = "not a log page";
 
 // MARK: - frames
 
@@ -117,6 +123,23 @@ pub enum PageServeFrame {
         id: i64,
         response: String,
     },
+    /// Asks for a log page's file end, nothing when it still has `stamp` (upstream's `logTail`). Sent only to an
+    /// origin listing [`super::hub::PAGE_TEXT_KIND`]: an older one cannot decode it and would end the page.
+    LogTail {
+        id: i64,
+        stamp: Option<FileStamp>,
+    },
+    /// Starts a log tail's answer with the file's stamp and the offset its bytes start at; chunks of the raw bytes
+    /// follow, then [`PageServeFrame::End`].
+    LogHead {
+        id: i64,
+        stamp: FileStamp,
+        offset: u64,
+    },
+    /// Ends a log tail request whose file still has the stamp it named.
+    LogUnchanged {
+        id: i64,
+    },
 }
 
 impl PageServeFrame {
@@ -131,7 +154,10 @@ impl PageServeFrame {
             | Self::Failure { id, .. }
             | Self::Cancel { id }
             | Self::Bridge { id, .. }
-            | Self::Reply { id, .. } => *id,
+            | Self::Reply { id, .. }
+            | Self::LogTail { id, .. }
+            | Self::LogHead { id, .. }
+            | Self::LogUnchanged { id } => *id,
         }
     }
 
@@ -139,6 +165,7 @@ impl PageServeFrame {
     fn object(&self) -> BTreeMap<&'static str, Value> {
         let mut object = BTreeMap::new();
         object.insert("id", Value::from(self.id()));
+        let stamp = |stamp: &FileStamp| serde_json::to_value(stamp).unwrap_or(Value::Null);
         let (kind, field) = match self {
             Self::Resource { path, .. } => ("resource", Some(("path", Value::from(path.as_str())))),
             Self::Head { mime_type, .. } => ("head", Some(("mimeType", Value::from(mime_type.as_str())))),
@@ -148,6 +175,14 @@ impl PageServeFrame {
             Self::Cancel { .. } => ("cancel", None),
             Self::Bridge { request, .. } => ("bridge", Some(("request", Value::from(request.as_str())))),
             Self::Reply { response, .. } => ("reply", Some(("response", Value::from(response.as_str())))),
+            Self::LogTail { stamp: tail, .. } => ("log.tail", tail.as_ref().map(|tail| ("stamp", stamp(tail)))),
+            Self::LogHead {
+                stamp: head, offset, ..
+            } => {
+                object.insert("offset", Value::from(*offset));
+                ("log.head", Some(("stamp", stamp(head))))
+            }
+            Self::LogUnchanged { .. } => ("log.unchanged", None),
         };
         object.insert("kind", Value::from(kind));
         if let Some((key, value)) = field {
@@ -202,9 +237,30 @@ impl PageServeFrame {
                 id,
                 response: text("response")?,
             },
+            "log.tail" => Self::LogTail {
+                id,
+                stamp: match object.get("stamp") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => Some(stamp_of(value)?),
+                },
+            },
+            "log.head" => Self::LogHead {
+                id,
+                stamp: stamp_of(object.get("stamp").unwrap_or(&Value::Null))?,
+                offset: object
+                    .get("offset")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "missing or invalid offset".to_owned())?,
+            },
+            "log.unchanged" => Self::LogUnchanged { id },
             other => return Err(format!("unknown kind {other}")),
         })
     }
+}
+
+/// A frame's file stamp.
+fn stamp_of(value: &Value) -> Result<FileStamp, String> {
+    FileStamp::deserialize(value).map_err(|error| format!("invalid stamp: {error}"))
 }
 
 /// Renders `frame` as one line, newline included (upstream's `PageServeCodec.encode`).
@@ -429,11 +485,26 @@ struct Transfers {
     cancelled: HashSet<i64>,
 }
 
+/// One read the file thread runs: a resource by its path on the origin, or the log page's end.
+#[derive(Debug)]
+enum FileJob {
+    Resource(i64, String),
+    LogTail(i64, Option<FileStamp>),
+}
+
+impl FileJob {
+    fn id(&self) -> i64 {
+        match self {
+            Self::Resource(id, _) | Self::LogTail(id, _) => *id,
+        }
+    }
+}
+
 /// The queues of the threads behind a stream: one reads files, one writes bridge replies, so a reply waits behind at
 /// most the chunks already queued for the writer, never behind a whole file.
 #[derive(Default)]
 struct Workers {
-    files: Option<Sender<(i64, String)>>,
+    files: Option<Sender<FileJob>>,
     replies: Option<Sender<PageServeFrame>>,
 }
 
@@ -446,6 +517,8 @@ pub struct PageServeStream {
     source: HtmlSource,
     /// The link grant the page was handed with; `None` for any other page, a page companion's included.
     links: Option<MarkdownLinkGrant>,
+    /// A log page's request, which admits its tail reads; `None` for any other page.
+    log: Option<TextLog>,
     channel: Arc<dyn PageChannel>,
     resources: Admission,
     bridges: Admission,
@@ -539,6 +612,7 @@ impl PageServeStream {
             companion,
             source: served.source,
             links: served.links,
+            log: served.log,
             channel,
             resources: Admission::new(RESOURCE_LIMIT),
             bridges: Admission::new(BRIDGE_LIMIT),
@@ -601,21 +675,8 @@ impl PageServeStream {
                 }
                 None
             }
-            PageServeFrame::Resource { id, path } => {
-                if !self.resources.try_acquire() {
-                    return self.refuse(id);
-                }
-                self.lock_transfers().active.insert(id);
-                let queued = self
-                    .lock_workers()
-                    .files
-                    .as_ref()
-                    .is_some_and(|files| files.send((id, path)).is_ok());
-                if !queued {
-                    self.finish_transfer(id);
-                }
-                None
-            }
+            PageServeFrame::Resource { id, path } => self.queue_file(FileJob::Resource(id, path)),
+            PageServeFrame::LogTail { id, stamp } => self.queue_file(FileJob::LogTail(id, stamp)),
             PageServeFrame::Bridge { id, request } => {
                 if !self.bridges.try_acquire() {
                     return self.refuse(id);
@@ -626,8 +687,28 @@ impl PageServeStream {
             | PageServeFrame::Chunk { .. }
             | PageServeFrame::End { .. }
             | PageServeFrame::Failure { .. }
-            | PageServeFrame::Reply { .. } => Some(self.work(Task::Fail("a frame only the origin sends"))),
+            | PageServeFrame::Reply { .. }
+            | PageServeFrame::LogHead { .. }
+            | PageServeFrame::LogUnchanged { .. } => Some(self.work(Task::Fail("a frame only the origin sends"))),
         }
+    }
+
+    /// Takes a resource slot for `job` and hands it to the file thread, refusing it as busy past the limit.
+    fn queue_file(self: &Arc<Self>, job: FileJob) -> Option<PageServeWork> {
+        let id = job.id();
+        if !self.resources.try_acquire() {
+            return self.refuse(id);
+        }
+        self.lock_transfers().active.insert(id);
+        let queued = self
+            .lock_workers()
+            .files
+            .as_ref()
+            .is_some_and(|files| files.send(job).is_ok());
+        if !queued {
+            self.finish_transfer(id);
+        }
+        None
     }
 
     fn work(self: &Arc<Self>, task: Task) -> PageServeWork {
@@ -677,11 +758,65 @@ impl PageServeStream {
         }
     }
 
-    fn serve_files(&self, jobs: &Receiver<(i64, String)>) {
-        for (id, path) in jobs {
-            self.transfer(id, &path);
+    fn serve_files(&self, jobs: &Receiver<FileJob>) {
+        for job in jobs {
+            let id = job.id();
+            match job {
+                FileJob::Resource(_, path) => self.transfer(id, &path),
+                FileJob::LogTail(_, stamp) => self.transfer_log(id, stamp.as_ref()),
+            }
             self.finish_transfer(id);
         }
+    }
+
+    /// Serves a log page's end (upstream's `transferLog`): read only from the claimed log page's own file, within the
+    /// tail cap whatever the file's size, the byte before the window included. The presenter builds the snapshot from
+    /// the raw bytes, so rotation, truncation and binary ends read as they do locally.
+    fn transfer_log(&self, id: i64, stamp: Option<&FileStamp>) {
+        let (HtmlSource::Text { path, .. }, Some(_)) = (&self.source, self.log) else {
+            self.send_waiting(&failure(id, NOT_A_LOG_PAGE));
+            return;
+        };
+        if self.cancelled(id) {
+            self.send_waiting(&failure(id, CANCELLED));
+            return;
+        }
+        let read = match crate::bounded_file::read_tail(Path::new(path), text_page::MAX_TAIL_BYTES as u64, stamp) {
+            Err(_) => {
+                self.send_waiting(&failure(id, UNREADABLE));
+                return;
+            }
+            Ok(None) => {
+                self.send_waiting(&PageServeFrame::LogUnchanged { id });
+                return;
+            }
+            Ok(Some(read)) => read,
+        };
+        let head = PageServeFrame::LogHead {
+            id,
+            stamp: read.stamp,
+            offset: read.offset,
+        };
+        if self.send_waiting(&head) {
+            self.send_chunks(id, &read.data);
+        }
+    }
+
+    /// Sends `body` as chunks then the end, stopping with a cancelled failure when the presenter withdrew request `id`.
+    fn send_chunks(&self, id: i64, body: &[u8]) {
+        for chunk in body.chunks(MAX_CHUNK_BYTES) {
+            if self.cancelled(id) {
+                self.send_waiting(&failure(id, CANCELLED));
+                return;
+            }
+            if !self.send_waiting(&PageServeFrame::Chunk {
+                id,
+                data: chunk.to_vec(),
+            }) {
+                return;
+            }
+        }
+        self.send_waiting(&PageServeFrame::End { id });
     }
 
     fn finish_transfer(&self, id: i64) {
@@ -772,22 +907,9 @@ impl PageServeStream {
             id,
             mime_type: mime_type.to_owned(),
         };
-        if !self.send_waiting(&head) {
-            return;
+        if self.send_waiting(&head) {
+            self.send_chunks(id, &body);
         }
-        for chunk in body.chunks(MAX_CHUNK_BYTES) {
-            if self.cancelled(id) {
-                self.send_waiting(&failure(id, CANCELLED));
-                return;
-            }
-            if !self.send_waiting(&PageServeFrame::Chunk {
-                id,
-                data: chunk.to_vec(),
-            }) {
-                return;
-            }
-        }
-        self.send_waiting(&PageServeFrame::End { id });
     }
 
     /// Sends `frame`, waiting for room; false once the channel is closing. A frame too large for one line goes back as
@@ -826,19 +948,25 @@ impl PageServeRuntime {
     }
 }
 
-/// What a handed-over page's channel serves, as the page was handed over (upstream's claimed `HtmlOverlay`): its source
-/// and its link grant, which a presenter that cannot follow links was handed none of.
+/// What a handed-over page's channel serves, as the page was handed over (upstream's `PageServeClaim`): its source,
+/// its link grant, which a presenter that cannot follow links was handed none of, and a log page's request, which
+/// admits its tail reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServedPage {
     pub source: HtmlSource,
     pub links: Option<MarkdownLinkGrant>,
+    pub log: Option<TextLog>,
 }
 
 impl ServedPage {
-    /// A page served with no link grant.
+    /// A page served with no link grant and no log.
     #[must_use]
     pub fn unlinked(source: HtmlSource) -> Self {
-        Self { source, links: None }
+        Self {
+            source,
+            links: None,
+            log: None,
+        }
     }
 }
 

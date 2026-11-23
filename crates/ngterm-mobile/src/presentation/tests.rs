@@ -695,6 +695,8 @@ fn a_page_is_refused_as_unsupported_and_its_closes_change_nothing() {
                 size_percent: None,
                 follow: false,
                 markdown_links: None,
+                text_log: None,
+                text_seed: None,
             }))
             .await;
         harness

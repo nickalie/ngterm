@@ -2,7 +2,12 @@
 //! `ControlDispatcher+Overlay.swift`, then `searchSessionOverlay` in `agterm/Control/ControlServer+TextPage.swift`);
 //! `session.overlay.changes`: a diff page stepped to its next or previous change (upstream's
 //! `dispatchSessionOverlayChanges`, then `stepSessionOverlayChanges`); `session.overlay.wrap`: a text page's long lines
-//! wrapped or not (upstream's dispatcher arm, then `setSessionOverlayWrap`).
+//! wrapped or not (upstream's dispatcher arm, then `setSessionOverlayWrap`); `session.overlay.follow`: a log page's
+//! following set or toggled (upstream's dispatcher arm, then `setSessionOverlayFollow`).
+//!
+//! Each runs on the presenting machine when a presenter listing live text pages shows the page in the addressed slot
+//! (upstream's `textPageAction`, [`crate::remote::remote_text`]): it waits for that machine's answer there, which runs
+//! the same local command, so replies and refusals match.
 //!
 //! The query lives in the model ([`crate::model::WindowLibrary::set_text_search`]), which reaches the page whenever its
 //! renderer runs, so a query set before the page loads applies when it does. A step, of a search or between a diff's
@@ -26,6 +31,8 @@ use crate::error::ControlError;
 use crate::html::text_page::{self, TextChanges};
 use crate::html::{HtmlOverlay, HtmlSource, SearchCount, SearchStep};
 use crate::model::{OverlayPane, TextChangesFailure, TextSearchFailure, TextWrapFailure};
+use crate::pane_env::uuid_string;
+use crate::remote::remote_text::{RemoteTextOutcome, RemoteTextPoll, RemoteTextWait, SearchRequest, TextPageAction};
 use crate::resolve::Resolver;
 
 /// Upstream's `OverlayHtmlError.searchRequest`.
@@ -39,15 +46,6 @@ const CHANGES_REQUEST: &str = "session.overlay.changes requires to next or prev"
 /// How long a step waits for the page's renderer before it counts the page as not loaded: upstream's call into the
 /// web view fails when the page goes, where a renderer here may never answer.
 const STEP_WAIT: Duration = Duration::from_secs(5);
-
-/// One `session.overlay.search` request (upstream's `TextSearchRequest`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SearchRequest {
-    Query(String),
-    Next,
-    Previous,
-    Close,
-}
 
 /// Exactly one of a query and a `to` step (upstream's dispatcher arm), checked before anything is looked up.
 fn parse(args: &Args) -> Result<SearchRequest, ControlError> {
@@ -69,12 +67,65 @@ fn parse(args: &Args) -> Result<SearchRequest, ControlError> {
 /// resolves; then the local text page in the addressed slot. A query or a close answers the session's id at once; a
 /// step waits for the page's count and answers `N of M`.
 pub(crate) fn begin_search(core: &mut Core, request: &Request) -> Dispatched {
-    match start(core, request) {
-        Ok(Started::Done(result)) => Dispatched::done(Ok(*result)),
-        Ok(Started::Step { session, answer }) => {
-            wait(session, answer, |session, count| Ok(searched(session, count)), 0)
-        }
-        Err(error) => Dispatched::done(Err(error)),
+    let addressed = parse(args_of(request)).and_then(|search| Ok((search, addressed(core, request)?)));
+    let (search, (session, pane)) = match addressed {
+        Ok(addressed) => addressed,
+        Err(error) => return Dispatched::done(Err(error)),
+    };
+    text_action(
+        core,
+        session,
+        pane,
+        &TextPageAction::Search(search.clone()),
+        move |core| match start(core, session, pane, search) {
+            Ok(Started::Done(result)) => Dispatched::done(Ok(*result)),
+            Ok(Started::Step { session, answer }) => {
+                wait(session, answer, |session, count| Ok(searched(session, count)), 0)
+            }
+            Err(error) => Dispatched::done(Err(error)),
+        },
+    )
+}
+
+/// The pane, then the session, a text page command addresses.
+fn addressed(core: &Core, request: &Request) -> Result<(Uuid, Option<OverlayPane>), ControlError> {
+    let args = args_of(request);
+    let pane = parse_overlay_pane(args.pane.as_deref())?;
+    let session = Resolver::new(core.library())
+        .session(request.target.as_deref(), args.window.as_deref())?
+        .session;
+    Ok((session, pane))
+}
+
+/// Runs `action` on the presenting machine when it shows the page in `pane`'s slot of `session`, waiting for its
+/// answer, else here through `local` (upstream's `textPageAction`).
+fn text_action(
+    core: &mut Core,
+    session: Uuid,
+    pane: Option<OverlayPane>,
+    action: &TextPageAction,
+    local: impl FnOnce(&mut Core) -> Dispatched,
+) -> Dispatched {
+    match core.remote_text_action(session, pane, action) {
+        RemoteTextOutcome::Local => local(core),
+        RemoteTextOutcome::Failed(error) => Dispatched::done(Err(ControlError::rejected(error))),
+        RemoteTextOutcome::Waiting(wait) => remote_wait(session, wait, 0),
+    }
+}
+
+/// Polls for the presenter's answer to `wait` a main-loop hop at a time, answering with its text or its error.
+fn remote_wait(session: Uuid, wait: RemoteTextWait, attempt: u32) -> Dispatched {
+    Dispatched::Pending {
+        after: POLL_INTERVAL,
+        resume: Box::new(move |core: &mut Core| match core.remote_text_poll(&wait, attempt) {
+            RemoteTextPoll::Answered(Ok(text)) => Dispatched::done(Ok(ControlResult {
+                text,
+                ..with_id(session)
+            })),
+            RemoteTextPoll::Answered(Err(error)) => Dispatched::done(Err(ControlError::rejected(error))),
+            RemoteTextPoll::Failed(error) => Dispatched::done(Err(ControlError::rejected(error))),
+            RemoteTextPoll::Pending => remote_wait(session, wait, attempt + 1),
+        }),
     }
 }
 
@@ -95,13 +146,12 @@ enum Started {
     },
 }
 
-fn start(core: &mut Core, request: &Request) -> Result<Started, ControlError> {
-    let args = args_of(request);
-    let search = parse(args)?;
-    let pane = parse_overlay_pane(args.pane.as_deref())?;
-    let session = Resolver::new(core.library())
-        .session(request.target.as_deref(), args.window.as_deref())?
-        .session;
+fn start(
+    core: &mut Core,
+    session: Uuid,
+    pane: Option<OverlayPane>,
+    search: SearchRequest,
+) -> Result<Started, ControlError> {
     let shown = text_search_page(core, session, pane).map_err(refused)?;
     let (id, revision, query) = (
         shown.id,
@@ -178,10 +228,21 @@ fn wait<T: Send + 'static>(
 /// then the pane, before the session resolves; then the local plain diff page in the addressed slot, whose renderer
 /// steps and answers `N of M`.
 pub(crate) fn begin_changes(core: &mut Core, request: &Request) -> Dispatched {
-    match start_changes(core, request) {
-        Ok((session, answer)) => wait(session, answer, stepped, 0),
-        Err(error) => Dispatched::done(Err(error)),
-    }
+    let addressed = parse_changes(args_of(request)).and_then(|forward| Ok((forward, addressed(core, request)?)));
+    let (forward, (session, pane)) = match addressed {
+        Ok(addressed) => addressed,
+        Err(error) => return Dispatched::done(Err(error)),
+    };
+    text_action(
+        core,
+        session,
+        pane,
+        &TextPageAction::Changes { forward },
+        move |core| match start_changes(core, session, pane, forward) {
+            Ok(answer) => wait(session, answer, stepped, 0),
+            Err(error) => Dispatched::done(Err(error)),
+        },
+    )
 }
 
 /// A change step's answer: `N of M` for the change it reached, `no changes` when the page has none.
@@ -207,19 +268,16 @@ fn parse_changes(args: &Args) -> Result<bool, ControlError> {
     }
 }
 
-fn start_changes(core: &mut Core, request: &Request) -> Result<(Uuid, Receiver<TextChanges>), ControlError> {
-    let args = args_of(request);
-    let forward = parse_changes(args)?;
-    let pane = parse_overlay_pane(args.pane.as_deref())?;
-    let session = Resolver::new(core.library())
-        .session(request.target.as_deref(), args.window.as_deref())?
-        .session;
+fn start_changes(
+    core: &mut Core,
+    session: Uuid,
+    pane: Option<OverlayPane>,
+    forward: bool,
+) -> Result<Receiver<TextChanges>, ControlError> {
     let id = text_changes_page(core, session, pane).map_err(changes_refused)?.id;
-    let answer = core
-        .html_host()
+    core.html_host()
         .and_then(|host| host.step_text_changes(id, forward))
-        .ok_or_else(|| changes_refused(TextChangesFailure::NotLoaded))?;
-    Ok((session, answer))
+        .ok_or_else(|| changes_refused(TextChangesFailure::NotLoaded))
 }
 
 /// The local plain diff page in the slot `pane` of `session` addresses (upstream's `textChangesPage`), with the slot
@@ -247,15 +305,26 @@ fn changes_refused(failure: TextChangesFailure) -> ControlError {
 /// `session.overlay.wrap [on|off|toggle]` (upstream's dispatcher arm, then `setSessionOverlayWrap`): the mode, then the
 /// pane, before the session resolves; an absent mode toggles. Then the local text page in the addressed slot, with the
 /// refusals of [`text_search_page`]. `result.text` names the state left, `wrapped` or `unwrapped`.
-pub(crate) fn wrap(core: &mut Core, request: &Request) -> Outcome {
-    let args = args_of(request);
+pub(crate) fn begin_wrap(core: &mut Core, request: &Request) -> Dispatched {
+    let addressed = toggle_mode(args_of(request), "wrap").and_then(|mode| Ok((mode, addressed(core, request)?)));
+    let (mode, (session, pane)) = match addressed {
+        Ok(addressed) => addressed,
+        Err(error) => return Dispatched::done(Err(error)),
+    };
+    text_action(core, session, pane, &TextPageAction::Wrap(mode), move |core| {
+        Dispatched::done(wrap(core, session, pane, mode))
+    })
+}
+
+/// A follow or wrap request's mode, an absent one toggling.
+fn toggle_mode(args: &Args, command: &str) -> Result<ToggleMode, ControlError> {
     let raw = args.mode.as_deref();
-    let mode = ToggleMode::parse(raw)
-        .ok_or_else(|| ControlError::rejected(format!("invalid overlay wrap mode: {}", raw.unwrap_or("toggle"))))?;
-    let pane = parse_overlay_pane(args.pane.as_deref())?;
-    let session = Resolver::new(core.library())
-        .session(request.target.as_deref(), args.window.as_deref())?
-        .session;
+    ToggleMode::parse(raw)
+        .ok_or_else(|| ControlError::rejected(format!("invalid overlay {command} mode: {}", raw.unwrap_or("toggle"))))
+}
+
+/// The local wrap of the text page in `pane`'s slot of `session`.
+pub(crate) fn wrap(core: &mut Core, session: Uuid, pane: Option<OverlayPane>, mode: ToggleMode) -> Outcome {
     let shown = text_search_page(core, session, pane).map_err(|failure| {
         let failure = match failure {
             TextSearchFailure::Page(failure) => TextWrapFailure::Page(failure),
@@ -268,6 +337,32 @@ pub(crate) fn wrap(core: &mut Core, request: &Request) -> Outcome {
     core.library_mut().set_text_wrap(id, wrapped);
     Ok(ControlResult {
         text: Some((if wrapped { "wrapped" } else { "unwrapped" }).to_owned()),
+        ..with_id(session)
+    })
+}
+
+/// `session.overlay.follow [on|off|toggle]` (upstream's dispatcher arm, then `setSessionOverlayFollow`): the mode, then
+/// the pane, before the session resolves; an absent mode toggles. `result.text` names the state left, `following` or
+/// `paused`.
+pub(crate) fn begin_follow(core: &mut Core, request: &Request) -> Dispatched {
+    let addressed = toggle_mode(args_of(request), "follow").and_then(|mode| Ok((mode, addressed(core, request)?)));
+    let (mode, (session, pane)) = match addressed {
+        Ok(addressed) => addressed,
+        Err(error) => return Dispatched::done(Err(error)),
+    };
+    text_action(core, session, pane, &TextPageAction::Follow(mode), move |core| {
+        Dispatched::done(follow(core, session, pane, mode))
+    })
+}
+
+/// The local follow change of the log page in `pane`'s slot of `session`.
+pub(crate) fn follow(core: &mut Core, session: Uuid, pane: Option<OverlayPane>, mode: ToggleMode) -> Outcome {
+    let (store, _) = super::session_store(core, Some(&uuid_string(session)), None)?;
+    let following = store
+        .set_text_log_following(session, pane, |current| mode.desired_value(current))
+        .map_err(|failure| ControlError::rejected(failure.message()))?;
+    Ok(ControlResult {
+        text: Some((if following { "following" } else { "paused" }).to_owned()),
         ..with_id(session)
     })
 }

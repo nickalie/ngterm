@@ -18,6 +18,7 @@ use uuid::Uuid;
 use super::link_click::RemoteLinkRefusal;
 pub use super::pick::{PresentationPick, PresentationPickAnswer, PresentationPickRef};
 use crate::html::HtmlLoadState;
+use crate::html::text_page::{self, TextChanges, TextLog, TextLogReport};
 use crate::hud::{HudPosition, HudSpec, HudSpinner};
 use crate::model::{
     AgentStatus, AskAlignment, AskChoiceForm, AskForm, AskInputForm, AskInputMode, AskStyle, PendingAsk, StatusShape,
@@ -706,6 +707,14 @@ pub struct PresentationPage {
     /// [`super::hub::PAGE_LINKS_KIND`]; `None`, and left out of the frame, for any other page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub markdown_links: Option<crate::html::markdown_page::MarkdownLinkGrant>,
+    /// Makes a text page a log page (upstream's `textLog`): sent only to a presenter listing
+    /// [`super::hub::PAGE_TEXT_KIND`], which an older one would show as a static page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_log: Option<TextLog>,
+    /// The text state a page handed on resumes with (upstream's `textSeed`): following, query and wrap, applied before
+    /// its first render and report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_seed: Option<PresentationTextState>,
 }
 
 impl PresentationPage {
@@ -738,7 +747,8 @@ impl PresentationPageChange {
     }
 }
 
-/// What the origin asks of a handed-over page (upstream's `PresentationPageAction`).
+/// What the origin asks of a handed-over page (upstream's `PresentationPageAction`). The text actions go only to a
+/// presenter listing [`super::hub::PAGE_TEXT_KIND`]: an older one cannot decode them and would end the stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PresentationPageAction {
@@ -750,6 +760,36 @@ pub enum PresentationPageAction {
     Forward,
     Browser,
     Resize,
+    Follow,
+    Search,
+    Wrap,
+    Changes,
+}
+
+impl PresentationPageAction {
+    /// Whether the presenter answers this action with a [`Body::PageResult`] rather than only `appliedSeq`.
+    #[must_use]
+    pub fn answers_with_result(self) -> bool {
+        matches!(self, Self::Follow | Self::Search | Self::Wrap | Self::Changes)
+    }
+}
+
+/// A follow or wrap request's mode on the wire (upstream's `ControlToggleMode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PresentationToggle {
+    On,
+    Off,
+    Toggle,
+}
+
+/// A one-shot move on a text page (upstream's `PresentationTextStep`): a search step or close, or a diff change step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PresentationTextStep {
+    Next,
+    Prev,
+    Close,
 }
 
 /// One origin request for a handed-over page (upstream's `PresentationPageCommand`). `seq` grows per page, and the
@@ -770,6 +810,14 @@ pub struct PresentationPageCommand {
     /// `None`, and left out of the frame, for every other command, which replaces the size whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge: Option<bool>,
+    /// A follow or wrap request's mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle: Option<PresentationToggle>,
+    /// A search request's new query; a search carries either it or a step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<PresentationTextStep>,
 }
 
 impl PresentationPageCommand {
@@ -801,6 +849,9 @@ pub struct PresentationPageState {
     pub can_go_forward: bool,
     pub hidden: bool,
     pub applied_seq: i64,
+    /// A text page's live state; an origin predating [`super::hub::PAGE_TEXT_KIND`] ignores the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<PresentationTextState>,
 }
 
 /// What a page shows and where its history goes, as a [`PresentationPageState`] carries it.
@@ -833,6 +884,81 @@ impl PresentationPageState {
             can_go_forward: shown.can_go_forward,
             hidden,
             applied_seq,
+            text: None,
+        }
+    }
+}
+
+/// A text page's live state on the presenter (upstream's `PresentationTextState`): a log page's following and last
+/// read, the search query under the presenter's revision with its counts, the wrap, and a diff page's changes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationTextState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub following: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<TextLogReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "cut_query")]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matches: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<usize>,
+    #[serde(default)]
+    pub wrap: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<TextChanges>,
+}
+
+/// A received query, cut as [`PresentationTextState`]'s builder cuts it (upstream's `init`).
+fn cut_query<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.map(|query| text_page::cut_query(&query)))
+}
+
+/// The presenter's answer to one text action by its `seq` (upstream's `PresentationPageResult`), with the page's text
+/// state after it, so the origin replies with state its tree already shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationPageResult {
+    pub page: String,
+    pub seq: i64,
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<PresentationTextState>,
+}
+
+impl PresentationPageResult {
+    /// The longest text or error a result carries, in characters.
+    pub const MAX_TEXT: usize = 1024;
+    /// How long the origin waits for a result before it answers the caller without one.
+    pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// The answer to `command`, its text and error cut to [`Self::MAX_TEXT`] (upstream's `init`).
+    #[must_use]
+    pub fn new(
+        command: &PresentationPageCommand,
+        outcome: Result<Option<String>, String>,
+        state: Option<PresentationTextState>,
+    ) -> Self {
+        let bounded = |text: String| text.chars().take(Self::MAX_TEXT).collect::<String>();
+        let ok = outcome.is_ok();
+        let (text, error) = match outcome {
+            Ok(text) => (text.map(bounded), None),
+            Err(error) => (None, Some(bounded(error))),
+        };
+        Self {
+            page: command.page.clone(),
+            seq: command.seq,
+            ok,
+            text,
+            error,
+            state,
         }
     }
 }
@@ -1125,6 +1251,8 @@ pub enum Body {
     PageDetached(PresentationPageChange),
     PageCommand(PresentationPageCommand),
     PageState(PresentationPageState),
+    /// The presenter's answer to one text action, by its sequence number.
+    PageResult(PresentationPageResult),
     /// A page companion the origin created under the session; the presenter attaches it under its row.
     CompanionPage(PresentationCompanion),
     /// The origin respawned a pane's shell under the same daemon name; carries that pane's new count alone.
@@ -1184,6 +1312,7 @@ impl Body {
             Self::PageDetached(_) => super::hub::PAGE_DETACHED_KIND,
             Self::PageCommand(_) => "page.command",
             Self::PageState(_) => "page.state",
+            Self::PageResult(_) => "page.result",
             Self::CompanionPage(_) => super::hub::COMPANION_PAGE_KIND,
             Self::Respawn(_) => "pane.respawn",
             Self::Agent(_) => super::hub::AGENT_KIND,
@@ -1229,6 +1358,7 @@ impl Body {
             | Self::PageDetached(change) => entry("page", serde_json::to_value(change)),
             Self::PageCommand(command) => entry("page", serde_json::to_value(command)),
             Self::PageState(state) => entry("page", serde_json::to_value(state)),
+            Self::PageResult(result) => entry("page", serde_json::to_value(result)),
             Self::CompanionPage(companion) => entry("companion", serde_json::to_value(companion)),
             Self::Respawn(respawns) => entry("respawn", serde_json::to_value(respawns)),
             Self::Agent(agent) => entry("agent", serde_json::to_value(agent)),
@@ -1505,6 +1635,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         super::hub::PAGE_DETACHED_KIND => Body::PageDetached(required(object, "page")?),
         "page.command" => Body::PageCommand(required(object, "page")?),
         "page.state" => Body::PageState(required(object, "page")?),
+        "page.result" => Body::PageResult(required(object, "page")?),
         super::hub::COMPANION_PAGE_KIND => Body::CompanionPage(required(object, "companion")?),
         "pane.respawn" => Body::Respawn(required(object, "respawn")?),
         "agent" => Body::Agent(required(object, "agent")?),
@@ -1521,6 +1652,10 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
 pub fn negotiated_version(ours: i64, theirs: i64) -> Option<i64> {
     (ours >= 1 && theirs >= 1).then(|| ours.min(theirs))
 }
+
+#[cfg(test)]
+#[path = "frames_text_tests.rs"]
+mod text_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1788,6 +1923,8 @@ mod tests {
             size_percent: pane.is_none().then_some(80),
             follow: pane.is_none(),
             markdown_links: None,
+            text_log: None,
+            text_seed: None,
         }
     }
 
@@ -1857,6 +1994,9 @@ mod tests {
                 action,
                 size_percent,
                 merge: None,
+                toggle: None,
+                query: None,
+                step: None,
             })
         };
         vec![
@@ -1872,15 +2012,14 @@ mod tests {
             Body::PageDetached(PresentationPageChange::page("p1")),
             command(7, PresentationPageAction::Resize, Some(50)),
             command(8, PresentationPageAction::ReloadCurrent, None),
-            Body::PageCommand(PresentationPageCommand {
-                width: None,
-                height: Some(300),
-                page: "p1".to_owned(),
-                seq: 9,
-                action: PresentationPageAction::Resize,
-                size_percent: Some(95),
-                merge: Some(true),
-            }),
+            match command(9, PresentationPageAction::Resize, Some(95)) {
+                Body::PageCommand(resize) => Body::PageCommand(PresentationPageCommand {
+                    height: Some(300),
+                    merge: Some(true),
+                    ..resize
+                }),
+                other => other,
+            },
             Body::PageRequest(page_request("p5", image_source(), None)),
             Body::PageRequest(page_request(
                 "p6",
@@ -2161,6 +2300,9 @@ mod tests {
             action: PresentationPageAction::ReloadOriginal,
             size_percent: None,
             merge: None,
+            toggle: None,
+            query: None,
+            step: None,
         }));
         assert_eq!(
             command["page"],
@@ -2224,6 +2366,9 @@ mod tests {
             width: Some(600),
             height: None,
             merge,
+            toggle: None,
+            query: None,
+            step: None,
         };
         let plain = serde_json::to_value(resize(None)).unwrap();
         assert_eq!(

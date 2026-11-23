@@ -35,6 +35,7 @@ use crate::html::{
 use crate::model::{HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, OverlayPointSize, OverlaySize, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::persist::PageSnapshot;
+use crate::remote::hub::{PAGE_TEXT_KIND, Surface};
 use crate::remote::{REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen};
 
 /// A page that passed validation in a build with no web views (the `html` feature off).
@@ -51,7 +52,7 @@ const PANE_ALREADY_OPEN: &str = "pane overlay already open";
 /// Upstream's `OverlayHtmlError.presenter`.
 const PRESENTER: &str = "a viewer presents this session: an html overlay would open where nobody sees it";
 /// Upstream's `OverlayHtmlError.logRemote`.
-const LOG_REMOTE: &str = "session.overlay.open: a log page is not shown on another Mac";
+const LOG_REMOTE: &str = "session.overlay.open: the Mac presenting this session cannot show a log page";
 /// The bridge's refusals of a page that left its slot (upstream's `handleBridgeRequest`).
 const PAGE_CLOSED: &str = "page closed";
 
@@ -187,7 +188,7 @@ fn open_checked(
     };
     let mut links = None;
     if core.page_belongs_remote(resolved.session, opening.pane) {
-        image = read_for_hand_over(core, &mut opening, image, checked)?;
+        image = read_for_hand_over(core, resolved.session, &mut opening, image, checked)?;
         links = markdown_links(core, &mut opening, checked);
         // a page kept here after all takes the same grant, as a checked click's
         opening.markdown_links.clone_from(&links);
@@ -348,9 +349,11 @@ impl Probes<'_> {
 /// Readies a page the presenting machine is handed, as upstream's control path does before the hand-over: its file is
 /// read here first unless a click `checked` it ([`probe_before_hand_over`]), so a missing, oversized or binary file is
 /// refused before anything is reserved, and a picture travels with the pixels its probe read. A log page is refused
-/// then: a presenter would get the text page without its log state (upstream's `textLogRefusal`).
+/// then when `session`'s presenter lists no live text pages ([`PAGE_TEXT_KIND`]): it would show the page as a static
+/// one (upstream's `textLogRefusal`).
 fn read_for_hand_over(
     core: &Core,
+    session: Uuid,
     opening: &mut PageOpening,
     image: Option<ImageData>,
     checked: bool,
@@ -361,7 +364,12 @@ fn read_for_hand_over(
         probe_before_hand_over(core, opening)?.or(image)
     };
     opening.image_pixels = image.as_ref().map(ImageData::pixels);
-    if opening.text_log.is_some() {
+    if opening.text_log.is_some()
+        && !core
+            .remote
+            .hub
+            .surface_supports(Surface::Pages, PAGE_TEXT_KIND, session)
+    {
         return Err(ControlError::rejected(LOG_REMOTE));
     }
     Ok(image)
@@ -1046,7 +1054,13 @@ impl Core {
     /// helpers called with `forward:`): a HUD here still refuses it, this machine's zoom does not, as it is not what that
     /// machine shows, and only the hand-over replaces a hidden clicked page. The file is read as the control path reads a
     /// page it hands over.
-    pub(crate) fn open_forwarded_link(&mut self, source: HtmlSource, session: Uuid, size_percent: Option<i64>) -> bool {
+    pub(crate) fn open_forwarded_link(
+        &mut self,
+        source: HtmlSource,
+        session: Uuid,
+        size_percent: Option<i64>,
+        text_log: Option<text_page::TextLog>,
+    ) -> bool {
         let hud = self
             .library()
             .store_for_session(session)
@@ -1057,17 +1071,21 @@ impl Core {
         }
         let opening = PageOpening {
             forwarded: true,
+            text_log,
             ..clicked_opening(source, size_percent)
         };
         open_checked(self, Some(&uuid_string(session)), None, opening, None, false).is_ok()
     }
 
-    /// Whether a click in `session` opens its log page here: the placement rule hands no session-wide page to a
-    /// presenting machine, which gets the static text page instead (upstream's `pageBelongsRemote` check in
-    /// `openTextLink`).
+    /// Whether a clicked log in `session` opens as a log page: here, or on a presenting machine listing live text pages;
+    /// one without them is handed the plain text page it can show (upstream's check in `openTextLink`).
     #[must_use]
-    pub fn click_opens_log_here(&self, session: Uuid) -> bool {
+    pub fn click_opens_log(&self, session: Uuid) -> bool {
         !self.page_belongs_remote(session, None)
+            || self
+                .remote
+                .hub
+                .surface_supports(Surface::Pages, PAGE_TEXT_KIND, session)
     }
 
     /// The app's last read of log page `id` (upstream's `setTextLogReport`): recorded only, emitting nothing.

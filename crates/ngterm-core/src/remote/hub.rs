@@ -252,6 +252,11 @@ pub const PAGE_DOCUMENT_KIND: &str = "page.document";
 /// `.md` pictures, so it is handed the page without links or navigation. It names no frame body.
 pub const PAGE_LINKS_KIND: &str = "page.links";
 
+/// Live text pages (upstream's `pageTextKind`): log pages ([`super::frames::PresentationPage::text_log`]), the text
+/// page actions with their [`super::frames::Body::PageResult`] answers, the text state in `page.state` and the log tail
+/// on the page channel. A log page and a text action go only to a presenter listing it.
+pub const PAGE_TEXT_KIND: &str = "page.text";
+
 /// A viewer draws the [`EXPANDED`](crate::model::StatusShape::EXPANDED) shapes (upstream's `statusShapesKind`).
 /// Without this kind, the hub clears shapes outside [`ORIGINAL`](crate::model::StatusShape::ORIGINAL), except the
 /// checkmark if the viewer lists [`STATUS_CHECKMARK_KIND`]. The viewer draws its own settings shape instead.
@@ -282,7 +287,7 @@ pub const PAGE_DETACHED_KIND: &str = "page.detached";
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
-pub const SUPPORTED_KINDS: [&str; 31] = [
+pub const SUPPORTED_KINDS: [&str; 32] = [
     "status",
     "hud",
     "notify",
@@ -304,6 +309,7 @@ pub const SUPPORTED_KINDS: [&str; 31] = [
     super::page_tunnel::TUNNEL_KIND,
     COMPANION_PAGE_KIND,
     PAGE_DETACHED_KIND,
+    PAGE_TEXT_KIND,
     PAGE_KINDS[0],
     PAGE_KINDS[1],
     PAGE_KINDS[2],
@@ -684,7 +690,11 @@ impl PresentationHub {
             {
                 self.events.push(HubEvent::PresenterFrame(session, Box::new(body)));
             }
-            body @ (Body::PageRejected(_) | Body::PageClosed(_) | Body::PageDetached(_) | Body::PageState(_))
+            body @ (Body::PageRejected(_)
+            | Body::PageClosed(_)
+            | Body::PageDetached(_)
+            | Body::PageState(_)
+            | Body::PageResult(_))
                 if self.surfaces.holder(session, Surface::Pages) == Some(from) =>
             {
                 self.events.push(HubEvent::PresenterFrame(session, Box::new(body)));
@@ -1449,6 +1459,7 @@ mod tests {
                 "page.tunnel",
                 "companion.page",
                 "page.detached",
+                "page.text",
                 "page.request",
                 "page.rejected",
                 "page.close",

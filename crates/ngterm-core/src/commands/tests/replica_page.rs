@@ -1988,3 +1988,34 @@ fn a_content_replicas_read_stops_past_its_cap_and_keeps_the_origins_refusal() {
         Some(Err("unreadable text file: /src/main.go".to_owned()))
     );
 }
+
+/// Upstream's interim `refuseUnsupportedReplicaTextActions` (#978): this build lists no live text pages, so a text
+/// action an origin sends anyway answers one failed `page.result` by its sequence, an incomplete one as invalid, one
+/// for a page not shown here as such, and leaves `appliedSeq` alone.
+#[test]
+fn a_text_action_answers_a_failed_result_and_leaves_the_applied_sequence() {
+    let mut replica = Replica::new();
+    replica.request(Replica::page(Replica::url("https://example.com/")));
+    replica.commit();
+    replica.origin_frame(
+        "page.command",
+        json!({"page": ORIGIN, "seq": 7, "action": "follow", "toggle": "on"}),
+    );
+    replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 8, "action": "search"}));
+    replica.origin_frame(
+        "page.command",
+        json!({"page": "elsewhere", "seq": 2, "action": "wrap", "toggle": "on"}),
+    );
+    assert_eq!(
+        replica.payloads("page.result"),
+        [
+            json!({"page": ORIGIN, "seq": 7, "ok": false, "error": "text page actions are not supported"}),
+            json!({"page": ORIGIN, "seq": 8, "ok": false, "error": "invalid text page action"}),
+            json!({"page": "elsewhere", "seq": 2, "ok": false, "error": "page not shown"}),
+        ]
+    );
+    replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 9, "action": "hide"}));
+    let states = replica.states();
+    assert_eq!(states.last().unwrap()["appliedSeq"], json!(9));
+    assert!(states.iter().all(|state| state["appliedSeq"] != json!(7)));
+}

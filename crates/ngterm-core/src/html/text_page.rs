@@ -7,6 +7,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use serde::{Deserialize, Serialize};
+
 use super::markdown_page::escaped;
 use crate::terminal_text::stripping_escapes;
 
@@ -21,6 +23,15 @@ pub const DEFAULT_TAIL: usize = 5_000;
 pub const MAX_TAIL: usize = 100_000;
 /// The most a log page reads from its file's end, so one huge line cannot pull in the file.
 pub const MAX_TAIL_BYTES: usize = 2 << 20;
+/// The longest search query in characters (upstream's `TextSearch.maxQuery`): a longer one is cut where it is set, so
+/// the page searches what the model stores and a page command carrying it stays inside a frame.
+pub const MAX_QUERY: usize = 16_384;
+
+/// `query` cut to [`MAX_QUERY`] characters.
+#[must_use]
+pub fn cut_query(query: &str) -> String {
+    query.chars().take(MAX_QUERY).collect()
+}
 
 /// Lowercased extensions a plain click opens as a log page, following its end.
 const LOG_EXTENSIONS: &[&str] = &["log", "out"];
@@ -28,8 +39,8 @@ const LOG_EXTENSIONS: &[&str] = &["log", "out"];
 const DIFF_LANGUAGE: &str = "diff";
 
 /// A text page's request to show only a log's last `tail` lines, following its end when `follow` is set (upstream's
-/// `TextLog`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `TextLog`), as a page request carries it to a presenter listing `page.text`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextLog {
     pub tail: usize,
     pub follow: bool,
@@ -37,7 +48,8 @@ pub struct TextLog {
 
 /// What the app last read for a log page (upstream's `TextLogReport`): the lines shown, a clipped first line, a file
 /// that is missing (`waiting`) or turned binary (`unreadable`, the last good text still shown).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TextLogReport {
     pub lines: usize,
     pub clipped: bool,
@@ -85,7 +97,7 @@ impl TextSearch {
 
 /// A diff page's count of changes, a change being one run of removed and added lines, and the one it last stepped to,
 /// from 1 and 0 before any step (upstream's `TextChanges`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextChanges {
     pub count: usize,
     pub current: usize,

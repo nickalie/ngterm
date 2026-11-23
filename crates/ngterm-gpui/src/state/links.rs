@@ -202,8 +202,8 @@ impl AppState {
                 session,
                 size_percent,
             } => {
-                // a page the presenting machine is handed stays the static text page it already shows there
-                let document = if log && self.core.click_opens_log_here(session) {
+                // a presenting machine without live text pages is handed the plain page it can show
+                let document = if log && self.core.click_opens_log(session) {
                     Document::Log
                 } else {
                     Document::Text(line)

@@ -88,7 +88,7 @@ impl FakeChannel {
     }
 
     /// Waits until the writer queue holds `count` lines.
-    fn wait_queued(&self, count: usize) {
+    pub(super) fn wait_queued(&self, count: usize) {
         let deadline = Instant::now() + PATIENCE;
         let mut queue = self.lock();
         while queue.lines.len() < count {

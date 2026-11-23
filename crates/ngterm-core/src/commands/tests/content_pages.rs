@@ -64,6 +64,10 @@ impl HtmlHost for ContentHost {
         check(path, "text")
     }
 
+    fn check_log(&self, path: &str, _: usize) -> Result<(), String> {
+        check(path, "text")
+    }
+
     fn display_scale(&self, _: Uuid) -> f64 {
         2.0
     }
@@ -483,7 +487,7 @@ fn acquire(origin: &mut Origin, serial: u64, presenter: &super::remote::Viewer) 
 }
 
 /// A headless origin has no web views: its own probe reads a page's file before the hand-over, a picture's size with
-/// it, and a log page is refused after its probe as it is with web views (upstream's `textLogRefusal`).
+/// it, and a log page goes over after its probe to a presenter listing live text pages, as it does with web views.
 #[test]
 fn a_headless_origin_probes_a_content_page_before_handing_it_over() {
     let files = Files::new();
@@ -507,9 +511,10 @@ fn a_headless_origin_probes_a_content_page_before_handing_it_over() {
             files.path("missing.go")
         ))
     );
-    assert_eq!(
+    assert!(
         open_content(&mut origin, "text", &files.path("main.go"), |a| a.follow_file =
-            Some(true)),
-        failure("session.overlay.open: a log page is not shown on another Mac")
+            Some(true))
+        .ok
     );
+    assert_eq!(request(&origin)["textLog"], json!({"tail": 5_000, "follow": true}));
 }

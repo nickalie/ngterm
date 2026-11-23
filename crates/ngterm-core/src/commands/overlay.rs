@@ -22,7 +22,7 @@ use uuid::Uuid;
 use super::hud::PANE_NOT_VISIBLE;
 use super::overlay_page::{self, PAGE_NO_READ, PAGE_NO_RESULT, PageOpening};
 use super::surface::{buffer_extent, last_content_lines};
-use super::{Outcome, ToggleMode, args_of, session_store, with_id};
+use super::{Outcome, args_of, session_store, with_id};
 use crate::Core;
 use crate::error::{ControlError, Noun};
 use crate::html::text_page::{self, TextLog};
@@ -150,8 +150,6 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::OverlayHide => visibility(core, target, args, OverlayVisibilityMode::Hide),
         SessionCmd::OverlayShow => visibility(core, target, args, OverlayVisibilityMode::Show),
         SessionCmd::OverlayToggle => visibility(core, target, args, OverlayVisibilityMode::Toggle),
-        SessionCmd::OverlayFollow => follow(core, target, args),
-        SessionCmd::OverlayWrap => super::overlay_text::wrap(core, request),
         SessionCmd::OverlayJobRun => claim_job(core, target, args.token.as_deref()),
         SessionCmd::OverlayPageServe => claim_page_serve(core, target),
         other => Err(ControlError::NotSupported(ngterm_proto::Command::Session(other))),
@@ -554,24 +552,6 @@ fn visibility(core: &mut Core, target: Option<&str>, args: &Args, mode: OverlayV
     let shown = store.session(id).is_some_and(|session| session.any_overlay_shown(pane));
     Ok(ControlResult {
         text: Some((if shown { "shown" } else { "hidden" }).to_owned()),
-        ..with_id(id)
-    })
-}
-
-/// `session.overlay.follow [on|off|toggle]` (upstream's dispatcher arm, then `setSessionOverlayFollow`): the mode, then
-/// the pane, before the session resolves; an absent mode toggles. `result.text` names the state left, `following` or
-/// `paused`.
-fn follow(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
-    let raw = args.mode.as_deref();
-    let mode = ToggleMode::parse(raw)
-        .ok_or_else(|| ControlError::rejected(format!("invalid overlay follow mode: {}", raw.unwrap_or("toggle"))))?;
-    let pane = parse_overlay_pane(args.pane.as_deref())?;
-    let (store, id) = session_store(core, target, args.window.as_deref())?;
-    let following = store
-        .set_text_log_following(id, pane, |current| mode.desired_value(current))
-        .map_err(|failure| ControlError::rejected(failure.message()))?;
-    Ok(ControlResult {
-        text: Some((if following { "following" } else { "paused" }).to_owned()),
         ..with_id(id)
     })
 }

@@ -36,7 +36,9 @@ use super::frames::{
     self, Body, PresentationFrame, PresentationPage, PresentationPageAction, PresentationPageChange,
     PresentationPageCommand, PresentationPageSource, PresentationPane,
 };
-use super::hub::{PAGE_CONTENT_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, SubscriberId, Surface};
+use super::hub::{
+    PAGE_CONTENT_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, PAGE_TEXT_KIND, SubscriberId, Surface,
+};
 use super::page_serve::ServedPage;
 use crate::Core;
 use crate::commands::overlay_page::PageOpening;
@@ -125,10 +127,14 @@ pub(crate) fn travels(source: &HtmlSource) -> bool {
 
 /// Whether `session`'s presenter builds a page of `source`: a content page needs [`PAGE_CONTENT_KIND`] in its hello, a
 /// clicked document [`PAGE_DOCUMENT_KIND`] too, since an older presenter fails its whole stream on a source it cannot
-/// decode (upstream's guards in `openRemotePage`).
-fn presenter_builds(core: &Core, session: Uuid, source: &PresentationPageSource) -> bool {
+/// decode (upstream's guards in `openRemotePage`); a `log` page also needs [`PAGE_TEXT_KIND`], as an older presenter
+/// would show it as a static page (upstream's `presenterShows`).
+fn presenter_builds(core: &Core, session: Uuid, source: &PresentationPageSource, log: bool) -> bool {
     let hub = &core.remote.hub;
     if source.is_content() && !hub.surface_supports(Surface::Pages, PAGE_CONTENT_KIND, session) {
+        return false;
+    }
+    if log && !hub.surface_supports(Surface::Pages, PAGE_TEXT_KIND, session) {
         return false;
     }
     !matches!(source, PresentationPageSource::Document { .. })
@@ -175,6 +181,8 @@ fn page_request(
         size_percent: size.percent,
         follow: opening.follow,
         markdown_links: overlay.markdown_links.clone(),
+        text_log: overlay.text_log,
+        text_seed: None,
     }
 }
 
@@ -241,7 +249,7 @@ pub(crate) fn open_remote_page(
     if !core.presents_remotely(found, identity) {
         return RemotePageOpen::Local;
     }
-    if let Some(refusal) = presenter_refusal(core, session, &source, &overlay.source) {
+    if let Some(refusal) = presenter_refusal(core, session, &source, overlay) {
         return refusal;
     }
     let held_links = overlay.markdown_links.clone();
@@ -308,15 +316,15 @@ fn presenter_refusal(
     core: &Core,
     session: Uuid,
     source: &PresentationPageSource,
-    page: &HtmlSource,
+    page: &HtmlOverlay,
 ) -> Option<RemotePageOpen> {
     let pages = PAGE_KINDS
         .iter()
         .all(|kind| core.remote.hub.surface_supports(Surface::Pages, kind, session));
-    if !pages || !presenter_builds(core, session, source) {
+    if !pages || !presenter_builds(core, session, source, page.text_log.is_some()) {
         return Some(RemotePageOpen::Unsupported);
     }
-    unreachable_loopback(core, session, page).then_some(RemotePageOpen::Loopback)
+    unreachable_loopback(core, session, &page.source).then_some(RemotePageOpen::Loopback)
 }
 
 /// Closes the hidden clicked page a forwarded click replaces, last of all, so a refused open never costs it; the
@@ -399,7 +407,7 @@ impl Core {
     }
 
     /// Whether `slot` holds a page shown on the stream it was handed to: not parked, and that stream still presents.
-    fn page_shown_by_owner(&self, session: Uuid, slot: &RemoteOverlaySlot) -> bool {
+    pub(super) fn page_shown_by_owner(&self, session: Uuid, slot: &RemoteOverlaySlot) -> bool {
         slot.page.as_ref().is_some_and(|page| !page.parked)
             && self.remote.hub.has_presenter(session)
             && self.remote.hub.surface_generation(Surface::Pages, session) == slot.owner
@@ -438,6 +446,9 @@ impl Core {
             action,
             size_percent: size.percent,
             merge,
+            toggle: None,
+            query: None,
+            step: None,
         };
         self.remote
             .hub
@@ -741,8 +752,8 @@ impl Core {
         let Some(source) = presentation_source(&overlay.source, pixels) else {
             return;
         };
-        // a content page waits for a presenter that builds it
-        if !presenter_builds(self, session, &source) {
+        // a content page, and a log page, wait for a presenter that builds it
+        if !presenter_builds(self, session, &source, overlay.text_log.is_some()) {
             return;
         }
         let Some(identity) = self
@@ -778,7 +789,10 @@ impl Core {
         };
         let token = uuid_string(Uuid::new_v4());
         let channel = source.uses_channel();
-        let request = Body::PageRequest(page_request(&overlay, &opening, source, identity, token.clone(), sent));
+        let mut request = page_request(&overlay, &opening, source, identity, token.clone(), sent);
+        // the text state last mirrored here, never a step: the next presenter resumes with its following, query and wrap
+        request.text_seed = super::remote_text::text_state(&overlay);
+        let request = Body::PageRequest(request);
         if !fits_one_frame(&request) {
             return;
         }
@@ -800,6 +814,9 @@ impl Core {
                 action: PresentationPageAction::Hide,
                 size_percent: None,
                 merge: None,
+                toggle: None,
+                query: None,
+                step: None,
             };
             self.remote
                 .hub
@@ -832,6 +849,7 @@ impl Core {
                         ServedPage {
                             source: page.overlay.source.clone(),
                             links: page.overlay.markdown_links.clone(),
+                            log: page.overlay.text_log,
                         },
                     )
                 })

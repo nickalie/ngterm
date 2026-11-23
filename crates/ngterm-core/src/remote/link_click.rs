@@ -25,6 +25,7 @@ use super::frames::{Body, PresentationLinkClick, PresentationLinkRefusal, Presen
 use super::hub::LINK_CLICK_KIND;
 use crate::Core;
 use crate::html::HtmlSource;
+use crate::html::text_page::{self, TextLog};
 use crate::hud::HudSpec;
 use crate::link_policy::{self, ClickOrigin, Route};
 use crate::model::StatusPane;
@@ -281,6 +282,11 @@ impl Core {
             return Err(RemoteLinkRefusal::NotFound);
         }
         let path = |path: std::path::PathBuf| path.to_string_lossy().into_owned();
+        // a presenter without live text pages is handed the plain page it can show
+        let log = (route.opens_as_log() && self.click_opens_log(session)).then_some(TextLog {
+            tail: text_page::DEFAULT_TAIL,
+            follow: true,
+        });
         let (source, size_percent) = match route {
             Route::Image { path: file, .. } => (HtmlSource::Image { path: path(file) }, None),
             Route::Markdown {
@@ -301,7 +307,7 @@ impl Core {
             } => (HtmlSource::Text { path: path(file), line }, size_percent),
             _ => return Err(RemoteLinkRefusal::NotAPage),
         };
-        if self.open_forwarded_link(source, session, size_percent) {
+        if self.open_forwarded_link(source, session, size_percent, log) {
             Ok(())
         } else {
             Err(RemoteLinkRefusal::NotOpened)

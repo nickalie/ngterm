@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 use super::frames::{
     self, Body, PageShown, PresentationPage, PresentationPageAction, PresentationPageChange, PresentationPageCommand,
-    PresentationPageSource, PresentationPageState,
+    PresentationPageResult, PresentationPageSource, PresentationPageState,
 };
 use super::hub::PAGE_DETACHED_KIND;
 use super::page_channel::{ChannelEvent, ChannelFailure, ChannelLink, Permits, Pull, ReplicaChannel, RequestId};
@@ -58,6 +58,10 @@ mod tests;
 pub const ORIGIN_UNREACHABLE: &str = "the origin cannot be reached for this page";
 /// The page was placed and is gone already (upstream's refusal).
 const NOT_SHOWN: &str = "page not shown";
+/// A text action this presenter does not run yet (upstream's interim refusal).
+const TEXT_ACTIONS_UNSUPPORTED: &str = "text page actions are not supported";
+/// A text action whose fields do not make one (upstream's refusal).
+const INVALID_TEXT_ACTION: &str = "invalid text page action";
 const NO_SESSION: &str = "no such session";
 const INVALID_PAGE: &str = "invalid page id";
 const INVALID_URL: &str = "invalid url";
@@ -825,6 +829,9 @@ impl Core {
     /// and the next state report carries the request's sequence number.
     pub(crate) fn apply_replica_page_command(&mut self, command: &PresentationPageCommand, session: Uuid) {
         let Some((pane, local)) = self.replica_local(&command.page, session) else {
+            if command.action.answers_with_result() {
+                return self.refuse_text_action(command, session, NOT_SHOWN);
+            }
             // a loopback page still waiting for its forward takes the command once it is placed
             if let Some(pending) = self
                 .remote
@@ -868,6 +875,18 @@ impl Core {
                 }
                 None
             }
+            PresentationPageAction::Follow
+            | PresentationPageAction::Search
+            | PresentationPageAction::Wrap
+            | PresentationPageAction::Changes => {
+                // this build lists no live text pages, so an origin that sends a text action anyway is told so
+                let error = if super::remote_text::TextPageAction::of(command).is_some() {
+                    TEXT_ACTIONS_UNSUPPORTED
+                } else {
+                    INVALID_TEXT_ACTION
+                };
+                return self.refuse_text_action(command, session, error);
+            }
         };
         if let Some(refusal) = refusal {
             tracing::info!(action = ?command.action, %refusal, "an origin request was not applied");
@@ -875,6 +894,14 @@ impl Core {
         if let Some(record) = self.remote.viewer.pages.records.get_mut(&local) {
             record.applied_seq = record.applied_seq.max(command.seq);
         }
+    }
+
+    /// Answers a text action with a failed `page.result` by its sequence, leaving `appliedSeq` alone (upstream's
+    /// `answerTextAction`).
+    fn refuse_text_action(&self, command: &PresentationPageCommand, session: Uuid, error: &str) {
+        tracing::info!(action = ?command.action, error, "an origin text action was not applied");
+        let result = PresentationPageResult::new(command, Err(error.to_owned()), None);
+        self.answer_origin(session, Body::PageResult(result));
     }
 
     /// Hides or shows only the slot holding page `local`, never its neighbours (upstream's `setReplicaPageHidden`).

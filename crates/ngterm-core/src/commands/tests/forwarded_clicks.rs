@@ -16,7 +16,7 @@ use super::wire;
 use crate::hud::HudSpec;
 use crate::persist::settings::LinkOpenMode;
 use crate::remote::frames::PresentationHud;
-use crate::remote::hub::{LINK_CLICK_KIND, SUPPORTED_KINDS};
+use crate::remote::hub::{LINK_CLICK_KIND, PAGE_TEXT_KIND, SUPPORTED_KINDS};
 use crate::remote::link_click::{RemoteLinkClick, RemoteLinkRefusal};
 
 /// Opens a HUD saying `message` over `session` as `session.hud.open` does.
@@ -34,6 +34,11 @@ fn open_hud(fixture: &mut super::Fixture, session: Uuid, message: &str) {
 /// A presented split session whose presenter speaks every kind, its panes' directories set, and a folder of content
 /// files with a `src/` beside it.
 fn origin() -> (Origin, Files) {
+    origin_listing(&SUPPORTED_KINDS)
+}
+
+/// [`origin`] with a presenter whose hello lists `kinds`.
+fn origin_listing(kinds: &[&str]) -> (Origin, Files) {
     let files = Files::new();
     std::fs::create_dir_all(files.root.join("src")).unwrap();
     std::fs::write(files.root.join("src/main.py"), "print(1)\n").unwrap();
@@ -41,7 +46,7 @@ fn origin() -> (Origin, Files) {
     let split = files.root.join("split");
     std::fs::create_dir_all(split.join("src")).unwrap();
     std::fs::write(split.join("src/main.py"), "print(2)\n").unwrap();
-    let mut origin = content_origin(&SUPPORTED_KINDS);
+    let mut origin = content_origin(kinds);
     origin.fixture().core.set_hud_body_dir(files.root.join("huds"));
     let session = origin.session();
     let (left, right) = (files.path(""), files.path("split"));
@@ -611,4 +616,33 @@ fn a_click_under_a_cover_plays_the_alert() {
     assert!(viewer.sent("link.click").is_empty());
     assert_eq!(viewer.fixture.core.take_status_sounds(), ["default"]);
     assert_eq!(hud_message(&mut viewer), None);
+}
+
+/// Upstream's `aClickedLogReachesThePresenterAsALogPage` (#978): a log clicked on a presented pane opens as a following
+/// log page on a presenter listing `page.text`, and as the plain text page on an older one.
+#[test]
+fn a_forwarded_log_click_opens_a_log_page_only_on_a_presenter_with_live_text_pages() {
+    let older: Vec<&str> = SUPPORTED_KINDS
+        .into_iter()
+        .filter(|kind| *kind != PAGE_TEXT_KIND)
+        .collect();
+    for (kinds, expected) in [
+        (SUPPORTED_KINDS.to_vec(), Some(json!({"tail": 5_000, "follow": true}))),
+        (older, None),
+    ] {
+        let (mut origin, files) = origin_listing(&kinds);
+        std::fs::write(files.root.join("app.log"), "one\n").unwrap();
+        let (left, _) = identities(&origin);
+        click(&mut origin, "app.log", left, "overlay");
+        let [request] = requests(&origin).try_into().unwrap();
+        let page = &request["page"];
+        assert_eq!(page["source"], json!({"text": {"path": files.path("app.log")}}));
+        assert_eq!(page.get("textLog").cloned(), expected);
+        let session = origin.session();
+        assert_eq!(
+            origin.fixture().core.click_opens_log(session),
+            expected.is_some(),
+            "a click on this machine's own terminal goes the same way"
+        );
+    }
 }

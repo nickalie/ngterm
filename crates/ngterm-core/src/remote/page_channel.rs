@@ -424,7 +424,12 @@ impl ReplicaChannel {
                     });
                 }
             }
-            PageServeFrame::Resource { .. } | PageServeFrame::Cancel { .. } | PageServeFrame::Bridge { .. } => {
+            // this machine asks for no log tail yet, so an answer to one names no request
+            PageServeFrame::LogHead { .. } | PageServeFrame::LogUnchanged { .. } => self.permits.give(),
+            PageServeFrame::Resource { .. }
+            | PageServeFrame::Cancel { .. }
+            | PageServeFrame::Bridge { .. }
+            | PageServeFrame::LogTail { .. } => {
                 self.permits.give();
                 events.extend(self.close("a frame only this machine sends"));
             }

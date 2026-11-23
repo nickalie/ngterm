@@ -22,7 +22,7 @@ use super::frames::{
 };
 use super::hub::{
     AGENT_KIND, COMPANION_PAGE_KIND, HELD_KINDS, LINK_CLICK_KIND, NO_OVERLAYS_KIND, OPT_IN_KINDS, PAGE_CONTENT_KIND,
-    PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, PICK_KINDS, SUPPORTED_KINDS,
+    PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, PAGE_TEXT_KIND, PICK_KINDS, SUPPORTED_KINDS,
 };
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
@@ -42,13 +42,16 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 /// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
 /// once. `status.shapes` ([`super::hub::STATUS_SHAPES_KIND`]) is always listed: desktop and both mobile apps draw
 /// every shape it names. `status.checkmark` ([`super::hub::STATUS_CHECKMARK_KIND`]) is always listed too: desktop
-/// and both mobile apps draw the checkmark. The pick kinds ([`PICK_KINDS`]) and the held kinds ([`HELD_KINDS`]) are
-/// left out: a viewer that shows handed-over picks or takes what a headless origin held adds them
+/// and both mobile apps draw the checkmark. Live text pages ([`PAGE_TEXT_KIND`]) are not listed yet: an origin refuses
+/// this build's presenter a log page and the text actions. The pick kinds ([`PICK_KINDS`]) and the held kinds
+/// ([`HELD_KINDS`]) are left out: a viewer that shows handed-over picks or takes what a headless origin held adds them
 /// ([`PresentationClient::set_shows_picks`], [`PresentationClient::set_takes_held`]).
 #[must_use]
 pub fn viewer_kinds(pages: bool) -> Vec<String> {
     SUPPORTED_KINDS
         .iter()
+        // listed once this build's presenter runs a text page's bridge for its origin
+        .filter(|kind| **kind != PAGE_TEXT_KIND)
         .filter(|kind| !PICK_KINDS.contains(kind) && !HELD_KINDS.contains(kind))
         .filter(|kind| {
             pages
@@ -465,6 +468,7 @@ impl PresentationClient {
             | Body::PageClosed(_)
             | Body::PageDetached(_)
             | Body::PageState(_)
+            | Body::PageResult(_)
             // listed only when this viewer shows agents, so never sent to another
             | Body::Agent(_)
             | Body::Unknown(_) => {}
@@ -802,6 +806,12 @@ mod tests {
             [true, false],
             "a presenter that shows pages follows a Markdown page's links"
         );
+        assert!(
+            [true, false]
+                .iter()
+                .all(|pages| !viewer_kinds(*pages).iter().any(|kind| kind == PAGE_TEXT_KIND)),
+            "this build's presenter runs no live text page for its origin yet"
+        );
         // desktop Attach Remote shows no agent chat, so it never asks for the agent kind; every viewer (desktop, both
         // mobile apps) draws the eleven status shapes `status.shapes` names, so each lists it
         for pages in [false, true] {
@@ -912,7 +922,11 @@ mod tests {
         expected.extend(PICK_KINDS.map(str::to_owned));
         expected.extend(HELD_KINDS.map(str::to_owned));
         assert_eq!(hello.kinds, expected);
-        assert_eq!(hello.kinds.len(), SUPPORTED_KINDS.len(), "every kind");
+        assert_eq!(
+            hello.kinds.len(),
+            SUPPORTED_KINDS.len() - 1,
+            "every kind but live text pages"
+        );
         harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Presenter);
         let request = PresentationPage {
             width: None,
@@ -933,6 +947,8 @@ mod tests {
             size_percent: None,
             follow: false,
             markdown_links: None,
+            text_log: None,
+            text_seed: None,
         };
         let command = PresentationPageCommand {
             width: None,
@@ -942,6 +958,9 @@ mod tests {
             action: PresentationPageAction::Hide,
             size_percent: None,
             merge: None,
+            toggle: None,
+            query: None,
+            step: None,
         };
         let effects_before = harness.effects.len();
         harness.deliver(&line(Body::PageRequest(request.clone()), 7, 2));

@@ -153,7 +153,8 @@ impl RemotePage {
         seq
     }
 
-    /// Takes the presenter's report (upstream's `apply`); whether the reported visibility changed. A report echoing
+    /// Takes the presenter's report (upstream's `apply`); whether the reported visibility, a log's following, the search
+    /// query or the wrap changed, the counts alone never counting. A report echoing
     /// the pending request's sequence settles it; an older one leaves the request pending.
     pub(crate) fn apply(&mut self, state: &PresentationPageState) -> bool {
         let was_hidden = self.hidden;
@@ -172,7 +173,11 @@ impl RemotePage {
         {
             self.requested = None;
         }
-        was_hidden != self.hidden
+        let text_changed = state
+            .text
+            .as_ref()
+            .is_some_and(|text| crate::remote::remote_text::mirror(&mut self.overlay, text));
+        was_hidden != self.hidden || text_changed
     }
 }
 
@@ -499,6 +504,35 @@ impl AppStore {
         Some((job, seq))
     }
 
+    /// Numbers a text action for page `job` of `session` (upstream's `nextSeq` in `remoteTextAction`); `None` without
+    /// that page.
+    pub(crate) fn number_remote_text_command(&mut self, session: Uuid, job: &str) -> Option<i64> {
+        self.session_mut(session)?
+            .remote_overlays
+            .update_page(job, RemotePage::next_seq)
+    }
+
+    /// Takes the text state a presenter's result carried into page `job` of `session` (upstream's `apply(_ text:)`),
+    /// emitting `tree.changed` on a change of following, query or wrap.
+    pub(crate) fn mirror_remote_text(
+        &mut self,
+        session: Uuid,
+        job: &str,
+        text: &crate::remote::frames::PresentationTextState,
+    ) {
+        let changed = self
+            .session_mut(session)
+            .and_then(|found| {
+                found
+                    .remote_overlays
+                    .update_page(job, |page| crate::remote::remote_text::mirror(&mut page.overlay, text))
+            })
+            .unwrap_or(false);
+        if changed {
+            self.schedule_tree_changed();
+        }
+    }
+
     /// The viewer closed its surface for `job`, so a slot held only for that surface is freed.
     pub fn remote_overlay_surface_closed(&mut self, session: Uuid, job: &str) {
         self.tracking_remote_slots(session, |overlays| overlays.surface_gone(job));
@@ -533,6 +567,9 @@ impl AppStore {
                 action,
                 size_percent: None,
                 merge: None,
+                toggle: None,
+                query: None,
+                step: None,
             };
             self.remote_overlay_changes
                 .push(RemoteOverlayChange::PageCommand { session, command });

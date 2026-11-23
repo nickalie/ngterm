@@ -117,6 +117,8 @@ impl Core {
             size_percent: None,
             follow: false,
             markdown_links: None,
+            text_log: None,
+            text_seed: None,
         };
         let companions = &mut self.remote.page_serve.companions;
         companions.tokens.retain(|_, token| token.deadline >= now);

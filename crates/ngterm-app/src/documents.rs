@@ -8,12 +8,12 @@
 //! sharing, so a log's writer can still append to it, rename it away or replace it while a page reads.
 
 use std::collections::HashMap;
-use std::fs::{File, Metadata};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use image::{ImageDecoder as _, ImageFormat, ImageReader};
-use ngterm_core::bounded_file::{self, Failure};
+pub use ngterm_core::bounded_file::FileStamp;
+use ngterm_core::bounded_file::{self, Failure, read_tail};
 use ngterm_core::html::image_page::{self, ImageData};
 use ngterm_core::html::markdown_page::{self, Embedded, MarkdownDocument};
 use ngterm_core::html::{ReplicaContent, document_page};
@@ -197,44 +197,6 @@ pub fn load_text(path: &Path) -> Result<String, String> {
 /// [`load_text`]'s refusals.
 pub fn check_text(path: &Path) -> Result<(), String> {
     load_text(path).map(|_| ())
-}
-
-/// One version of a file (upstream's `BoundedFile.FileStamp`): a change of identity means it was replaced, of size or
-/// modification time that it was written. Unix: the device and inode, the size and the modification time to the
-/// nanosecond; Windows: the volume serial number and file index, the size and the last-write time
-/// (`GetFileInformationByHandle`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileStamp {
-    /// The device or volume, then the inode or file index.
-    pub identity: (u64, u64),
-    pub size: u64,
-    /// The modification time in the platform's own units: seconds and nanoseconds on Unix, 100 ns ticks on Windows.
-    pub modified: (i64, i64),
-}
-
-/// The end of a file (upstream's `BoundedFile.TailRead`): its bytes, the file offset they start at, and its stamp.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TailRead {
-    data: Vec<u8>,
-    offset: u64,
-    stamp: FileStamp,
-}
-
-/// The last `max_bytes` of the regular file at `path` plus the byte before them, which tells
-/// [`log_tail::snapshot`] whether the window opens on a line boundary (upstream's `BoundedFile.readTail`). Any size is
-/// accepted. `None` when the file still has `unchanged_from`'s stamp: nothing is read then.
-///
-/// Fails as unreadable when the file is missing, not a regular file, unreadable, or shrank under the read.
-fn read_tail(path: &Path, max_bytes: u64, unchanged_from: Option<&FileStamp>) -> Result<Option<TailRead>, Failure> {
-    let (file, metadata) = bounded_file::opened(path)?;
-    let stamp = file_stamp(&file, &metadata).ok_or(Failure::Unreadable)?;
-    if unchanged_from == Some(&stamp) {
-        return Ok(None);
-    }
-    let offset = stamp.size.saturating_sub(max_bytes.saturating_add(1));
-    let count = usize::try_from(stamp.size - offset).map_err(|_| Failure::Unreadable)?;
-    let data = read_fully(&file, offset, count).ok_or(Failure::Unreadable)?;
-    Ok(Some(TailRead { data, offset, stamp }))
 }
 
 /// What a log page shows and the version of the file it came from (upstream's `TextProbe.LogRead`); `snapshot` is
@@ -484,67 +446,6 @@ impl Embedding {
     pub fn embedded(self) -> Embedded {
         self.embedded
     }
-}
-
-/// `count` bytes of `file` from `offset`, positioned reads that leave the descriptor's own offset alone; `None` when
-/// the file ends first, as one truncated under the read does.
-fn read_fully(file: &File, offset: u64, count: usize) -> Option<Vec<u8>> {
-    let mut data = vec![0; count];
-    let mut filled = 0;
-    while filled < count {
-        match read_at(file, &mut data[filled..], offset + filled as u64) {
-            Ok(0) => return None,
-            Ok(read) => filled += read,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return None,
-        }
-    }
-    Some(data)
-}
-
-#[cfg(unix)]
-fn read_at(file: &File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
-    std::os::unix::fs::FileExt::read_at(file, buffer, offset)
-}
-
-#[cfg(windows)]
-fn read_at(file: &File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
-    std::os::windows::fs::FileExt::seek_read(file, buffer, offset)
-}
-
-#[cfg(unix)]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "Windows' stamp comes from a query that can fail; both platforms share the signature"
-)]
-fn file_stamp(_: &File, metadata: &Metadata) -> Option<FileStamp> {
-    use std::os::unix::fs::MetadataExt as _;
-    Some(FileStamp {
-        identity: (metadata.dev(), metadata.ino()),
-        size: metadata.len(),
-        modified: (metadata.mtime(), metadata.mtime_nsec()),
-    })
-}
-
-#[cfg(windows)]
-fn file_stamp(file: &File, _: &Metadata) -> Option<FileStamp> {
-    use std::os::windows::io::AsRawHandle as _;
-    use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
-    let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: the borrowed File owns a live handle throughout this query, and `info` is a valid out pointer.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) } == 0 {
-        return None;
-    }
-    let wide = |high: u32, low: u32| (u64::from(high) << 32) | u64::from(low);
-    let written = wide(info.ftLastWriteTime.dwHighDateTime, info.ftLastWriteTime.dwLowDateTime);
-    Some(FileStamp {
-        identity: (
-            u64::from(info.dwVolumeSerialNumber),
-            wide(info.nFileIndexHigh, info.nFileIndexLow),
-        ),
-        size: wide(info.nFileSizeHigh, info.nFileSizeLow),
-        modified: (i64::try_from(written).unwrap_or(i64::MAX), 0),
-    })
 }
 
 #[cfg(test)]

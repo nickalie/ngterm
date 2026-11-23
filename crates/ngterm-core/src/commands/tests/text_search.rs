@@ -148,6 +148,24 @@ fn a_query_set_or_closed_moves_the_revision_and_emits_only_on_a_change() {
     assert_eq!(f.core.commit().tree_changed.len(), 1);
 }
 
+/// Upstream's `aQueryIsCutToItsLimitWhereItIsSet` (#978): the model stores the cut query, so the page searches it.
+#[test]
+fn a_query_is_cut_to_its_limit_where_it_is_set() {
+    let (mut f, _) = fixture();
+    let id = f.sessions[0];
+    let page_id = open_text(&mut f, id, None);
+    let limit = crate::html::text_page::MAX_QUERY;
+    let long = "é".repeat(limit + 3);
+    assert_eq!(f.core.library_mut().set_text_search(page_id, &long), Some(1));
+    let cut: String = long.chars().take(limit).collect();
+    assert_eq!(page(&f, id, None).text_search, Some(TextSearch::new(cut.clone())));
+    assert_eq!(
+        f.core.library_mut().set_text_search(page_id, &cut),
+        None,
+        "the same query once cut"
+    );
+}
+
 /// Upstream's `aReportIsKeptOnlyForTheCurrentRevisionAndEmitsNothing`, `aClosedSearchDropsALateReport` and
 /// `dfbf1f3`'s query check: a report lands only under its own revision and query.
 #[test]

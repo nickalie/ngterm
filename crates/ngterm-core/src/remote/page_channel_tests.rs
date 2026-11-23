@@ -583,6 +583,7 @@ fn a_malformed_frame_or_one_only_this_machine_sends_closes_the_channel() {
         &b"not json"[..],
         br#"{"id":1,"kind":"cancel"}"#,
         br#"{"id":1,"kind":"resource","path":"/a"}"#,
+        br#"{"id":1,"kind":"log.tail"}"#,
     ] {
         let mut harness = Harness::new();
         assert!(harness.permits.try_take());
@@ -762,4 +763,23 @@ fn stale_resource_and_bridge_replies_do_not_finish_another_request() {
     assert!(harness.events.is_empty());
     assert_eq!(harness.channel.pull(id), Pull::Wait);
     assert_eq!(harness.permits.free(), INBOUND_LIMIT);
+}
+
+/// This machine asks for no log tail yet (#978): a log answer names no request, so it changes nothing and frees its
+/// permit.
+#[test]
+fn a_log_answer_for_no_request_is_dropped() {
+    let mut harness = Harness::new();
+    for line in [
+        &br#"{"id":4,"kind":"log.unchanged"}"#[..],
+        br#"{"id":5,"kind":"log.head","offset":0,"stamp":{"device":1,"inode":2,"size":0,"modifiedSeconds":0,"modifiedNanoseconds":0}}"#,
+    ] {
+        assert!(harness.permits.try_take());
+        assert!(harness.channel.receive(line).is_empty());
+    }
+    assert_eq!(harness.closes(), 0);
+    assert!(!harness.origin.link.0.borrow().stopped);
+    for _ in 0..super::INBOUND_LIMIT {
+        assert!(harness.permits.try_take(), "every permit came back");
+    }
 }

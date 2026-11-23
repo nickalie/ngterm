@@ -242,6 +242,7 @@ impl Core {
                 self.receive_remote_page_frame(session, &body);
             }
             Body::PageDetached(change) => self.detach_remote_page(session, &change.page),
+            Body::PageResult(result) => self.receive_remote_text_result(session, &result),
             Body::LinkClick(click) => self.receive_forwarded_click(session, &click),
             _ => {}
         }

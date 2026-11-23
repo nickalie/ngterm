@@ -57,6 +57,7 @@ pub mod peer;
 pub mod pick;
 pub mod reconnect;
 pub(crate) mod relaunch;
+pub(crate) mod remote_text;
 pub mod remotes;
 pub mod replica_page;
 pub mod respawn;
@@ -195,6 +196,8 @@ pub(crate) struct PresentationRuntime {
     pub(crate) respawns: respawn::OriginRespawns,
     /// The clock a remote companion's wait for its session to become attachable is timed by (tests advance it).
     pub(crate) clock: Box<dyn Fn() -> Instant>,
+    /// The text actions waiting for their presenter's result.
+    pub(crate) text_waits: remote_text::TextWaits,
 }
 
 impl Default for PresentationRuntime {
@@ -211,6 +214,7 @@ impl Default for PresentationRuntime {
             page_serve: page_serve::PageServeRuntime::default(),
             respawns: respawn::OriginRespawns::default(),
             clock: Box::new(Instant::now),
+            text_waits: remote_text::TextWaits::default(),
         }
     }
 }

@@ -16,12 +16,12 @@ use super::remote_page::Origin;
 use super::{Fixture, args, failure, wire};
 use crate::html::text_page::{TextLog, TextLogReport, TextLogState};
 use crate::html::{HtmlHost, HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlSource, errors};
-use crate::remote::hub::SUPPORTED_KINDS;
+use crate::remote::hub::{PAGE_TEXT_KIND, SUPPORTED_KINDS};
 
 const TAIL_WITHOUT_TEXT: &str = "session.overlay.open: --tail and --follow-file require --text";
 const TAIL_WITH_LINE: &str = "session.overlay.open: --tail and --follow-file cannot be combined with --line";
 const TAIL_RANGE: &str = "session.overlay.open: --tail must be 1...100000";
-const LOG_REMOTE: &str = "session.overlay.open: a log page is not shown on another Mac";
+const LOG_REMOTE: &str = "session.overlay.open: the Mac presenting this session cannot show a log page";
 
 /// What the host was asked to read: a whole text file or a log's tail.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -381,11 +381,15 @@ fn a_replica_log_page_is_followed_where_it_was_opened() {
     assert_eq!(follow(&mut f, &wire(id), Some("off")), failure(errors::REPLICA_SUBMIT));
 }
 
-/// Upstream's `textLogRefusal`: a log page the placement rule would hand to the presenter is refused, after its probe,
-/// where a plain text page goes to the presenter (#891).
+/// Upstream's `textLogRefusal`: a log page the placement rule would hand to a presenter without live text pages is
+/// refused, after its probe, where a plain text page goes to it (#891, #978).
 #[test]
-fn a_presented_session_refuses_a_log_page_after_its_probe() {
-    let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
+fn an_older_presenter_refuses_a_log_page_after_its_probe() {
+    let older: Vec<&str> = SUPPORTED_KINDS
+        .into_iter()
+        .filter(|kind| *kind != PAGE_TEXT_KIND)
+        .collect();
+    let mut origin = Origin::build(false, &older, false);
     let host = Rc::new(RefCell::new(Log::default()));
     origin.fixture().core.set_html_host(Box::new(Host(Rc::clone(&host))));
     let file = path("app.log");
@@ -416,7 +420,7 @@ fn a_clicked_log_opens_a_following_log_page() {
     let (mut f, log) = fixture();
     let id = f.sessions[0];
     let selected = f.store().selected_session_id();
-    assert!(f.core.click_opens_log_here(id));
+    assert!(f.core.click_opens_log(id));
     assert!(f.core.open_log_link(path("app.log"), id, Some(95)));
     assert!(log.borrow().checked.is_empty());
     assert_eq!(f.store().selected_session_id(), selected);
@@ -446,14 +450,6 @@ fn a_clicked_log_opens_a_following_log_page() {
         (json!(2), json!(false))
     );
     assert!(!f.core.open_log_link(path("app.log"), id, Some(95)), "a busy slot");
-}
-
-/// A presented session's click opens no log page here (upstream's `pageBelongsRemote` check in `openTextLink`).
-#[test]
-fn a_presented_session_click_opens_no_log_page_here() {
-    let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
-    let session = origin.session();
-    assert!(!origin.fixture().core.click_opens_log_here(session));
 }
 
 /// Upstream's `logPageArgumentsRoundTripAndAreOmittedWhenUnset`.

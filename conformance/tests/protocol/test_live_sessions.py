@@ -1721,6 +1721,68 @@ def test_page_serve_serves_a_content_pages_files_under_its_rules(live, tmp_path)
             _until_closed(helper)
 
 
+# A presenter that shows live text pages lists `page.text`: log pages, the text page actions and their results (#978).
+TEXT_PRESENTER_KINDS = [*CONTENT_PRESENTER_KINDS, "page.text"]
+LOG_REMOTE = "session.overlay.open: the Mac presenting this session cannot show a log page"
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.since("0.42.1")
+@pytest.mark.covers(
+    "live.present",
+    "session.overlay.open",
+    "session.overlay.follow",
+    "session.overlay.search",
+    "session.overlay.page.serve",
+    streams=("live.present", "session.overlay.page.serve"),
+)
+def test_a_log_page_goes_to_a_presenter_listing_page_text_which_answers_its_text_actions(live, tmp_path):
+    """A presenter without `page.text` is refused a log page; one listing it gets the page with its log request, its
+    channel serves the log's end and `log.unchanged` while the file holds, and `session.overlay.follow` and `.search`
+    run there: the origin answers with the presenter's `page.result`, whose state the tree shows at once, and `presenter
+    did not answer` when none comes (#978)."""
+    log = tmp_path / "app.log"
+    log.write_text("one\ntwo\n")
+    with _page_presenter(live, CONTENT_PRESENTER_KINDS) as (sid, _, _):
+        assert_error(live.request("session.overlay.open", sid, textFile=str(log), followFile=True), LOG_REMOTE)
+        assert "remoteOverlays" not in find_session(live.tree(), sid)
+    with _page_presenter(live, TEXT_PRESENTER_KINDS) as (sid, presenter, gen):
+        page_id, request = _handed_over(live, sid, presenter, textFile=str(log), followFile=True, tail=50)
+        assert request["textLog"] == {"tail": 50, "follow": True}
+        assert_absent(request, "textSeed")
+        with live.stream("session.overlay.page.serve", request["token"]) as helper:
+            assert helper.reply.ok, helper.reply.raw
+            helper.send({"kind": "log.tail", "id": 1})
+            head = helper.read()
+            assert head["kind"] == "log.head" and head["offset"] == 0, head
+            assert head["stamp"]["size"] == 8
+            assert _transfer(helper, 1) == (None, b"one\ntwo\n", None)
+            helper.send({"kind": "log.tail", "id": 2, "stamp": head["stamp"]})
+            assert helper.read() == {"kind": "log.unchanged", "id": 2}
+            # the follow goes to the presenter and the origin replies with its result
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                following = pool.submit(live.request, "session.overlay.follow", sid, mode="off")
+                command = wait_frame(presenter.read, "page.command", presenter.send)["page"]
+                assert_subset(command, {"page": page_id, "action": "follow", "toggle": "off"})
+                state = {"following": False, "revision": 0, "wrap": False,
+                         "log": {"lines": 2, "clipped": False, "waiting": False, "unreadable": False}}
+                presenter.send({"kind": "page.result", "gen": gen, "rev": 2,
+                                "page": {"page": page_id, "seq": command["seq"], "ok": True, "text": "paused",
+                                         "state": state}})
+                assert assert_ok(following.result(timeout=10)) == {"id": sid, "text": "paused"}
+            [shown] = find_session(live.tree(), sid)["htmlOverlays"]
+            assert_subset(shown["text"], {"following": False, "lines": 2})
+            # a presenter that never answers
+            assert_error(live.request("session.overlay.search", sid, text="two"), "presenter did not answer")
+            assert_subset(
+                wait_frame(presenter.read, "page.command", presenter.send)["page"],
+                {"page": page_id, "action": "search", "query": "two"},
+            )
+            assert_ok(live.request("session.overlay.close", sid))
+            wait_frame(presenter.read, "page.close", presenter.send)
+            _until_closed(helper)
+
+
 # A presenter that follows a Markdown page's links under the grant its request carries lists `page.links` (#931).
 LINKS_PRESENTER_KINDS = [*CONTENT_PRESENTER_KINDS, "page.links"]
 

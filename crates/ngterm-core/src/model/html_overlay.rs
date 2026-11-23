@@ -19,7 +19,7 @@ use super::pane_overlay::PaneOverlay;
 use super::session::Session;
 use super::store::AppStore;
 use super::window_library::WindowLibrary;
-use crate::html::text_page::{TextChanges, TextLogReport, TextSearch};
+use crate::html::text_page::{self, TextChanges, TextLogReport, TextSearch};
 use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlReloadTarget, HtmlSource, SearchCount, errors};
 use crate::persist::PageSnapshot;
 
@@ -588,10 +588,13 @@ impl WindowLibrary {
         });
     }
 
-    /// Sets text page `id`'s query wherever its slot now is, an empty one closing the search, from control or the page's
-    /// own field (upstream's `setTextSearch`). A change moves the search revision, clears the report and emits
-    /// `tree.changed`; the new revision, `None` for no change or a page that is not a text page.
+    /// Sets text page `id`'s query wherever its slot now is, cut to [`text_page::MAX_QUERY`], an empty one closing the
+    /// search, from control or the page's own field (upstream's `setTextSearch`). A change moves the search revision,
+    /// clears the report and emits `tree.changed`; the new revision, `None` for no change or a page that is not a text
+    /// page.
     pub fn set_text_search(&mut self, id: Uuid, query: &str) -> Option<u64> {
+        let query = text_page::cut_query(query);
+        let query = query.as_str();
         let mut revision = None;
         self.update_html_overlay(id, |page| {
             let current = page.text_search.as_ref().map_or("", |search| search.query.as_str());
