@@ -2,7 +2,8 @@
 //! `AppStoreRemotePageTests.aLinkGrantReachesOnlyAPresenterThatFollowsLinks` and
 //! `ControlServerForwardedClickTests.testAClickedMarkdownFileReachesThePresenterWithNavigationAndItsLinkGrant`, #931):
 //! the grant rides the request only to a presenter listing `page.links`, and any other gets the page without links, in
-//! the request and in the record its channel serves from, a parked page handed on included.
+//! the request and in the record its channel serves from, a parked page handed on included. The page keeps the grant
+//! for a later presenter that follows links (upstream's `sendPageRequest`).
 
 use serde_json::{Value, json};
 
@@ -98,9 +99,9 @@ fn a_clicked_markdown_file_reaches_the_presenter_with_navigation_and_its_grant()
 }
 
 /// A parked link page handed on to a presenter that cannot follow links goes, and is served from then on, without its
-/// grant; a later presenter that can gets no grant back.
+/// grant; a later presenter that can gets the grant back, as upstream's held request offers it again.
 #[test]
-fn a_parked_link_page_handed_on_without_links_loses_its_grant() {
+fn a_parked_link_page_handed_on_without_links_gets_its_grant_back_later() {
     let files = Files::new();
     let mut origin = content_origin(&SUPPORTED_KINDS);
     let grant = open_linked(&mut origin, &files);
@@ -119,8 +120,30 @@ fn a_parked_link_page_handed_on_without_links_loses_its_grant() {
     origin.reattach(&SUPPORTED_KINDS);
     let handed = request(&origin);
     assert_eq!(handed["page"], page);
-    assert!(handed.get("markdownLinks").is_none(), "{handed}");
-    assert_ne!(Some(grant), recorded(&mut origin).markdown_links);
+    assert_eq!(handed.get("markdownLinks").cloned(), Some(wire(&grant)));
+    assert_eq!(handed["navigation"], json!(true));
+    let recorded_page = recorded(&mut origin);
+    assert_eq!(recorded_page.markdown_links, Some(grant));
+    assert!(recorded_page.flags.navigation);
+}
+
+/// A link page opened for a presenter that cannot follow links goes to the next presenter, one that can, with its
+/// grant and navigation.
+#[test]
+fn a_link_page_opened_without_links_reaches_a_later_presenter_with_its_grant() {
+    let files = Files::new();
+    let mut origin = content_origin(&kinds(false));
+    let grant = open_linked(&mut origin, &files);
+    assert!(request(&origin).get("markdownLinks").is_none());
+    origin.lose_presenter();
+
+    origin.reattach(&SUPPORTED_KINDS);
+    let handed = request(&origin);
+    assert_eq!(handed.get("markdownLinks").cloned(), Some(wire(&grant)));
+    assert_eq!(handed["navigation"], json!(true));
+    let recorded_page = recorded(&mut origin);
+    assert_eq!(recorded_page.markdown_links, Some(grant));
+    assert!(recorded_page.flags.navigation);
 }
 
 /// A parked link page handed on to a presenter that follows links keeps its grant.

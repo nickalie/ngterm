@@ -11,11 +11,13 @@
 //! (an extension beyond upstream, whose presenter loss ends every page): its slot stays reserved and its outcome pending until a later presenter that
 //! speaks pages is handed it again, or it is closed here.
 
+use std::borrow::Cow;
 use std::time::Instant;
 
 use uuid::Uuid;
 
 use super::{AppStore, OverlayPane, OverlayPointSize, Session};
+use crate::html::markdown_page::MarkdownLinkGrant;
 use crate::html::{HtmlOverlay, HtmlPageInfo};
 use crate::remote::frames::{PresentationPageAction, PresentationPageCommand, PresentationPageState};
 
@@ -69,6 +71,9 @@ pub struct RemotePage {
     pub parked: bool,
     /// An image page's probed size, which it travels with: sent again when it is handed to a later presenter.
     pub image_pixels: Option<crate::html::image_page::ImagePixels>,
+    /// The link grant the page was opened with (upstream's held request): each hand-on offers it again, so a presenter
+    /// that follows links gets it back after one that did not.
+    pub held_links: Option<MarkdownLinkGrant>,
     requested: Option<VisibilityRequest>,
     last_seq: i64,
 }
@@ -77,6 +82,7 @@ impl RemotePage {
     #[must_use]
     pub fn new(overlay: HtmlOverlay, token: String, claim_deadline: Instant) -> Self {
         Self {
+            held_links: overlay.markdown_links.clone(),
             overlay,
             token,
             claim_deadline,
@@ -87,6 +93,20 @@ impl RemotePage {
             image_pixels: None,
             requested: None,
             last_seq: 0,
+        }
+    }
+
+    /// The page as it was opened: its held link grant, and the navigation that came with it, back on the record.
+    #[must_use]
+    pub fn as_opened(&self) -> Cow<'_, HtmlOverlay> {
+        match &self.held_links {
+            Some(grant) if self.overlay.markdown_links.is_none() => {
+                let mut page = self.overlay.clone();
+                page.markdown_links = Some(grant.clone());
+                page.flags.navigation = true;
+                Cow::Owned(page)
+            }
+            _ => Cow::Borrowed(&self.overlay),
         }
     }
 
@@ -597,12 +617,15 @@ impl AppStore {
         Some(handed)
     }
 
-    /// Drops the link grant of the page under `job`, as a holder that cannot follow links is handed it, so its channel
-    /// serves it without links.
-    pub(crate) fn unlink_remote_page(&mut self, session: Uuid, job: &str) {
-        let unlink = |page: &mut RemotePage| page.overlay = page.overlay.without_links();
+    /// Sets the link grant and navigation of the page under `job` to those of `presented`, the page as its next holder
+    /// is handed it, so its channel serves it as that holder shows it.
+    pub(crate) fn present_remote_page_links(&mut self, session: Uuid, job: &str, presented: &HtmlOverlay) {
+        let links = |page: &mut RemotePage| {
+            page.overlay.markdown_links.clone_from(&presented.markdown_links);
+            page.overlay.flags.navigation = presented.flags.navigation;
+        };
         self.session_mut(session)
-            .and_then(|found| found.remote_overlays.update_page(job, unlink));
+            .and_then(|found| found.remote_overlays.update_page(job, links));
     }
 
     /// Records `hidden` on the parked page in `pane`'s slot, delivered when it is handed on; whether one is parked

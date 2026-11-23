@@ -12,7 +12,8 @@
 //! ([`super::hub::PAGE_CONTENT_KIND`], [`super::hub::PAGE_DOCUMENT_KIND`]), read here first as an open reads it, a
 //! picture with its probed pixels, which that presenter fits to its own screen (`presenter_sized`). A Markdown page's
 //! link grant (#931) goes only to a presenter listing [`super::hub::PAGE_LINKS_KIND`]; any other is handed the page,
-//! and its channel serves it, without links or navigation.
+//! and its channel serves it, without links or navigation. The slot keeps the grant, so a later presenter that lists
+//! links gets it back when the page is handed on.
 //!
 //! "The presenter" here is the viewer showing the session's pages ([`super::hub::Surface::Pages`]): the presenter, or
 //! when it shows no pages (a phone), a viewer beside it that does (this build's extension).
@@ -177,9 +178,10 @@ fn page_request(
     }
 }
 
-/// `overlay` as `session`'s presenter is handed it (upstream's guard in `openRemotePage`): a link grant only to one
-/// listing [`PAGE_LINKS_KIND`], any other gets the page without links or navigation, so it keeps the rules it knows.
-/// The record the claim serves from is this same page, so the request and the serving agree.
+/// `overlay` as `session`'s presenter is handed it (upstream's `sendPageRequest`): a link grant only to one listing
+/// [`PAGE_LINKS_KIND`], any other gets the page without links or navigation, so it keeps the rules it knows. The record
+/// the claim serves from is this same page, so the request and the serving agree; the slot's page holds the grant
+/// ([`RemotePage::held_links`]) for the next offer.
 fn as_presented<'a>(core: &Core, session: Uuid, overlay: &'a HtmlOverlay) -> Cow<'a, HtmlOverlay> {
     if overlay.markdown_links.is_none()
         || core
@@ -242,6 +244,7 @@ pub(crate) fn open_remote_page(
     if let Some(refusal) = presenter_refusal(core, session, &source, &overlay.source) {
         return refusal;
     }
+    let held_links = overlay.markdown_links.clone();
     let overlay = as_presented(core, session, overlay);
     let token = uuid_string(Uuid::new_v4());
     let size = page_size(opening);
@@ -277,6 +280,7 @@ pub(crate) fn open_remote_page(
     let mut reserved = RemotePage::new(overlay.into_owned(), token, Instant::now() + PAGE_CLAIM_WINDOW);
     reserved.background_color.clone_from(&opening.background_color);
     reserved.image_pixels = opening.image_pixels;
+    reserved.held_links = held_links;
     store.reserve_remote_overlay(
         session,
         RemoteOverlaySlot {
@@ -726,7 +730,8 @@ impl Core {
         let Some(page) = &slot.page else {
             return;
         };
-        let overlay = &page.overlay;
+        let opened = page.as_opened();
+        let overlay = opened.as_ref();
         // a picture a restore parked again has no probed size: it is read now, as an open reads it
         let pixels = page.image_pixels.or_else(|| match &overlay.source {
             HtmlSource::Image { path } => self.probe_image_pixels(path),
@@ -749,7 +754,6 @@ impl Core {
             return;
         }
         let overlay = as_presented(self, session, overlay);
-        let unlinked = matches!(overlay, Cow::Owned(_));
         // a picture the last presenter fitted itself is fitted again by the next one
         let fitted = slot.presenter_sized;
         let opening = PageOpening {
@@ -780,9 +784,7 @@ impl Core {
         let owner = self.remote.hub.surface_generation(Surface::Pages, session);
         let deadline = Instant::now() + PAGE_CLAIM_WINDOW;
         let Some(handed) = self.library_mut().store_for_session_mut(session).and_then(|store| {
-            if unlinked {
-                store.unlink_remote_page(session, &slot.job);
-            }
+            store.present_remote_page_links(session, &slot.job, &overlay);
             store.hand_on_remote_page(session, &slot.job, owner, token, deadline)
         }) else {
             return;
