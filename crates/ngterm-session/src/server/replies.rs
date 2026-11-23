@@ -45,7 +45,8 @@
 //! them and writes them to the program, so it reads them in the order of its queries. A client's input waits until
 //! the helper wrote the replies made ready before it, so a mode 2031 report the client's new appearance made reaches
 //! the program before the keys the client sent next, as from one terminal (zmx's client wrote both in one stream); input
-//! sent while replies wait behind a Kitty barrier waits there after them, and the client's reader goes on.
+//! and pastes sent while replies wait behind a Kitty barrier wait there after them, queued under the pane's lock too,
+//! and the client's reader goes on.
 //!
 //! # The reply owner
 //!
@@ -136,7 +137,8 @@ pub const KITTY_STORAGE_LIMIT: u64 = 64 * 1024 * 1024;
 /// How long a Kitty barrier waits for the reply owner's completion before it ends empty (no user is asked: the owner's
 /// terminal answers as it processes the output).
 pub const KITTY_WAIT: Duration = Duration::from_secs(2);
-/// The server's replies held behind Kitty barriers, in bytes, past which every barrier waiting ends empty.
+/// The server's replies and the clients' input held behind Kitty barriers, in bytes, past which every barrier waiting
+/// ends empty.
 pub const HELD_LIMIT: usize = 1024 * 1024;
 /// The Kitty barriers waiting (completed ones behind a waiting one included), past which every one ends empty.
 pub const BARRIER_LIMIT: usize = 4096;
@@ -299,12 +301,12 @@ struct Barrier {
     discard: bool,
     /// The owner's answers once it ended (empty when it ended otherwise); `None` while it waits.
     answers: Option<Vec<u8>>,
-    /// The server's replies to what followed the command.
+    /// The server's replies to what followed the command, and the clients' input sent after them.
     held: Vec<Vec<u8>>,
 }
 
 /// The replies for the program in order: those ready to be written, then the barriers waiting, each with the server's
-/// replies held behind it.
+/// replies and the clients' input held behind it.
 #[derive(Debug, Default)]
 struct Sequence {
     ready: Vec<Vec<u8>>,
@@ -329,7 +331,7 @@ impl Sequence {
         if self.held > HELD_LIMIT {
             tracing::warn!(
                 held = self.held,
-                "too many replies wait for Kitty answers; the waiting barriers end empty"
+                "too many replies and keys wait for Kitty answers; the waiting barriers end empty"
             );
             self.end(|_| true);
         }
@@ -428,10 +430,15 @@ impl Outlet {
     }
 
     /// Queue a client's `input` behind the replies that wait for a Kitty barrier, so the program reads it after them,
-    /// as from one terminal; `false`, with nothing queued, when no reply waits.
+    /// as from one terminal; `false`, with nothing queued, when no reply waits. Input past [`HELD_LIMIT`] alone ends
+    /// the waiting barriers and is not queued: the caller writes it after the replies, as the PTY admits it.
     pub fn hold_input(&self, input: &[u8]) -> bool {
         let mut sequence = lock(&self.sequence);
         if sequence.held == 0 {
+            return false;
+        }
+        if input.len() > HELD_LIMIT {
+            sequence.end(|_| true);
             return false;
         }
         let discard = std::mem::replace(&mut sequence.discard, false);
@@ -1540,6 +1547,16 @@ mod tests {
         assert!(!outlet.ready());
         assert!(outlet.complete(1, 7, 1, b"K1".to_vec()));
         assert_eq!(outlet.take(), chunks(&[b"K1", b"report", b"key"]));
+    }
+
+    #[test]
+    fn input_past_the_held_limit_ends_the_barriers_and_is_left_to_the_caller() {
+        let outlet = Outlet::default();
+        outlet.open(barrier(1, 7, Instant::now() + Duration::from_secs(60)));
+        outlet.push(b"report");
+        assert!(!outlet.hold_input(&vec![b'x'; HELD_LIMIT + 1]));
+        assert_eq!(outlet.take(), chunks(&[b"report"]));
+        assert!(!outlet.complete(1, 7, 1, b"K1".to_vec()), "the barrier ended");
     }
 
     #[test]

@@ -711,12 +711,46 @@ fn a_scheme_report_reaches_the_program_before_the_keys_sent_after_the_change() -
 #[cfg(unix)]
 #[test]
 fn a_key_sent_while_a_scheme_report_waits_behind_a_kitty_barrier_reaches_the_program_after_it() -> TestResult {
+    behind_a_waiting_scheme_report(b"K", |pane, owner, _| {
+        assert!(pane.input(owner, b"K")?);
+        Ok(())
+    })
+}
+
+/// A key and then a paste, sent while a scheme report waits behind a Kitty barrier, reach the program after the report
+/// in the order they were sent.
+#[cfg(unix)]
+#[test]
+fn a_paste_after_a_key_held_behind_a_kitty_barrier_reaches_the_program_after_the_key() -> TestResult {
+    use ngterm_session::protocol::{ClipboardPaste, ClipboardRepresentation};
+    behind_a_waiting_scheme_report(b"KP", |pane, owner, epoch| {
+        assert!(pane.input(owner, b"K")?);
+        let paste = ClipboardPaste {
+            bridge: None,
+            contents: vec![ClipboardRepresentation {
+                mime: "text/plain".into(),
+                data: b"P".to_vec(),
+            }],
+            text_source: true,
+            selection: "c".into(),
+            allow_unsafe: false,
+        };
+        assert!(pane.clipboard_paste(owner, epoch, &paste)?);
+        Ok(())
+    })
+}
+
+/// Spawn a program that turns mode 2031 on and sends a Kitty query, have the owner's appearance change queue a scheme
+/// report behind the barrier, let `client` send `sent`, complete the barrier, and check that the program reads the
+/// answer, the report, then `sent`.
+#[cfg(unix)]
+fn behind_a_waiting_scheme_report(sent: &[u8], client: impl FnOnce(&Pane, u64, u64) -> TestResult) -> TestResult {
     const ANSWER: &[u8] = b"\x1b_Gi=31;OK\x1b\\";
     let dir = tempfile::tempdir()?;
     let script = format!(
         "stty raw -echo; printf '\\033[?2031h'; printf '\\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\\033\\\\'; \
          printf 'armed\\r\\n'; head -c {} | tr '\\033' 'E'; printf '\\r\\nread-all\\r\\n'; sleep 10",
-        ANSWER.len() + LIGHT_REPORT.len() + 1
+        ANSWER.len() + LIGHT_REPORT.len() + sent.len()
     );
     let mut config = pane_config("kitty-keys", dir.path(), support::spec(&["sh", "-c", &script]));
     config.metadata = metadata();
@@ -738,9 +772,9 @@ fn a_key_sent_while_a_scheme_report_waits_behind_a_kitty_barrier_reaches_the_pro
             ..metadata()
         },
     );
-    assert!(pane.input(owner, b"K")?);
+    client(&pane, owner, epoch)?;
     assert!(pane.complete(owner, barrier, epoch, ANSWER));
-    let expected = shown(&[ANSWER, LIGHT_REPORT, b"K"].concat()).replace('\x1b', "E");
+    let expected = shown(&[ANSWER, LIGHT_REPORT, sent].concat()).replace('\x1b', "E");
     let text: String = server_expects(&pane, "read-all")
         .chars()
         .filter(|ch| *ch != '\n')

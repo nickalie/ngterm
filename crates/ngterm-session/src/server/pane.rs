@@ -392,6 +392,12 @@ impl Core {
         Vec::new()
     }
 
+    /// Queue a client's `input` behind the replies that wait for a Kitty barrier ([`Outlet::hold_input`]), under the
+    /// pane's lock as every reply is; the caller wakes the helper once it let go of the lock.
+    fn hold_input(&self, _locked: &State, input: &[u8]) -> bool {
+        self.outlet.hold_input(input)
+    }
+
     /// Have the helper thread write the replies ready (it looks under the pane's lock, so one made ready before this
     /// is never missed).
     fn wake_helper(&self) {
@@ -804,16 +810,16 @@ impl Pane {
         }
         state.prune();
         let input = state.lead.input(id, data);
-        self.apply(state, &input.change);
+        self.apply_locked(&mut state, &input.change);
+        let held = input.forward && self.core.hold_input(&state, data);
+        self.release(state);
         if !input.forward {
             return Ok(false);
         }
-        if self.core.outlet.hold_input(data) {
-            self.core.wake_helper();
-            return Ok(true);
+        if !held {
+            self.core.await_replies_written();
+            self.actor.write_input(data)?;
         }
-        self.core.await_replies_written();
-        self.actor.write_input(data)?;
         Ok(true)
     }
 
@@ -873,10 +879,13 @@ impl Pane {
         let Some(bytes) = bytes else {
             return Ok(false);
         };
-        self.actor.write_input(&bytes)?;
+        if !self.core.hold_input(&state, &bytes) {
+            self.actor.write_input(&bytes)?;
+        }
         state.register_paste_bridge(id, epoch, paste.bridge.as_ref(), &bytes);
         let grants = state.terminal.clipboard_grants();
         grants.lock().unwrap_or_else(PoisonError::into_inner).pasted(&bytes);
+        self.release(state);
         Ok(true)
     }
 
@@ -951,11 +960,15 @@ impl Pane {
 
     /// Apply a leadership change under the pane's lock (the leader's size, then the role reports) and let go of it.
     fn apply(&self, mut state: MutexGuard<'_, State>, change: &Change) {
+        self.apply_locked(&mut state, change);
+        self.release(state);
+    }
+
+    fn apply_locked(&self, state: &mut State, change: &Change) {
         if let Some(size) = change.resize {
-            self.resize_locked(&mut state, size);
+            self.resize_locked(state, size);
         }
         state.tell(&change.notices);
-        self.release(state);
     }
 
     /// Let go of the pane's lock; have the helper thread write the replies made ready under it (a size report the
