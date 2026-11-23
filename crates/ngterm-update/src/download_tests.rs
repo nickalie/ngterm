@@ -74,6 +74,22 @@ fn selection_rejects_invalid_versions_and_asset_sizes() {
 }
 
 #[test]
+#[cfg(unix)]
+fn a_two_digit_patch_is_newer_than_a_one_digit_patch() {
+    let fixture = tempfile::tempdir().unwrap();
+    let install = installation(fixture.path());
+    let selected = select(&metadata("0.2.10"), DOWNLOADS, &install, "0.2.9", &Trust::default())
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.version, Version::parse("0.2.10").unwrap());
+    assert!(
+        select(&metadata("0.2.9"), DOWNLOADS, &install, "0.2.10", &Trust::default())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn invalid_signature_and_manifest_encodings_are_refused() {
     let version = Version::parse("0.2.0").unwrap();
     assert_eq!(
