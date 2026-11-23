@@ -524,30 +524,13 @@ impl KeyStroke {
 /// bare modifier as a key on Linux.
 #[must_use]
 pub fn status_keystroke(stroke: &KeyStroke) -> StatusKeystroke {
-    let key = match stroke.key.name() {
-        "escape" => interrupt::Key::Escape,
-        "enter" => interrupt::Key::Return,
-        "numpad_enter" => interrupt::Key::KeypadEnter,
-        "key_c" => interrupt::Key::C,
-        _ => interrupt::Key::Other,
-    };
-    let character = Some(stroke.text.as_str()).filter(|text| !text.is_empty());
-    interrupt::classify(key, character, key_modifiers(stroke.mods))
+    interrupt::classify_named(stroke.key.name(), Some(stroke.text.as_str()), stroke.mods)
 }
 
 /// Upstream's `KeyModifiers` of ghostty's (Super standing for ⌘); the lock keys are dropped.
 #[must_use]
 pub fn key_modifiers(mods: Mods) -> interrupt::KeyModifiers {
-    let pairs = [
-        (Mods::CTRL, interrupt::KeyModifiers::CONTROL),
-        (Mods::SUPER, interrupt::KeyModifiers::COMMAND),
-        (Mods::ALT, interrupt::KeyModifiers::OPTION),
-        (Mods::SHIFT, interrupt::KeyModifiers::SHIFT),
-    ];
-    pairs
-        .into_iter()
-        .filter(|(held, _)| mods.contains(*held))
-        .fold(interrupt::KeyModifiers::NONE, |modifiers, (_, bit)| modifiers | bit)
+    mods.into()
 }
 
 /// The ghostty modifiers of GPUI's (Super is GPUI's `platform` on Linux).

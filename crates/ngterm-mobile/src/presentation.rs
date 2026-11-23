@@ -25,9 +25,9 @@
 //!   - an overlay is refused with `overlay.rejected`, and a page with `page.rejected` ([`PAGES_UNSUPPORTED`]);
 //!   - when the stream leaves `connected`, what it showed goes with it: context, status and HUD clear, and the asks
 //!     still open are dismissed (the origin takes them back), as desktop's row does;
-//!   - a key the user typed into a shown pane goes to an origin that speaks `pane.input`, which clears the session's
-//!     unseen badge by its own Badge reset rule (`Presentations::typed`). After a notification, or a new connection,
-//!     the first plain key and the first submit go; the next ones could not clear more, so they do not.
+//!   - each key the user typed into a shown pane goes to an origin that speaks `pane.input`, which clears the session's
+//!     unseen badge by its own Badge reset rule (`Presentations::typed`), as for each key typed there: the origin can
+//!     raise the badge with no frame to the viewer (a terminal's own notification), so no key is held back.
 //!
 //! A lost connection keeps the streams (`Presentations::machine_down`); a suspending core stops them without a word,
 //! first letting their links write what they still hold and the transport send it, an answer just sent among it
@@ -313,32 +313,6 @@ struct Attached<C> {
     asks: HashMap<String, i64>,
     /// The respawn counts reported and not yet handed to the panes, each with whether a snapshot carried it.
     respawns: Vec<(PresentationRespawns, bool)>,
-    /// The keys the origin was told of since its last notification.
-    typing: Typing,
-}
-
-/// The keys typed in a session that the origin was told of since its last notification ([`Presentations::typed`]): a
-/// submit clears the unseen badge under every rule that clears it, a plain key only under the first key's, so neither
-/// needs telling twice until a notification can raise the badge again.
-#[derive(Debug, Default, Clone, Copy)]
-struct Typing {
-    plain: bool,
-    submitted: bool,
-}
-
-impl Typing {
-    /// Whether telling the origin of `key` could still clear the badge.
-    fn tells(self, key: StatusKeystroke) -> bool {
-        !self.submitted && (key == StatusKeystroke::Submit || !self.plain)
-    }
-
-    fn told(&mut self, key: StatusKeystroke) {
-        if key == StatusKeystroke::Submit {
-            self.submitted = true;
-        } else {
-            self.plain = true;
-        }
-    }
 }
 
 /// Respawn counts an attached session's origin reported, for its panes ([`crate::pane`]).
@@ -402,7 +376,6 @@ impl<C: Connection> Presentations<C> {
             connected: false,
             asks: HashMap::new(),
             respawns: Vec::new(),
-            typing: Typing::default(),
         };
         let effects = attached.client.start(&attached.links, now);
         let events = attached.apply_all(effects);
@@ -525,8 +498,7 @@ impl<C: Connection> Presentations<C> {
         true
     }
 
-    /// Tells the origin of `pane`'s session of a key the user typed there, for its Badge reset rule, unless it was told
-    /// of one that clears as much since its last notification ([`Typing`]); whether it went.
+    /// Tells the origin of `pane`'s session of a key the user typed there, for its Badge reset rule; whether it went.
     pub(crate) fn typed(&mut self, pane: &PaneRef, key: StatusKeystroke) -> bool {
         let Some(index) = self.find(&pane.machine_id, &pane.session_id) else {
             return false;
@@ -534,12 +506,7 @@ impl<C: Connection> Presentations<C> {
         let Ok(identity) = Uuid::parse_str(&pane.pane_id) else {
             return false;
         };
-        let attached = &mut self.attached[index];
-        let sent = attached.typing.tells(key) && attached.client.typed(identity, key);
-        if sent {
-            attached.typing.told(key);
-        }
-        sent
+        self.attached[index].client.typed(identity, key)
     }
 
     /// The respawn counts reported since the last call, oldest first.
@@ -567,10 +534,6 @@ impl<C> Attached<C> {
     fn apply_all(&mut self, effects: Vec<ClientEffect>) -> Vec<MobileEvent> {
         let mut events = Vec::new();
         for effect in effects {
-            if matches!(effect, ClientEffect::Notify(_)) {
-                // a notification can raise the unseen badge again
-                self.typing = Typing::default();
-            }
             self.apply(effect, &mut events);
         }
         events
@@ -690,10 +653,6 @@ impl<C> Attached<C> {
     /// The stream's new state; leaving `connected` clears what the stream showed and dismisses its open asks.
     fn set_connection(&mut self, connection: RemoteConnection, events: &mut Vec<MobileEvent>) {
         let connected = connection == RemoteConnection::Connected;
-        if connected && !self.connected {
-            // notifications may have come while the stream was down
-            self.typing = Typing::default();
-        }
         let left = self.connected && !connected;
         self.connected = connected;
         let (machine_id, session_id) = (self.machine_id.clone(), self.session_id.clone());

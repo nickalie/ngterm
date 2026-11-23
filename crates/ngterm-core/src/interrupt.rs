@@ -2,14 +2,16 @@
 //! text classified as an interrupt (Escape, a bare Ctrl-C), a submit (Return, or text carrying a newline) or plain
 //! typing, for [`AgentIndicator::cleared_by`](crate::model::AgentIndicator::cleared_by).
 //!
-//! Upstream matches macOS virtual key codes; here the frontend maps its key onto [`Key`], the few physical keys the
-//! classification looks at, so the truth table stays host-free (`ngterm-gpui`'s `terminal::input::status_keystroke`,
-//! reported per terminal key press and applied by [`Core::clear_status_on_keystroke`]).
+//! Upstream matches macOS virtual key codes; here a frontend names its key by Ghostty's physical key name and its
+//! held [`Mods`], and [`classify_named`] maps them onto [`Key`] and [`KeyModifiers`], so the truth table stays
+//! host-free and one for every frontend: `ngterm-gpui`'s `terminal::input::status_keystroke`, reported per terminal key
+//! press and applied by [`Core::clear_status_on_keystroke`], and `ngterm-mobile`'s phone keys, which tell an origin.
 //!
 //! [`Core::clear_status_on_keystroke`]: crate::Core::clear_status_on_keystroke
 
 use std::ops::BitOr;
 
+use crate::ghostty_config::binds::Mods;
 use crate::model::StatusKeystroke;
 
 /// The keyboard modifiers the classification reads (upstream's `KeyModifiers`): a small set of flags.
@@ -46,6 +48,21 @@ impl BitOr for KeyModifiers {
     }
 }
 
+/// Upstream's `KeyModifiers` of Ghostty's (Super standing for ⌘); the lock keys are dropped.
+impl From<Mods> for KeyModifiers {
+    fn from(mods: Mods) -> Self {
+        [
+            (Mods::CTRL, Self::CONTROL),
+            (Mods::SUPER, Self::COMMAND),
+            (Mods::ALT, Self::OPTION),
+            (Mods::SHIFT, Self::SHIFT),
+        ]
+        .into_iter()
+        .filter(|(held, _)| mods.contains(*held))
+        .fold(Self::NONE, |modifiers, (_, bit)| modifiers | bit)
+    }
+}
+
 /// The physical key of a keystroke, layout-independent (upstream's macOS key codes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Key {
@@ -56,6 +73,27 @@ pub enum Key {
     C,
     /// Any other key.
     Other,
+}
+
+impl Key {
+    /// The key Ghostty's physical key `name` is (`enter`, `key_c`, ...).
+    #[must_use]
+    pub fn named(name: &str) -> Self {
+        match name {
+            "escape" => Self::Escape,
+            "enter" => Self::Return,
+            "numpad_enter" => Self::KeypadEnter,
+            "key_c" => Self::C,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// [`classify`] of a keystroke as a frontend reports it: Ghostty's physical key `name`, the text the key types before
+/// Ctrl transformations (empty for none) and the held modifiers.
+#[must_use]
+pub fn classify_named(name: &str, character: Option<&str>, mods: Mods) -> StatusKeystroke {
+    classify(Key::named(name), character.filter(|text| !text.is_empty()), mods.into())
 }
 
 /// What a keystroke means to a status glyph: an interrupt first, then a submit, else plain typing.
@@ -119,6 +157,47 @@ mod tests {
     use super::*;
 
     const CTRL: KeyModifiers = KeyModifiers::CONTROL;
+
+    #[test]
+    fn a_named_keystroke_classifies_by_its_ghostty_key_and_mods() {
+        assert_eq!(
+            classify_named("enter", Some("\r"), Mods::empty()),
+            StatusKeystroke::Submit
+        );
+        assert_eq!(
+            classify_named("numpad_enter", None, Mods::CAPS_LOCK),
+            StatusKeystroke::Submit
+        );
+        assert_eq!(classify_named("enter", None, Mods::SHIFT), StatusKeystroke::Other);
+        assert_eq!(
+            classify_named("key_c", Some(""), Mods::CTRL),
+            StatusKeystroke::Interrupt
+        );
+        assert_eq!(
+            classify_named("key_j", Some("c"), Mods::CTRL),
+            StatusKeystroke::Interrupt
+        );
+        assert_eq!(classify_named("key_c", Some("j"), Mods::CTRL), StatusKeystroke::Other);
+        assert_eq!(
+            classify_named("key_c", Some("c"), Mods::CTRL | Mods::SHIFT),
+            StatusKeystroke::Other
+        );
+        assert_eq!(classify_named("escape", None, Mods::SUPER), StatusKeystroke::Interrupt);
+        assert_eq!(
+            classify_named("key_a", Some("a"), Mods::empty()),
+            StatusKeystroke::Other
+        );
+    }
+
+    #[test]
+    fn ghostty_mods_map_onto_upstreams_modifiers_without_the_locks() {
+        let all = Mods::CTRL | Mods::SUPER | Mods::ALT | Mods::SHIFT | Mods::CAPS_LOCK | Mods::NUM_LOCK;
+        assert_eq!(
+            KeyModifiers::from(all),
+            KeyModifiers::CONTROL | KeyModifiers::COMMAND | KeyModifiers::OPTION | KeyModifiers::SHIFT
+        );
+        assert!(KeyModifiers::from(Mods::CAPS_LOCK | Mods::NUM_LOCK).is_empty());
+    }
 
     #[test]
     fn escape_interrupts_under_any_modifiers() {

@@ -1142,3 +1142,24 @@ fn both_agents_screens_take_a_bracketed_paste() {
         assert_eq!(term.sent(), b"\x1b[200~hi\nthere\x1b[201~", "{name}");
     }
 }
+
+#[test]
+fn an_actions_keys_mean_to_the_badge_rule_what_reached_the_program() {
+    use ngterm_core::model::StatusKeystroke::{Interrupt, Other, Submit};
+    let approval = Action::Approval(approval_of("touch picked.txt"), "Yes".to_owned());
+    let keys = [Action::Prompt("hi".to_owned()), Action::Interrupt, approval].map(|action| action.last_key());
+    assert_eq!(keys, [Submit, Interrupt, Submit]);
+    assert_eq!(AgentInputOutcome::Sent.typed(Interrupt), Some(Interrupt));
+    assert_eq!(
+        AgentInputOutcome::Unconfirmed.typed(Submit),
+        Some(Other),
+        "only some keys may have gone"
+    );
+    for outcome in [
+        AgentInputOutcome::NotOnScreen,
+        AgentInputOutcome::DialogOpen,
+        AgentInputOutcome::LeadRefused,
+    ] {
+        assert_eq!(outcome.typed(Submit), None, "{outcome:?}");
+    }
+}

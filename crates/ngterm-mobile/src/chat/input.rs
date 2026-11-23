@@ -72,6 +72,7 @@
 use std::time::Duration;
 
 use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
+use ngterm_core::model::StatusKeystroke;
 use ngterm_term::{ClipboardLocation, KeyInput, Paste, PasteSource};
 
 use super::matchers::{Agent, OptionKey, Picker, Screen, fits, squeeze};
@@ -112,6 +113,16 @@ pub enum AgentInputOutcome {
 }
 
 impl AgentInputOutcome {
+    /// What the keys of an action whose last key is `last` meant to the origin's Badge reset rule, by what reached the
+    /// program: all of them when it was sent, maybe only some when it is unconfirmed; `None` when nothing went.
+    pub(crate) fn typed(self, last: StatusKeystroke) -> Option<StatusKeystroke> {
+        match self {
+            Self::Sent => Some(last),
+            Self::Unconfirmed => Some(StatusKeystroke::Other),
+            Self::NotOnScreen | Self::DialogOpen | Self::LeadRefused => None,
+        }
+    }
+
     /// The outcome's name, for the log.
     #[must_use]
     pub fn class(self) -> &'static str {
@@ -178,6 +189,14 @@ impl Action {
             Self::Interrupt => "interrupt",
             Self::Approval(..) => "approval",
             Self::Question(..) => "question",
+        }
+    }
+
+    /// What the action's last key means to the origin's Badge reset rule: Stop interrupts, every other action submits.
+    pub(crate) fn last_key(&self) -> StatusKeystroke {
+        match self {
+            Self::Interrupt => StatusKeystroke::Interrupt,
+            _ => StatusKeystroke::Submit,
         }
     }
 

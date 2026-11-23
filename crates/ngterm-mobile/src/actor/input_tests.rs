@@ -16,6 +16,7 @@ use ngterm_core::remote::frames::{
     self, Body, PresentationAgent, PresentationFrame, PresentationHello, PresentationLayout, PresentationMode,
     PresentationPane, PresentationSnapshot,
 };
+use ngterm_core::remote::hub::PANE_INPUT_KIND;
 use ngterm_core::remote::ssh::present_tail;
 
 use super::pane_tests::{
@@ -80,6 +81,11 @@ impl Agents {
     }
 
     fn start_timed(agent: &str, capture: &str, timing: InputTiming) -> Self {
+        Self::start_with(agent, capture, timing, Vec::new())
+    }
+
+    /// As [`Agents::start`], the origin's hello listing `kinds`.
+    fn start_with(agent: &str, capture: &str, timing: InputTiming, kinds: Vec<String>) -> Self {
         let mut fixture = Fixture::connected_timed(vec![listing(true)], timing);
         block_on(fixture.core.attach_session(MACHINE.to_owned(), SESSION.to_owned())).unwrap();
         let stream = fixture.opened(|opened| {
@@ -95,7 +101,7 @@ impl Agents {
         };
         let hello = Body::Hello(PresentationHello {
             version: frames::VERSION,
-            kinds: Vec::new(),
+            kinds,
             mode: PresentationMode::Mirror,
         });
         let snapshot = Body::Snapshot(PresentationSnapshot {
@@ -474,6 +480,30 @@ fn a_prompt_with_a_dialog_open_sends_nothing() {
         Ok(AgentInputOutcome::DialogOpen)
     );
     assert!(typed(&mut agents.first.peer).is_empty());
+}
+
+/// A chat action is the user's input on the phone: an origin that speaks `pane.input` is told of it once its keys
+/// went, for its Badge reset rule, and of nothing when none did.
+#[test]
+fn a_chat_action_tells_the_origin_of_its_keys_only_when_they_went() {
+    let mut agents = Agents::start_with("claude", "claude-44x36", timing(), vec![PANE_INPUT_KIND.to_owned()]);
+    agents.first_is("leader");
+    agents.show(&agents.first.peer, "question");
+    assert_eq!(
+        block_on(agents.pane.send_prompt("hello".to_owned())),
+        Ok(AgentInputOutcome::DialogOpen)
+    );
+    let (told, _) = drained(&mut agents.stream.peer);
+    assert!(!contains(&told, b"\"input\""), "{:?}", String::from_utf8_lossy(&told));
+
+    agents.show(&agents.first.peer, "idle");
+    let prompt = agents.act(|pane| block_on(pane.send_prompt("hello".to_owned())));
+    inputs_until(&mut agents.first.peer, |bytes, _| contains(bytes, b"\x1b[201~"));
+    agents.show_typed(&agents.first.peer, Agent::Claude, "idle", "hello");
+    inputs_until(&mut agents.first.peer, |bytes, _| bytes.ends_with(b"\r"));
+    assert_eq!(outcome(&prompt), Ok(AgentInputOutcome::Sent));
+    let submit = format!(r#""input":{{"pane":"{PANE}","key":"submit"}}"#);
+    inputs_until(&mut agents.stream.peer, |bytes, _| contains(bytes, submit.as_bytes()));
 }
 
 #[test]

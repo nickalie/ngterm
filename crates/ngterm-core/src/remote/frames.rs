@@ -1139,18 +1139,13 @@ struct InputWire {
     key: Option<Value>,
 }
 
-const INPUT_KEYS: [(StatusKeystroke, &str); 3] = [
-    (StatusKeystroke::Interrupt, "interrupt"),
-    (StatusKeystroke::Submit, "submit"),
-    (StatusKeystroke::Other, "other"),
-];
-
 impl Serialize for PresentationInput {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let key = INPUT_KEYS
-            .iter()
-            .find(|(key, _)| *key == self.key)
-            .map_or("other", |(_, raw)| raw);
+        let key = match self.key {
+            StatusKeystroke::Interrupt => "interrupt",
+            StatusKeystroke::Submit => "submit",
+            StatusKeystroke::Other => "other",
+        };
         InputWire {
             pane: self.pane,
             key: Some(Value::String(key.to_owned())),
@@ -1163,10 +1158,11 @@ impl<'de> Deserialize<'de> for PresentationInput {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let wire = InputWire::deserialize(deserializer)?;
         let raw = wire.key.as_ref().and_then(Value::as_str);
-        let key = INPUT_KEYS
-            .iter()
-            .find(|(_, name)| Some(*name) == raw)
-            .map_or(StatusKeystroke::Other, |(key, _)| *key);
+        let key = match raw {
+            Some("interrupt") => StatusKeystroke::Interrupt,
+            Some("submit") => StatusKeystroke::Submit,
+            _ => StatusKeystroke::Other,
+        };
         Ok(Self { pane: wire.pane, key })
     }
 }

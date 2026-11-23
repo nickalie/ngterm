@@ -1228,11 +1228,12 @@ fn input(key: StatusKeystroke) -> Body {
     })
 }
 
-/// A key typed into a shown pane goes to an origin that speaks `pane.input`: the first plain key and the first submit,
-/// then nothing until a notification can raise the badge again, as nothing more could clear it.
+/// Each key typed into a shown pane goes to an origin that speaks `pane.input`, as each key typed there reaches its
+/// Badge reset rule: the origin can raise the badge between two keys and tell the viewer nothing (a terminal's own
+/// notification).
 #[test]
-fn typed_keys_reach_an_origin_that_speaks_them_until_nothing_more_could_clear() {
-    use ngterm_core::model::StatusKeystroke::{Other, Submit};
+fn every_typed_key_reaches_an_origin_that_speaks_them() {
+    use ngterm_core::model::StatusKeystroke::{Interrupt, Other, Submit};
     local(async {
         let mut harness = Harness::attached(Some(1)).await;
         let pane = pane_ref(SESSION, PANE);
@@ -1245,23 +1246,13 @@ fn typed_keys_reach_an_origin_that_speaks_them_until_nothing_more_could_clear() 
 
         harness.deliver(hello(&["status", PANE_INPUT_KIND])).await;
         harness.received().await;
-        let sent: Vec<bool> = [Other, Other, Submit, Other, Submit]
+        let keys = [Other, Other, Submit, Other, Submit, Interrupt];
+        let sent: Vec<bool> = keys
             .into_iter()
             .map(|key| harness.presentations.borrow_mut().typed(&pane, key))
             .collect();
-        assert_eq!(sent, [true, false, true, false, false]);
-        assert_eq!(harness.received().await.bodies, [input(Other), input(Submit)]);
-
-        harness
-            .deliver(Body::Notify(PresentationNotify {
-                title: "done".to_owned(),
-                body: String::new(),
-                pane: None,
-                source: "control".to_owned(),
-            }))
-            .await;
-        assert!(harness.presentations.borrow_mut().typed(&pane, Other));
-        assert_eq!(harness.received().await.bodies, [input(Other)]);
+        assert_eq!(sent, [true; 6]);
+        assert_eq!(harness.received().await.bodies, keys.map(input));
 
         let elsewhere = [
             pane_ref("00000000-0000-0000-0000-0000000000FF", PANE),

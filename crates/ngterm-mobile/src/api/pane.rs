@@ -512,13 +512,20 @@ impl Pane {
                 pane = self.id.as_str()
             );
         })?;
-        self.ask(|pane, slot, reply| Command::PaneInput {
-            pane,
-            slot,
-            action,
-            reply,
-        })
-        .await
+        let last_key = action.last_key();
+        let outcome = self
+            .ask(|pane, slot, reply| Command::PaneInput {
+                pane,
+                slot,
+                action,
+                reply,
+            })
+            .await;
+        // the user answered on the phone, as if typing there
+        if let Some(key) = outcome.as_ref().ok().and_then(|outcome| outcome.typed(last_key)) {
+            self.typed(key);
+        }
+        outcome
     }
 
     /// Tells the pane's origin of a key the user typed, for its Badge reset rule; a handle with no core behind it tells
@@ -553,32 +560,10 @@ fn mods(bits: u8) -> Mods {
     Mods::from_bits_truncate(bits)
 }
 
-/// What `key` means to the origin's Badge reset rule (`ngterm-core`'s [`interrupt::classify`]): a submit is Enter with no
-/// modifier, the locks aside.
+/// What `key` means to the origin's Badge reset rule ([`interrupt::classify_named`]), by the text it types before Ctrl.
 fn key_kind(key: &PaneKey) -> StatusKeystroke {
-    let physical = match key.key.as_str() {
-        "escape" => interrupt::Key::Escape,
-        "enter" => interrupt::Key::Return,
-        "numpad_enter" => interrupt::Key::KeypadEnter,
-        "key_c" => interrupt::Key::C,
-        _ => interrupt::Key::Other,
-    };
-    let held = mods(key.mods);
-    let modifiers = [
-        (Mods::SHIFT, interrupt::KeyModifiers::SHIFT),
-        (Mods::CTRL, interrupt::KeyModifiers::CONTROL),
-        (Mods::ALT, interrupt::KeyModifiers::OPTION),
-        (Mods::SUPER, interrupt::KeyModifiers::COMMAND),
-    ]
-    .into_iter()
-    .filter(|(bit, _)| held.contains(*bit))
-    .fold(interrupt::KeyModifiers::NONE, |all, (_, modifier)| all | modifier);
-    let character = key
-        .unshifted
-        .as_deref()
-        .or(Some(key.text.as_str()))
-        .filter(|text| !text.is_empty());
-    interrupt::classify(physical, character, modifiers)
+    let character = key.unshifted.as_deref().or(Some(key.text.as_str()));
+    interrupt::classify_named(&key.key, character, mods(key.mods))
 }
 
 /// Whether `input` is a Left arrow with no modifier (the locks aside) for a screen where Claude Code would take it to

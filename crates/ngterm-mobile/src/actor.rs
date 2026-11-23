@@ -1182,7 +1182,6 @@ async fn tick<T: Transport>(state: Weak<State<T>>) {
     }
 }
 
-/// The pane commands.
 /// The listed session `raw`, a link tapped in `pane`, names in its machine's kept listing.
 fn session_link<T: Transport>(state: &State<T>, pane: &PaneRef, raw: &str) -> Option<RemoteSession> {
     let target = state
@@ -1202,6 +1201,7 @@ fn session_link<T: Transport>(state: &State<T>, pane: &PaneRef, raw: &str) -> Op
     target
 }
 
+/// The pane commands.
 fn pane_command<T: Transport>(state: &Rc<State<T>>, command: Command) {
     match command {
         Command::ShowPane {

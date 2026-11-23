@@ -32,6 +32,8 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
 
     private unowned let view: TerminalView
     private var taps = ClickCounter()
+    // counts taps, so a link lookup that ends after a later tap does nothing
+    private var tapGeneration = 0
     // what a drag holds: a handle's grip while it moves an end, none while it scrolls
     private var dragGrip: SelectionGrip?
     private var dragTranslation: CGPoint = .zero
@@ -54,10 +56,11 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
     /// A tap at `point` at `time` (seconds of the system's uptime).
     ///
     /// A single tap on a hyperlinked cell asks the pane for the session its link names, and does the tap's own work
-    /// only when it names none.
+    /// only when it names none; a later tap before the answer takes the place of both.
     @discardableResult
     public func tap(at point: CGPoint, time: TimeInterval) -> Task<Void, Never>? {
         let count = taps.click(at: point, time: time, reach: Self.tapReach)
+        tapGeneration += 1
         guard count == 1, let open = view.onSessionLink, let cell = view.pointer.cell(at: point),
             view.screen.isLinked(Int(cell.y), column: Int(cell.x))
         else {
@@ -65,11 +68,16 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
             return nil
         }
         let pane = view.pane
+        let generation = tapGeneration
         return Task { [weak self] in
-            if let target = try? await pane.sessionLink(at: cell) {
+            let target = try? await pane.sessionLink(at: cell)
+            guard let self, tapGeneration == generation else {
+                return
+            }
+            if let target {
                 open(target)
             } else {
-                self?.tapOwnWork(count, at: point)
+                tapOwnWork(count, at: point)
             }
         }
     }
