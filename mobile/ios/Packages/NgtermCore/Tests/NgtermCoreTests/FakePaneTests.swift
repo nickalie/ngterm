@@ -45,6 +45,21 @@ internal struct FakePaneTests {
         )
     }
 
+    @Test("the appearances it is given are kept, and a cell's session link names the session it holds")
+    internal func appearanceAndLinks() throws {
+        let pane = FakePane()
+        pane.setColorScheme(scheme: .dark)
+        #expect(pane.colorSchemes == [.dark])
+        #expect(throws: PaneInputError.Closed) {
+            try pane.sessionLink(at: Self.point)
+        }
+        pane.frames = { _ in Data() }
+        let session = fakeSession(id: "s2")
+        pane.links = [Self.point: session]
+        #expect(try pane.sessionLink(at: Self.point) == session)
+        #expect(try pane.sessionLink(at: CellPoint(x: 0, y: 0)) == nil)
+    }
+
     @Test("a paste with a line break is refused unless allowed, and empty text writes nothing")
     internal func pasteFollowsThePasteProtection() throws {
         let pane = FakePane { _ in Data() }

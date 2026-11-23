@@ -73,7 +73,8 @@ data class PaneSpot(
  * What a pane's slot does: [keyboard] is the one every pane types through; [onShow] shows a pane at the grid its
  * slot first has room for, and [onRetry] tries one that could not be shown again; [onFocus] selects the pane a touch
  * or the input focus landed on; [onTakeLead] is Take control; [onDetach] lets the session go (an exited program's
- * cover offers it); [onShowTerminal] shows a chat's terminal in its place; [machine] names where the panes live.
+ * cover offers it); [onShowTerminal] shows a chat's terminal in its place; [onSessionLink] opens the session of
+ * the same machine a session link tapped in a pane names; [machine] names where the panes live.
  */
 data class PaneActions(
     val keyboard: TerminalKeyboard,
@@ -84,6 +85,7 @@ data class PaneActions(
     val onTakeLead: (PaneRef) -> Unit,
     val onDetach: () -> Unit,
     val onShowTerminal: (PaneRef) -> Unit = {},
+    val onSessionLink: (String) -> Unit = {},
 )
 
 /**
@@ -150,6 +152,7 @@ fun PaneSlot(
                     focusRequester = focusRequester,
                     readAloud = readAloud && !cover.veils,
                     onSwipe = onSwipe,
+                    onSessionLink = { actions.onSessionLink(it.id) },
                 )
             } else {
                 // no terminal yet (attaching, or it couldn't be shown): the slot still takes a hardware keyboard's

@@ -82,6 +82,16 @@ public struct TerminalScreen: Sendable {
         return changed.filteredIndexSet { rows.indices.contains($0) }
     }
 
+    /// Whether the cell at `column` of row `index` is part of a hyperlink (OSC 8).
+    public func isLinked(_ index: Int, column: Int) -> Bool {
+        guard let row = row(index) else {
+            return false
+        }
+        return row.runs.contains { run in
+            run.attributes.contains(.hyperlink) && (run.column..<run.end).contains(column)
+        }
+    }
+
     /// The text of row `index` as drawn, its blank cells spaces, trailing blanks trimmed (for tests and accessibility).
     public func text(_ index: Int) -> String {
         guard let row = row(index) else {

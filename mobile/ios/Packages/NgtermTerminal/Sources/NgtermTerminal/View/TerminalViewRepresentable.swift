@@ -17,6 +17,7 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
     private var keyboard: TerminalKeyboard?
     private var select: (@MainActor () -> Void)?
     private var swipe: (@MainActor (Bool) -> Void)?
+    private var sessionLink: (@MainActor (RemoteSession) -> Void)?
     private var readsAloud = false
 
     /// The terminal of `pane`, told of new frames through `feed`.
@@ -65,6 +66,14 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
         return copy
     }
 
+    /// The same terminal, a tap on a session link going to `action` (``TerminalView/onSessionLink``).
+    @preconcurrency
+    public func onSessionLink(_ action: (@MainActor (RemoteSession) -> Void)?) -> Self {
+        var copy = self
+        copy.sessionLink = action
+        return copy
+    }
+
     /// The same terminal, saying its cursor's line to VoiceOver as it changes when `reads` (the selected pane).
     public func readsAloud(_ reads: Bool) -> Self {
         var copy = self
@@ -73,10 +82,10 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
     }
 
     /// The terminal view, joined to the feed.
-    public func makeUIView(context _: Context) -> TerminalView {
+    public func makeUIView(context: Context) -> TerminalView {
         let view = TerminalView(pane: pane, palette: palette, textSize: textSize, faces: faces, keyboard: keyboard)
         view.comesOnInViewUpdates = true
-        take(into: view)
+        take(into: view, dark: context.environment.colorScheme == .dark)
         return view
     }
 
@@ -85,7 +94,8 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
         TextSizeGiven(textSize)
     }
 
-    /// Takes the palette, the font and the focus as they are now, and the text size when it is a new one.
+    /// Takes the palette, the font, the app's appearance and the focus as they are now, and the text size when it is a
+    /// new one.
     public func updateUIView(_ view: TerminalView, context: Context) {
         view.palette = palette
         if context.coordinator.textSize != textSize {
@@ -94,14 +104,17 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
             view.defaultTextSize = textSize
         }
         view.faces = faces
-        take(into: view)
+        take(into: view, dark: context.environment.colorScheme == .dark)
     }
 
-    // what changes with every update: the hooks, then the focus; a terminal drawn focused takes the focus handed over
-    // once the update is over (TerminalKeyboard.duringViewUpdate), as one the update puts in a window does
-    private func take(into view: TerminalView) {
+    // what changes with every update: the hooks and the app's appearance (`dark`), then the focus; a terminal drawn
+    // focused takes the focus handed over once the update is over (TerminalKeyboard.duringViewUpdate), as one the
+    // update puts in a window does
+    private func take(into view: TerminalView, dark: Bool) {
         view.onSelect = select
         view.onSwipe = swipe
+        view.onSessionLink = sessionLink
+        view.colorScheme = dark ? .dark : .light
         view.readsAloud = readsAloud
         view.keyboard.duringViewUpdate {
             view.drawsFocused = focused

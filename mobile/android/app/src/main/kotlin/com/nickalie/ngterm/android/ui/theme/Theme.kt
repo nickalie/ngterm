@@ -18,6 +18,8 @@ data class NgtermTokens(
     val status: StatusColors,
     val mono: MonoTypography,
     val terminal: TerminalPalette,
+    /** Whether the theme is on its dark side: the appearance the terminal reports to programs that ask. */
+    val dark: Boolean = true,
     val spacing: Spacing = Spacing(),
     val motion: Motion = Motion(),
 )
@@ -57,6 +59,7 @@ fun NgtermTheme(
             status = if (darkTheme) DarkStatus else LightStatus,
             mono = NgtermMono,
             terminal = terminal ?: if (darkTheme) CopperTerminal else DraftingTerminal,
+            dark = darkTheme,
         )
     CompositionLocalProvider(LocalNgtermTokens provides tokens) {
         MaterialTheme(
@@ -84,6 +87,11 @@ object NgtermTheme {
     val terminal: TerminalPalette
         @Composable @ReadOnlyComposable
         get() = LocalNgtermTokens.current.terminal
+
+    /** Whether the theme is on its dark side. */
+    val dark: Boolean
+        @Composable @ReadOnlyComposable
+        get() = LocalNgtermTokens.current.dark
 
     /** The spacing grid. */
     val spacing: Spacing

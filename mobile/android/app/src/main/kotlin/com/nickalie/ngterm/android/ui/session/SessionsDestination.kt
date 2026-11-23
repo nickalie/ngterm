@@ -132,6 +132,7 @@ private fun LiveSession(
                 onView = actions.onView,
                 onChatView = actions.onChatView,
                 onDuplicate = actions.onDuplicate,
+                onSessionLink = actions.onSessionLink,
                 onAlone = { session, on ->
                     alone.remove(session.saved)
                     if (on) alone.add(session.saved)

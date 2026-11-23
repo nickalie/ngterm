@@ -277,8 +277,10 @@ compact (iPhone, Slide Over)     regular (iPad, Stage Manager large)
 recognizers; what is new to iOS is the system's: the edit menu, the text beam, the paste rule.
 
 - **A finger:** a drag scrolls the screen with the finger, in whole rows, and flings on as a list does (a program that
-  asked for the mouse gets wheel turns); a tap gives the terminal the focus, or lets a touch selection go, and clicks
-  where it landed while a program tracks the mouse; a double tap selects the word, a triple tap the line; a long press
+  asked for the mouse gets wheel turns); a tap on a session link (`ngterm://session/<id>`, an OSC 8 link an agent
+  prints) of a session the machine lists opens that session, attached first when it isn't, and does nothing else; any
+  other tap gives the terminal the focus, or lets a touch selection go, and clicks where it landed while a program
+  tracks the mouse; a double tap selects the word, a triple tap the line; a long press
   selects the word with a selection tick (haptic) and a drag from it extends the selection as text selection does; a
   pinch changes the text size in whole points within Settings' 8 to 32, for this view only (Settings keeps its own).
 - **Selection handles** (`SelectionHandles`), iOS's own shape: a stem two points wide on the selection's edge, a row

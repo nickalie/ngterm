@@ -237,6 +237,36 @@ public final class SessionModel {
         }
     }
 
+    /// Opens `sessionId` of the same machine, which a session link tapped in a pane names, through `open`: attached
+    /// first when it is not.
+    ///
+    /// A view gone meanwhile, or one that opened another session, opens nothing: the session stays attached in the
+    /// lists. A failure to attach is the ``notice``.
+    @discardableResult
+    @preconcurrency
+    public func openLinked(
+        _ sessionId: String,
+        then open: @escaping @MainActor (SessionKey) -> Void
+    ) -> Task<Void, Never> {
+        let began = opens
+        let linked = SessionKey(machineId: key.machineId, sessionId: sessionId)
+        return Task {
+            do {
+                try await graph.connections.attach(machineId: linked.machineId, sessionId: linked.sessionId)
+                try Task.checkCancellation()
+                guard isShowing, opens == began else {
+                    return
+                }
+                opens += 1
+                open(linked)
+            } catch let error as MobileError {
+                notice = error.reason
+            } catch {
+                // the caller's task was cancelled: an attach that went on shows in the lists
+            }
+        }
+    }
+
     /// Ends the session on its machine, with no undo (the view confirms first); whether it ended.
     ///
     /// A failure is the ``notice``.

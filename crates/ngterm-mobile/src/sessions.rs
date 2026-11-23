@@ -27,6 +27,8 @@ mod tests;
 
 use std::time::Duration;
 
+use ngterm_core::link_policy;
+use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::not_live;
 use ngterm_core::remote::origin::{self, OriginForm, OriginShell};
 use ngterm_core::remote::origin_replies::{
@@ -109,6 +111,27 @@ pub fn listed_sessions(tree: &ControlRemoteTree) -> Vec<RemoteSession> {
                 .map(move |session| RemoteSession::listed(session, peer))
         })
         .collect()
+}
+
+/// The listed session a session link names, tapped in a pane of `from` (upstream's `WindowLibrary+SessionLink`): the
+/// raw link must be exactly `ngterm://session/<id>`, or `agterm://session/<id>` when an agterm origin lists `from`. The
+/// id resolves in the listing of the app that lists `from`, among the sessions the app lists. `None` for any other
+/// link, an unknown or page session, or a `from` the listing does not hold.
+#[must_use]
+pub fn session_link_target(tree: &ControlRemoteTree, from: &str, raw: &str) -> Option<RemoteSession> {
+    let app = tree
+        .apps()
+        .find(|app| app.sessions.iter().any(|listed| listed.id == from))?;
+    let peer = app.endpoint.peer();
+    let id = link_policy::session_link(raw, RemotePeer::Ngterm).or_else(|| match peer {
+        RemotePeer::Agterm => link_policy::session_link(raw, peer),
+        RemotePeer::Ngterm => None,
+    })?;
+    let id = uuid_string(id);
+    pickable_sessions(app)
+        .into_iter()
+        .find(|session| session.id.eq_ignore_ascii_case(&id))
+        .map(|session| RemoteSession::listed(session, peer))
 }
 
 /// `fresh`, a listing of one app alone (New Session's and Duplicate's), as the machine's whole listing: with the

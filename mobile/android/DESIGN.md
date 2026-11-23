@@ -434,7 +434,7 @@ learn, and nothing drawn until a gesture asks for it.
 | a long press | selects the word (a haptic tick), with handles and the toolbar; dragging on without lifting extends it |
 | a handle's drag | moves that end of the selection |
 | two fingers | pinch the text size |
-| a tap | a click for a program tracking the mouse; otherwise it lets a touch selection go; unless it let one go, it gives the terminal the focus and opens the soft keyboard (Keyboard, below) |
+| a tap | on a session link (`ngterm://session/<id>`, an OSC 8 link an agent prints) of a session the machine lists, opens that session, attached first when it isn't, and does nothing else; otherwise a click for a program tracking the mouse; otherwise it lets a touch selection go; unless it let one go, it gives the terminal the focus and opens the soft keyboard (Keyboard, below) |
 | a mouse or trackpad | under mouse tracking its buttons, drags and moves go to the program (shift held selects instead); otherwise a click lets the selection go, a double click selects the word and a triple one the line, a drag selects; the wheel scrolls either way |
 | the right button | the menu: Copy (while there is a selection), Paste, Select all |
 

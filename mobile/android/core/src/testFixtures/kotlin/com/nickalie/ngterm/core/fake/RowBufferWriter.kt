@@ -31,6 +31,7 @@ data class FakeRun(
         const val INVISIBLE = 32
         const val STRIKETHROUGH = 64
         const val OVERLINE = 128
+        const val HYPERLINK = 256
 
         private fun defaultSpan(
             text: String,

@@ -7,9 +7,10 @@
     ///
     /// It mirrors mobile/android's `FakePane`. ``frame(sinceSeq:)`` answers with what ``frames`` packs (a
     /// ``RowBufferWriter``'s bytes) for the seq asked, and throws ``PaneInputError/Closed`` while it is `nil`;
-    /// ``resize(size:)`` and ``setColors(colors:)`` are kept in ``sizes`` and ``colors``, and each seq asked in
-    /// ``asked``. As the real terminal wakes (and the core reports a dirty pane) after a resize, new colors or a
-    /// selection change, those call ``onWake``. Every method may be called from any thread.
+    /// ``resize(size:)`` and ``setColors(colors:)`` are kept in ``sizes`` and ``colors``,
+    /// ``setColorScheme(scheme:)`` in ``colorSchemes``, and each seq asked in ``asked``; ``sessionLink(at:)`` answers
+    /// the session ``links`` holds for the cell. As the real terminal wakes (and the core reports a dirty pane) after a
+    /// resize, new colors or a selection change, those call ``onWake``. Every method may be called from any thread.
     ///
     /// Input is kept in ``inputs``, in order, then goes to ``onInput``, and answered as the real terminal would:
     /// ``mouse(mouse:)`` reports only while ``tracking`` (the program asked for the mouse); ``wheel(wheel:)`` answers
@@ -36,6 +37,8 @@
             var selection: String?
             var sizes: [PaneSize] = []
             var colors: [PaneColors] = []
+            var colorSchemes: [PaneColorScheme] = []
+            var links: [CellPoint: RemoteSession] = [:]
             var asked: [UInt64] = []
             var inputs: [FakeInput] = []
             var outcome = AgentInputOutcome.sent
@@ -93,6 +96,17 @@
         /// The colors it was given, in order.
         public var colors: [PaneColors] {
             state.withLock { $0.colors }
+        }
+
+        /// The appearances it was given, in order.
+        public var colorSchemes: [PaneColorScheme] {
+            state.withLock { $0.colorSchemes }
+        }
+
+        /// The session each cell's session link names.
+        public var links: [CellPoint: RemoteSession] {
+            get { state.withLock { $0.links } }
+            set { state.withLock { $0.links = newValue } }
         }
 
         /// The seqs its frames were asked after, in order.
@@ -166,6 +180,20 @@
         public func setColors(colors: PaneColors) {
             state.withLock { $0.colors.append(colors) }
             wake()
+        }
+
+        /// Keeps `scheme`.
+        public func setColorScheme(scheme: PaneColorScheme) {
+            state.withLock { $0.colorSchemes.append(scheme) }
+        }
+
+        /// The session ``links`` holds for `at`.
+        public func sessionLink(at: CellPoint) throws -> RemoteSession? {
+            let read: RemoteSession?? = state.withLock { state in state.frames == nil ? nil : .some(state.links[at]) }
+            guard let read else {
+                throw PaneInputError.Closed
+            }
+            return read
         }
 
         /// What ``frames`` packs for `sinceSeq`.

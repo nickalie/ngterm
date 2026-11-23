@@ -43,6 +43,14 @@ class TerminalScreen {
         selection = update.selection
     }
 
+    /** Whether the cell at [column] of row [index] is part of a hyperlink (OSC 8). */
+    fun linked(
+        index: Int,
+        column: Int,
+    ): Boolean =
+        row(index)?.runs?.any { column in it.column until it.column + it.span && it.has(TerminalRun.ATTR_HYPERLINK) }
+            ?: false
+
     /** Row [index]'s text as drawn, its blank cells spaces, trailing blanks trimmed (for tests and accessibility). */
     fun text(index: Int): String {
         val row = row(index) ?: return ""
