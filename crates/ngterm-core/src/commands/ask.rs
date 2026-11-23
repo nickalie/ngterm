@@ -350,6 +350,8 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     } else if target.is_some() {
         let resolved = Resolver::new(core.library()).session(target, window)?;
         open_gui(core, ask, resolved.window, Some(resolved.session), &placement)
+    } else if core.presenter_only() {
+        return Err(ControlError::rejected(super::headless::ASK_NEEDS_TARGET));
     } else {
         let window = Resolver::new(core.library()).open_placement_window(window)?;
         open_gui(core, ask, window, None, &placement)

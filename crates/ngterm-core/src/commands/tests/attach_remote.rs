@@ -2356,6 +2356,7 @@ fn attach_split_session(fixture: &mut Fixture, capability: Option<u32>, select: 
         },
         sessions: vec![remote.clone()],
         presentation: None,
+        headless: None,
         beside: None,
         skipped: None,
         restore: None,

@@ -14,6 +14,7 @@ pub(crate) mod config;
 pub(crate) mod dashboard;
 pub(crate) mod debug;
 pub(crate) mod font;
+pub(crate) mod headless;
 pub(crate) mod hooks;
 pub(crate) mod hud;
 pub(crate) mod keymap;

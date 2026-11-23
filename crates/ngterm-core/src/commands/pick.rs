@@ -116,6 +116,9 @@ fn open_window_pick(
     window: Option<&str>,
     follow: bool,
 ) -> Result<(), ControlError> {
+    if core.presenter_only() {
+        return Err(ControlError::rejected(super::headless::PICK_NEEDS_SESSION));
+    }
     let owner = placement_window(core, window)?;
     core.modals.open_pick(owner, pick).map_err(ControlError::rejected)?;
     raise(core, owner, follow);

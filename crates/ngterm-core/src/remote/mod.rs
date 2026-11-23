@@ -306,7 +306,8 @@ fn local_tree(core: &Core) -> Outcome {
             tree: core.tree_of(Some(info.id)),
         })
         .collect();
-    let remote = tree::candidates(&windows, &inventory).map_err(|error| ControlError::rejected(error.message()))?;
+    let mut remote = tree::candidates(&windows, &inventory).map_err(|error| ControlError::rejected(error.message()))?;
+    remote.headless = core.presenter_only().then_some(true);
     Ok(ControlResult {
         remote: Some(remote),
         ..ControlResult::default()

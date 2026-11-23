@@ -534,16 +534,13 @@ exemptions:
     ssh; the origin side is tested through live.present
   event:remote.opened: emitted when a session attached over ssh opens, excluded with live.attach
   event:remote.closed: emitted when a session attached over ssh closes, excluded with live.attach
-  field:result.headless: reported only by agterm-server (`version` from a headless host), which no suite host runs; a Mac
-    app omits it
-  field:result.versions: reported only by agterm-server, exempted with field:result.headless
   field:tree.remote: set only on a remote window's tree, which mirrors an agterm-server over ssh, excluded by the suite's
     no-network constraints; window.remote.open's refusals are still tested
   field:window.remote: set only on a remote window, exempted with field:tree.remote
   field:tree.session.pending: a remote window row's operation state, exempted with field:tree.remote
   field:tree.session.scratchBacked: set only on a remote window's row, exempted with field:tree.remote
-  field:tree.session.ended: set only by agterm-server for a session left with no live pane, exempted with
-    field:result.headless
+  field:tree.session.ended: set only by agterm-server for a session left with no live pane, which the Rust build's
+    ngterm-headless does not report yet
   field:tree.session.interactions: lists what a session holds for a presenter, which needs a viewer attached over ssh
     (live.attach) or a headless host; neither is within the suite's no-network constraints
   field:tree.session.remoteSessionID: set only on a session attached from another machine, exempted with

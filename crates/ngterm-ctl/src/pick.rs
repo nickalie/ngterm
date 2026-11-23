@@ -50,7 +50,7 @@ impl Pick {
                 let mut io = LiveIo {
                     socket: command.options.basic.socket_path(env),
                 };
-                command.execute(&input, &mut io)
+                command.execute(&input, &mut io, env)
             }
             PickCommand::Result(command) => {
                 let mut io = LiveIo {
@@ -149,8 +149,8 @@ impl Open {
         Ok(())
     }
 
-    /// The open request for the items in `input`.
-    pub fn request(&self, input: &[u8]) -> Result<Request, Failure> {
+    /// The open request for the items in `input`, bound to session `bound` when given, else to `--session`.
+    pub fn request(&self, input: &[u8], bound: Option<String>) -> Result<Request, Failure> {
         let args = Args {
             follow: self.follow.then_some(true),
             items: Some(parse_items(input)?),
@@ -163,14 +163,43 @@ impl Open {
         };
         Ok(Request {
             cmd: Command::Pick(PickCmd::Open),
-            target: self.session.clone(),
+            target: bound.or_else(|| self.session.clone()),
             args: self.options.with_window(Some(args)),
         })
     }
 
+    /// The session the pick is bound to (upstream's `boundSession`): `--session`, else the pane's own session when the
+    /// server is `ngterm-headless`, which has no window of its own to show a pick in. An app keeps the window pick.
+    fn bound_session(&self, io: &mut dyn ModalIo, env: &dyn Env) -> Result<Option<String>, Failure> {
+        if let Some(session) = &self.session {
+            return Ok(Some(session.clone()));
+        }
+        let Some(own) = env
+            .var("NGTERM_SESSION_ID")
+            .and_then(|own| own.into_string().ok())
+            .filter(|own| !own.is_empty())
+        else {
+            return Ok(None);
+        };
+        let version = Request {
+            cmd: Command::Version,
+            target: None,
+            args: None,
+        };
+        let reply = io.send(&version)?;
+        let headless = reply
+            .response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("headless"))
+            .and_then(serde_json::Value::as_bool);
+        Ok((headless == Some(true)).then_some(own))
+    }
+
     /// Opens the picker over `io` and prints its id or, once it resolves, its result.
-    pub fn execute(&self, input: &[u8], io: &mut dyn ModalIo) -> Result<(), Failure> {
-        let request = self.request(input)?;
+    pub fn execute(&self, input: &[u8], io: &mut dyn ModalIo, env: &dyn Env) -> Result<(), Failure> {
+        let bound = self.bound_session(io, env)?;
+        let request = self.request(input, bound)?;
         ModalRunner {
             family: Family::Pick,
             json: self.options.basic.json,
@@ -243,6 +272,8 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use serde_json::{Value, json};
 
+    use ngterm_core::paths::MapEnv;
+
     use super::*;
     use crate::Ngtermctl;
     use crate::modal::tests::{FakeIo, answer};
@@ -266,7 +297,7 @@ mod tests {
     }
 
     fn open_request(argv: &[&str], input: &str) -> Value {
-        serde_json::to_value(open(argv).request(input.as_bytes()).ok().unwrap()).unwrap()
+        serde_json::to_value(open(argv).request(input.as_bytes(), None).ok().unwrap()).unwrap()
     }
 
     fn items(input: &[u8]) -> Vec<PickItem> {
@@ -407,7 +438,7 @@ mod tests {
                 Ok(answer(&json!({"pick": {"result": "custom", "query": "typed"}})))
             }
         });
-        let outcome = open(&["--window", "w1"]).execute(b"a\nb\n", &mut io);
+        let outcome = open(&["--window", "w1"]).execute(b"a\nb\n", &mut io, &MapEnv::new());
         assert!(outcome.is_ok());
         assert_eq!(
             io.requests,
@@ -418,5 +449,44 @@ mod tests {
             ]
         );
         assert_eq!(io.lines, [r#"{"result":"custom","query":"typed"}"#]);
+    }
+
+    /// Opens `argv` with `--no-block` against a server whose `version` answers `version`, in a pane of session `own`
+    /// when given; the requests it sent.
+    fn bound_requests(argv: &[&str], version: &Value, own: Option<&str>) -> Vec<Value> {
+        let version = version.clone();
+        let mut io = FakeIo::new(move |request: &Request| {
+            if request.cmd == Command::Version {
+                Ok(answer(&version))
+            } else {
+                Ok(answer(&json!({"id": "P1"})))
+            }
+        });
+        let env = own.map_or_else(MapEnv::new, |own| MapEnv::new().with("NGTERM_SESSION_ID", own));
+        let argv: Vec<&str> = argv.iter().copied().chain(["--no-block"]).collect();
+        assert!(open(&argv).execute(b"a\n", &mut io, &env).is_ok());
+        io.requests
+    }
+
+    /// A pane's own untargeted pick binds to its session only on `ngterm-headless`, which has no window to show it in;
+    /// an app keeps the window pick, and `--session` or a caller outside a pane never asks the server.
+    #[test]
+    fn an_untargeted_pick_binds_to_the_panes_session_only_on_a_headless_server() {
+        let headless = json!({"app": {"version": "1"}, "headless": true});
+        let app = json!({"app": {"version": "1"}});
+        let sent = bound_requests(&[], &headless, Some("S1"));
+        assert_eq!(sent[0], json!({"cmd": "version"}));
+        assert_eq!(sent[1]["target"], json!("S1"));
+        let sent = bound_requests(&[], &app, Some("S1"));
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1].get("target"), None);
+        let sent = bound_requests(&["--session", "S2"], &headless, Some("S1"));
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0]["target"], json!("S2"));
+        for own in [None, Some("")] {
+            let sent = bound_requests(&[], &headless, own);
+            assert_eq!(sent.len(), 1, "{own:?}");
+            assert_eq!(sent[0].get("target"), None);
+        }
     }
 }

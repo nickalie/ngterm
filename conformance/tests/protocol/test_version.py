@@ -1,5 +1,6 @@
 import pytest
 from agterm_conformance.match import assert_ok, assert_version_result
+from agterm_conformance.plugin import Ctl
 
 
 @pytest.mark.covers("version", "field:result.app")
@@ -38,3 +39,24 @@ def test_installed_follows_the_file_on_disk(launch, adapter):
     removed = assert_version_result(ctl.request("version"))
     assert "installed" not in removed, removed
     assert removed["app"] == app
+
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("version", "field:result.headless", "field:result.versions")
+def test_an_app_with_windows_reports_neither_headless_nor_versions(ctl):
+    result = assert_version_result(ctl.request("version"))
+    assert "headless" not in result and "versions" not in result, result
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.requires("posix-command-line", reason="the remote origin's sshd is POSIX only")
+@pytest.mark.requires("live-any-shell", reason="ngterm-headless runs every session Live, in any login shell")
+@pytest.mark.parametrize("remote_origin", ["headless"], indirect=True)
+@pytest.mark.covers("version", "field:result.headless", "field:result.versions")
+def test_a_headless_origin_reports_headless_and_what_it_serves(remote_origin):
+    """`ngterm-headless` (upstream's agterm-server) reports `headless`, where a pane's own untargeted pick belongs to its
+    session, and the versions of its build, the presentation stream and the catalog stream."""
+    result = assert_ok(Ctl(remote_origin.instance).request("version"))
+    assert result["headless"] is True, result
+    assert result["versions"] == {"server": result["app"]["version"], "protocol": 1, "catalog": 1}, result

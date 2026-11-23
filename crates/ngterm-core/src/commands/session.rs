@@ -113,6 +113,7 @@ fn validate_new(args: &Args) -> Result<(), ControlError> {
 /// defaults to the home directory and is otherwise taken as given.
 fn new(core: &mut Core, args: &Args) -> Outcome {
     validate_new(args)?;
+    super::headless::refuse_wait(core, SessionCmd::New, args.wait)?;
     let tint = super::tint::creation_tint(args)?;
     let no_select = args.no_select == Some(true);
     let spec = NewSession {

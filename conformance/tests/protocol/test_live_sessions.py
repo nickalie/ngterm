@@ -1929,3 +1929,111 @@ def test_tree_parent_membership_lists_companions_in_sidebar_order(live, tmp_path
     assert_absent(listed[page], "companions")
     assert_absent(listed[companion], "companions")
     assert_ok(live.request("session.close", sid))
+
+
+HEADLESS_ORIGIN_MARKS = (
+    pytest.mark.since("0.42.0"),
+    pytest.mark.requires("posix-command-line", reason="the remote origin's sshd is POSIX only"),
+    pytest.mark.requires("live-any-shell", reason="ngterm-headless runs every session Live, in any login shell"),
+    pytest.mark.parametrize("remote_origin", ["headless"], indirect=True),
+)
+
+
+def headless_origin(test):
+    """A test against the staged `ngterm-headless` (upstream's agterm-server), behind the harness's own sshd."""
+    for mark in reversed(HEADLESS_ORIGIN_MARKS):
+        test = mark(test)
+    return test
+
+
+@headless_origin
+@pytest.mark.covers("live.tree", "field:result.remote")
+def test_live_tree_reports_a_headless_origin(ctl, remote_origin):
+    """A headless origin has no screen of its own to show what its presenter refuses, and says so; an app with windows
+    does not."""
+    app = assert_ok(ctl.request(ctl.vocabulary.command("live.tree")))["remote"]
+    assert_absent(app, "headless")
+    origin = Ctl(remote_origin.instance)
+    assert assert_ok(origin.request(origin.vocabulary.command("live.tree")))["remote"]["headless"] is True
+
+
+WINDOW_COMMANDS = (
+    "window.new",
+    "window.select",
+    "window.go",
+    "window.close",
+    "window.rename",
+    "window.delete",
+    "window.resize",
+    "window.move",
+    "window.zoom",
+    "window.fullscreen",
+    "window.minimize",
+    "window.remote.open",
+    "sidebar",
+    "sidebar.mode",
+    "sidebar.flagged-layout",
+    "sidebar.density",
+    "sidebar.expand",
+    "sidebar.collapse",
+    "sidebar.width",
+    "font.inc",
+    "font.dec",
+    "font.reset",
+    "quick",
+    "quick.type",
+    "quick.text",
+    "dashboard",
+    "surface.zoom",
+    "surface.cursor",
+    "theme.set",
+    "theme.list",
+    "keymap.reload",
+    "keymap.list",
+    "keymap.run",
+    "config.reload",
+    "browser.clear",
+    "browser.links",
+)
+
+
+@headless_origin
+@pytest.mark.covers("window.new", "sidebar", "font.inc", "quick", "dashboard", "theme.set", "config.reload")
+def test_a_headless_origin_refuses_what_drives_a_window(remote_origin):
+    """Upstream's `HeadlessCommandPolicy`: each command only a window can carry out is refused by name, before it runs."""
+    origin = Ctl(remote_origin.instance)
+    for command in WINDOW_COMMANDS:
+        assert_error(
+            origin.request(command),
+            f"{command} is not available on ngterm-headless: it drives a window on the machine showing it",
+        )
+
+
+@headless_origin
+@pytest.mark.covers("session.new", "session.companion.new", "ask.open", "pick.open")
+def test_a_headless_origin_refuses_a_wait_and_an_ask_or_pick_with_nowhere_to_show(remote_origin):
+    """A `--wait` pane has no window to be held in, and a GUI ask or a pick with no session to bind it to has no window
+    to show in; each is refused after the command's own checks."""
+    origin = Ctl(remote_origin.instance)
+    sid = assert_ok(origin.request("session.new"))["id"]
+    assert_error(
+        origin.request("session.new", command="true", wait=True),
+        "session.new --wait is not available on ngterm-headless",
+    )
+    assert_error(origin.request("session.new", wait=True), "--wait requires --command")
+    assert_error(
+        origin.request("session.companion.new", sid, command="true", wait=True),
+        "session.companion.new --wait is not available on ngterm-headless",
+    )
+    buttons = [{"id": "y", "label": "Yes"}]
+    assert_error(
+        origin.request("ask.open", title="deploy?", style="gui", buttons=buttons),
+        "ask.open needs --target on ngterm-headless, which has no window to show it in",
+    )
+    items = [{"id": "a", "label": "Alpha"}]
+    assert_error(
+        origin.request("pick.open", items=items),
+        "pick.open needs --session on ngterm-headless, which has no window to show it in",
+    )
+    assert_error(origin.request("pick.open"), "pick.open requires items")
+    assert_ok(origin.request("session.close", sid))

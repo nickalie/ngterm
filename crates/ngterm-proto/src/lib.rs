@@ -36,4 +36,4 @@ pub use result::{
 pub use tree::{
     ControlInteraction, ControlSessionNode, ControlSessionPick, ControlSurfaceNode, ControlTree, ControlWorkspaceNode,
 };
-pub use version::{AppIdentity, ConformanceProfile, PARITY_LEVEL, VersionResult};
+pub use version::{AppIdentity, CATALOG_VERSION, ConformanceProfile, PARITY_LEVEL, VersionResult};

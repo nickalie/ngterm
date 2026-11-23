@@ -376,6 +376,10 @@ pub struct ControlRemoteTree {
     /// The presentation protocol version this app speaks; absent from an app that predates the stream.
     #[serde(default)]
     pub presentation: Option<i64>,
+    /// True from a headless origin (`ngterm-headless`), which has no screen of its own to show what its presenter
+    /// refuses; absent from an app with windows.
+    #[serde(default)]
+    pub headless: Option<bool>,
     /// What the other app on the same host offers, when the host runs both and its listing pinned neither: agterm's
     /// sessions beside ngterm's, with the endpoint they attach through. Absent from an origin's own answer.
     #[serde(default)]

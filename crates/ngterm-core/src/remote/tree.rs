@@ -480,6 +480,7 @@ pub fn candidates(
         endpoint,
         sessions: terminals.into_iter().chain(pages).collect(),
         presentation: Some(frames::VERSION),
+        headless: None,
         beside: None,
         skipped: None,
         restore: None,
@@ -1141,6 +1142,7 @@ mod tests {
                 companions: None,
             }],
             presentation: Some(1),
+            headless: Some(true),
             beside: None,
             skipped: None,
             restore: None,
@@ -1158,7 +1160,8 @@ mod tests {
         );
         let older =
             r#"{"ok":true,"result":{"remote":{"endpoint":{"executable":"/z","socketDirectory":"/t"},"sessions":[]}}}"#;
-        assert_eq!(decode(older).unwrap().presentation, None);
+        let older = decode(older).unwrap();
+        assert_eq!((older.presentation, older.headless), (None, None));
     }
 
     fn answer_of(executable: &str, session: &str) -> String {

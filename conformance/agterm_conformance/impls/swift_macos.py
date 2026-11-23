@@ -139,6 +139,19 @@ NAME_TEXTS: Mapping[str, str] = {
     "catalog.subscribe is served only by ngterm-headless": "catalog.subscribe is served only by agterm-server",
     "catalog.op is served only by ngterm-headless": "catalog.op is served only by agterm-server",
     "operation receipts are served only by ngterm-headless": "operation receipts are served only by agterm-server",
+    "{name} is not available on ngterm-headless: it drives a window on the machine showing it": (
+        "{name} is not available on agterm-server: it drives a window on the Mac showing it"
+    ),
+    "session.new --wait is not available on ngterm-headless": "session.new --wait is not available on agterm-server",
+    "session.companion.new --wait is not available on ngterm-headless": (
+        "session.companion.new --wait is not available on agterm-server"
+    ),
+    "ask.open needs --target on ngterm-headless, which has no window to show it in": (
+        "ask.open needs --target on agterm-server, which has no window to show it in"
+    ),
+    "pick.open needs --session on ngterm-headless, which has no window to show it in": (
+        "pick.open needs --session on agterm-server, which has no window to show it in"
+    ),
 }
 
 # Platform-neutral replica ownership wording, where upstream names its two Macs.

@@ -20,6 +20,8 @@
 //! - The agent skill and status hooks are installed, or updated to this build's bundle, at each start of a staged build
 //!   (a relaunch included, which may be an upgraded binary) before this library runs (the binary's `set_up_agents`),
 //!   since a server has no Help menu to run them from.
+//! - It answers as upstream's agterm-server: `version` and `live tree` report `headless`, and a command that drives a
+//!   window, a `--wait`, and a GUI ask or a pick with no session to bind it to are refused by name.
 //! - One instance per state directory, as the app: the state lock refuses a second one, and an app instance on the
 //!   same state directory too.
 //! - It can view as well: `ngtermctl live attach` on it attaches another machine's session as a row of its own, its

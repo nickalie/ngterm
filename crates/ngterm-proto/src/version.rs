@@ -8,6 +8,9 @@ use crate::result::CatalogVersions;
 /// The upstream version whose behavior this build claims.
 pub const PARITY_LEVEL: &str = "0.41.1";
 
+/// The catalog stream's version a headless server advertises in `versions.catalog` (upstream's `CatalogCodec.version`).
+pub const CATALOG_VERSION: i64 = 1;
+
 /// Which ngterm serves the control socket. `tree` carries the same value as `tree.app`.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

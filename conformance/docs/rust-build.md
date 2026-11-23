@@ -533,6 +533,8 @@ it no longer does:
 | `infocmp exited N: …` (`terminfo install`, the local dump failing) | `could not read <file>: <reason>`: the CLI decompiles the staged compiled entry itself on every OS (`ngterm-ctl`'s `terminfo/source.rs`, a port of ncurses' entry reader and `infocmp -x`'s layout), since Windows has no `infocmp` |
 | `the agterm on HOST is too old to open clicked files` (a forwarded click's `originTooOld` panel) | the same text naming `ngterm` (`ngterm-core`'s `remote/link_click.rs`) |
 | `catalog.subscribe is served only by agterm-server`, `catalog.op is served only by agterm-server`, `operation receipts are served only by agterm-server` | the same refusals naming `ngterm-headless`, this build's server (`ngterm-core`'s `commands/catalog.rs` and `dispatch.rs`) |
+| `NAME is not available on agterm-server: it drives a window on the Mac showing it` | `NAME is not available on ngterm-headless: it drives a window on the machine showing it` (`ngterm-core`'s `commands/headless.rs`) |
+| `session.new --wait is not available on agterm-server`, `session.companion.new --wait is not available on agterm-server`, `ask.open needs --target on agterm-server, which has no window to show it in`, `pick.open needs --session on agterm-server, which has no window to show it in` | the same refusals naming `ngterm-headless` (`ngterm-core`'s `commands/headless.rs`) |
 
 Texts with no upstream counterpart, each the build's own: `live.reset is not supported on this platform` (above),
 and on Windows an HTML page's refusal without the WebView2 Runtime, `the Microsoft Edge WebView2 Runtime is not

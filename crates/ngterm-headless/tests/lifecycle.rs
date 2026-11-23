@@ -296,17 +296,9 @@ fn control(fixture: &Fixture, request: &serde_json::Value) -> Result<serde_json:
     Ok(serde_json::from_str(&line)?)
 }
 
-/// A command that exits at once.
-const fn exited_command() -> &'static str {
-    if cfg!(windows) { "cmd.exe /d /c exit" } else { "true" }
-}
-
-/// A new session named `name` running an exited command: its id.
+/// A new session named `name` running the login shell (a headless origin refuses `--wait`): its id.
 fn new_session(fixture: &Fixture, name: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let created = control(
-        fixture,
-        &serde_json::json!({"cmd":"session.new", "args":{"name":name,"command":exited_command(),"wait":true}}),
-    )?;
+    let created = control(fixture, &serde_json::json!({"cmd":"session.new", "args":{"name":name}}))?;
     assert_eq!(created["ok"], true, "{created}");
     Ok(created["result"]["id"].as_str().ok_or("no session id")?.to_owned())
 }

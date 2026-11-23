@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use ngterm_proto::command::{BrowserCmd, DebugCmd, EventsCmd, MsgCmd, SessionCmd};
 use ngterm_proto::{
-    AppIdentity, Args, Command, ConformanceProfile, ControlResult, ControlTree, PARITY_LEVEL, Request, Response,
-    VersionResult,
+    AppIdentity, Args, CATALOG_VERSION, CatalogVersions, Command, ConformanceProfile, ControlResult, ControlTree,
+    PARITY_LEVEL, Request, Response, VersionResult,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -766,6 +766,9 @@ impl Core {
         if request.args.as_ref().is_some_and(|args| args.op_id.is_some()) {
             return Dispatched::Done(ControlError::rejected(OPERATION_RECEIPTS_ERROR).into());
         }
+        if let Some(refusal) = commands::headless::window_refusal(self, request) {
+            return Dispatched::Done(refusal.into());
+        }
         // a page companion refuses the terminal commands before any of them runs
         if let Some(refusal) = commands::companion_page::refusal(self, request) {
             return Dispatched::Done(refusal.into());
@@ -796,8 +799,12 @@ impl Core {
         VersionResult {
             app: self.app.clone(),
             installed: self.installed.as_ref().and_then(InstalledSource::read),
-            headless: None,
-            versions: None,
+            headless: self.presenter_only().then_some(true),
+            versions: self.presenter_only().then(|| CatalogVersions {
+                server: self.app.version.clone(),
+                protocol: crate::remote::frames::VERSION,
+                catalog: CATALOG_VERSION,
+            }),
             conformance: ConformanceProfile {
                 parity_level: PARITY_LEVEL.to_owned(),
                 capabilities: self.capabilities.clone(),
