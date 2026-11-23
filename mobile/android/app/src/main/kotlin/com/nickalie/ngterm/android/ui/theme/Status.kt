@@ -5,7 +5,7 @@ import androidx.annotation.StringRes
 import com.nickalie.ngterm.android.R
 
 /**
- * The glyphs a status is drawn with. The first eleven are upstream's status shapes, in its order, by the name an
+ * The glyphs a status is drawn with. The first twelve are upstream's status shapes, in its order, by the name an
  * origin gives them (`circle`, `square`, `triangle-down`, ...: ngterm-core's `StatusShape`); [Ring] and [Slash] are
  * the app's own, for a connection on its way and one out of reach, and have no wire name.
  */
@@ -24,6 +24,7 @@ enum class StatusShape(
     Star(R.drawable.ic_status_star, "star"),
     Bolt(R.drawable.ic_status_bolt, "bolt"),
     Bell(R.drawable.ic_status_bell, "bell"),
+    Checkmark(R.drawable.ic_status_checkmark, "checkmark"),
     Ring(R.drawable.ic_status_ring),
     Slash(R.drawable.ic_status_slash),
     ;

@@ -14,9 +14,8 @@
 //!   desktop's viewer applies them (`viewer.rs::apply_client_effect`), re-derived for a phone:
 //!   - a snapshot's status is no change on the origin ([`MobileEvent::SessionStatus`]'s `changed` is false), so the
 //!     app notifies nothing for it;
-//!   - the hello lists `viewer_kinds(false)`: no page kinds, as the app shows no handed-over pages; `status.shapes`, as
-//!     both apps draw every shape it names (their `StatusShape`), but not `status.checkmark`, a shape neither app draws
-//!     (the origin clears it, so the app draws its own glyph); the opt-in
+//!   - the hello lists `viewer_kinds(false)`: no page kinds, as the app shows no handed-over pages; `status.shapes` and
+//!     `status.checkmark`, as both apps draw every shape they name (their `StatusShape`); the opt-in
 //!     `agent` kind, whose frames become [`MobileEvent::PaneAgent`] for the chat view ([`crate::chat`]). They are not
 //!     cleared when the stream leaves `connected`: the origin announces every pane again when it reconnects, and a
 //!     chat follows its own channel meanwhile; and the opt-in `overlay.none`, so an origin hands program overlays to a
@@ -365,8 +364,6 @@ impl<C: Connection> Presentations<C> {
         let mut client = PresentationClient::new(session, self.last_client, vec![tail], version);
         client.set_shows_agents(true);
         client.set_refuses_overlays(true);
-        // neither app draws the checkmark yet, so the origin sends them its own settings shape instead
-        client.set_draws_checkmark(false);
         let mut attached = Attached {
             machine_id: machine_id.to_owned(),
             session_id: session_id.to_owned(),

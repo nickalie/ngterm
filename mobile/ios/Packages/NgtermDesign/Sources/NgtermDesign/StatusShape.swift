@@ -2,14 +2,16 @@ import Foundation
 
 /// The glyphs a status is drawn with, as SF Symbols.
 ///
-/// Eleven are upstream's status shapes as an origin names them (ngterm-core's `StatusShape`: ``wire``); ``ring`` and
-/// ``slash`` are the app's own, for a connection on its way and one out of reach. The same thirteen as the Android
+/// Twelve are upstream's status shapes as an origin names them (ngterm-core's `StatusShape`: ``wire``); ``ring`` and
+/// ``slash`` are the app's own, for a connection on its way and one out of reach. The same fourteen as the Android
 /// app's.
 public enum StatusShape: CaseIterable, Sendable {
     /// A filled bell.
     case bell
     /// A filled lightning bolt.
     case bolt
+    /// A check, drawn as a heavy stroke.
+    case checkmark
     /// A filled capsule.
     case capsule
     /// A filled circle.
@@ -33,9 +35,9 @@ public enum StatusShape: CaseIterable, Sendable {
     /// A filled triangle pointing down.
     case triangleDown
 
-    /// Upstream's eleven, in its order: the shapes an origin can name.
+    /// Upstream's twelve, in its order: the shapes an origin can name.
     public static let wire: [Self] = [
-        .circle, .square, .triangle, .triangleDown, .play, .diamond, .capsule, .seal, .star, .bolt, .bell,
+        .circle, .square, .triangle, .triangleDown, .play, .diamond, .capsule, .seal, .star, .bolt, .bell, .checkmark,
     ]
 
     /// The shape's name on the wire: its case's name, but `triangle-down`.
@@ -57,6 +59,9 @@ public enum StatusShape: CaseIterable, Sendable {
 
         case .bolt:
             "bolt.fill"
+
+        case .checkmark:
+            "checkmark"
 
         case .capsule:
             "capsule.fill"
@@ -91,6 +96,12 @@ public enum StatusShape: CaseIterable, Sendable {
         case .triangleDown:
             "arrowtriangle.down.fill"
         }
+    }
+
+    /// Whether the glyph is a line and not a filled area: SF Symbols has no filled checkmark, and its stroke at regular
+    /// weight paints about a third of the lightest filled shape, so the glyph draws it heavy (upstream's `isStroke`).
+    public var isStroke: Bool {
+        self == .checkmark
     }
 
     /// The shape an origin names (its wire spelling, any case); the circle for none, or for one this build doesn't

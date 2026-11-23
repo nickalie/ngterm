@@ -30,13 +30,20 @@ internal struct StatusTests {
         #expect(StatusShape.fromWire("triangleDown") == .circle)
         #expect(StatusShape.fromWire("bolt") == .bolt)
         #expect(StatusShape.fromWire("Bell") == .bell)
+        #expect(StatusShape.fromWire("checkmark") == .checkmark)
         #expect(
             StatusShape.wire.map(\.wireName) == [
                 "circle", "square", "triangle", "triangle-down", "play", "diamond", "capsule", "seal", "star", "bolt",
-                "bell",
+                "bell", "checkmark",
             ]
         )
         #expect(Set(StatusShape.wire.map(\.symbolName)).count == StatusShape.wire.count)
+    }
+
+    @Test("only the checkmark is a stroke, so only it draws heavy")
+    internal func strokeShapes() {
+        #expect(StatusShape.allCases.filter(\.isStroke) == [.checkmark])
+        #expect(StatusShape.checkmark.symbolName == "checkmark")
     }
 
     @Test("an agent state follows the origin's wire names")

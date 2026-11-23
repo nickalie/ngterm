@@ -325,7 +325,7 @@ fn attaching_opens_the_stream_with_a_hello_listing_no_page_kinds_and_the_agent_k
         );
         let received = harness.received().await;
         let mut kinds = viewer_kinds(false);
-        kinds.retain(|kind| kind != STATUS_CHECKMARK_KIND);
+        assert!(kinds.iter().any(|kind| kind == STATUS_CHECKMARK_KIND));
         kinds.extend([AGENT_KIND, NO_OVERLAYS_KIND].map(str::to_owned));
         assert_eq!(
             received.bodies,
@@ -1170,5 +1170,30 @@ fn a_status_shape_and_a_huds_spinner_reach_the_app_by_their_wire_names() {
             ("Deploying", Some("braille"), "bottom-right")
         );
         assert_eq!(shown.pane.as_deref(), Some(PANE));
+    });
+}
+
+#[test]
+fn a_checkmark_status_reaches_the_app_as_its_wire_name() {
+    use ngterm_core::model::StatusShape;
+
+    local(async {
+        let mut harness = Harness::attached(Some(1)).await;
+        harness
+            .connect(PresentationMode::Mirror, PresentationSnapshot::default())
+            .await;
+        harness.take_events();
+
+        let checked = PresentationStatus {
+            shape: Some(StatusShape::Checkmark),
+            ..blocked()
+        };
+        harness.deliver(Body::Status(Some(checked))).await;
+
+        let status = harness.take_events().into_iter().find_map(|event| match event {
+            MobileEvent::SessionStatus { status, .. } => status,
+            _ => None,
+        });
+        assert_eq!(status.and_then(|status| status.shape).as_deref(), Some("checkmark"));
     });
 }

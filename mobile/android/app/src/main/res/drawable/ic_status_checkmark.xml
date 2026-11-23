@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- status glyph, a check drawn as a heavy round-capped stroke (upstream's checkmark) (16dp; StatusGlyph tints it) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+  <path
+      android:pathData="M3,8.75L6.4,12.85L13,3.15"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2.5" />
+</vector>
