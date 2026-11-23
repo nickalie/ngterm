@@ -1,5 +1,7 @@
 """A split that a viewer closes, hides or swaps is a pane of the origin, so the change reaches the origin and the next
-attach shows it (upstream `AppActions.swift` `performRemote(.setSplit)` and `performRemote(.closeSplit)`)."""
+attach shows it. Upstream sends the change only from its GUI actions (`AppActions.swift` `performRemote(.setSplit)` and
+`performRemote(.closeSplit)`); its `session.split` and `session.split.close` change only the viewer's row, so these
+tests are Rust-only: the build sends the change from both paths."""
 
 import re
 
@@ -10,7 +12,7 @@ from agterm_conformance.wait import wait_until
 
 pytestmark = [
     pytest.mark.requires("posix-command-line", reason="the private sshd uses a POSIX shell"),
-    pytest.mark.requires("live-sessions", reason="the origin session must be Live"),
+    pytest.mark.requires("live-any-shell", reason="the origin's session must be Live in any login shell"),
 ]
 
 
