@@ -1,6 +1,7 @@
 """Split panes, the scratch terminal, terminal zoom and session backgrounds. Every test splits a session of
 its own, so the module's shared instance never carries one test's panes into another."""
 
+import re
 import shlex
 
 import pytest
@@ -556,3 +557,49 @@ def test_scratch_cwd_reads_back_while_the_session_has_a_scratch(ctl):
         assert node["scratch"] is False and node["scratchCwd"] == node["cwd"], node
     finally:
         ctl.request("session.close", sid)
+
+
+def _watch_size(ctl, sid, pane, marker):
+    """A loop in `pane` that prints its count and the terminal's `stty size` five times a second, so a resize that
+    lasts only while another session is shown still reads. The typed line holds the marker split in two."""
+    report = f'printf "%s%s=%s %s\\n" {marker[:4]} {marker[4:]} "$n" "$(stty size)"'
+    loop = f"n=0; while :; do n=$((n+1)); {report}; sleep 0.2; done"
+    assert_ok(ctl.request("session.type", sid, text=f" sh -c '{loop}'\n", pane=pane))
+
+
+def _sizes(ctl, sid, pane, marker):
+    """The count and the (rows, cols) of each reading the watcher in `pane` printed."""
+    text = assert_ok(ctl.request("session.text", sid, all=True, pane=pane))["text"]
+    return [
+        (int(count), (int(rows), int(cols)))
+        for count, rows, cols in re.findall(rf"(?m)^{marker}=(\d+) (\d+) (\d+)\s*$", text)
+    ]
+
+
+def _read_after(ctl, sid, pane, marker, count):
+    """The readings once the watcher printed past `count`: a second of readings after a switch."""
+    return wait_until(lambda: (readings := _sizes(ctl, sid, pane, marker)) and readings[-1][0] > count and readings)
+
+
+# upstream c8c47303: in the compact toolbar, a switch into or out of a split session resized both panes by about two
+# rows
+@pytest.mark.since("0.42.3")
+@pytest.mark.covers("session.select", "session.split")
+def test_switching_to_and_from_a_left_right_split_keeps_both_panes_size(launch):
+    ctl = launch(settings={"toolbarMode": "compact"})
+    split = _split(ctl)
+    plain = _mounted(ctl)
+    assert_ok(ctl.request("session.select", split))
+    markers = {pane: f"SIZE{pane.upper()}" for pane in ("left", "right")}
+    for pane, marker in markers.items():
+        _watch_size(ctl, split, pane, marker)
+    counts = {pane: _read_after(ctl, split, pane, marker, 0)[-1][0] for pane, marker in markers.items()}
+
+    for target in (plain, split, plain, split):
+        assert_ok(ctl.request("session.select", target))
+        for pane, marker in markers.items():
+            counts[pane] = _read_after(ctl, split, pane, marker, counts[pane] + 5)[-1][0]
+
+    for pane, marker in markers.items():
+        seen = {size for _, size in _sizes(ctl, split, pane, marker)}
+        assert len(seen) == 1, f"the {pane} pane read {sorted(seen)} across the switches"
