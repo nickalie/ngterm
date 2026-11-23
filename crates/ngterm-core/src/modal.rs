@@ -15,7 +15,9 @@ use ngterm_proto::{ControlAskOutcome, ControlAskResult, ControlPickOutcome, Cont
 use uuid::Uuid;
 
 use crate::model::{AskDraft, EndedAsk, PendingAsk};
-pub use session_pick::{PICK_ALREADY_PENDING, Placement, SessionPicks};
+pub use session_pick::{
+    INTERACTION_CLAIMED, INTERACTION_OFFERED, INTERACTION_UNPRESENTED, PICK_ALREADY_PENDING, Placement, SessionPicks,
+};
 
 /// The longest `--timeout` of an ask or a pick, a day like the HUD's ceiling (upstream's `ControlInteraction.maxTimeout`).
 pub const MAX_TIMEOUT: f64 = 86_400.0;
@@ -436,8 +438,14 @@ impl Modals {
         passed(&self.deadlines, id, self.now())
     }
 
+    /// When ask or pick `id` ends unanswered, `None` with no `--timeout`.
+    #[must_use]
+    pub(crate) fn deadline(&self, id: &str) -> Option<Instant> {
+        self.deadlines.get(id).copied()
+    }
+
     /// The deadlines' clock.
-    fn now(&self) -> Instant {
+    pub(crate) fn now(&self) -> Instant {
         Instant::now() + self.clock_skew
     }
 

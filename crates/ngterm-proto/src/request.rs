@@ -101,6 +101,8 @@ pub struct Args {
     pub panes: Option<Vec<String>>,
     /// How many seconds an `ask.open` or `pick.open` waits for an answer before its origin cancels it.
     pub timeout: Option<f64>,
+    /// The offer token a `session.overlay.job.run` helper claims its job with.
+    pub token: Option<String>,
     pub name: Option<String>,
     pub cwd: Option<String>,
     pub targets: Option<Vec<String>>,
@@ -568,6 +570,17 @@ mod tests {
         };
         let keys: Vec<&str> = map.keys().map(String::as_str).collect();
         assert_eq!(keys, ["panes", "timeout", "items"]);
+    }
+
+    /// Upstream's `ControlArgs` declares `token` after `timeout`, before `name`.
+    #[test]
+    fn a_job_token_round_trips_after_the_timeout() {
+        let wire = json!({"cmd": "session.overlay.job.run", "target": "J", "args": {"timeout": 1.0, "token": "T", "name": "n"}});
+        let request: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(request.args.as_ref().and_then(|args| args.token.as_deref()), Some("T"));
+        let encoded = serde_json::to_value(&request).unwrap();
+        let keys: Vec<&String> = encoded["args"].as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["timeout", "token", "name"]);
     }
 
     #[test]

@@ -52,6 +52,8 @@ impl OverlayJobOutcome {
 /// Where a job is between its open and its outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayJobState {
+    /// Held by a headless origin until a presenter takes its session; nothing can claim it.
+    Unpresented,
     /// Handed to the presenter, waiting for a helper to claim it before the deadline.
     Unclaimed {
         deadline: Instant,
@@ -71,10 +73,13 @@ pub struct OverlayJob {
     pub session: Uuid,
     /// The pane the overlay covers, `None` for the session-wide slot.
     pub pane: Option<OverlayPane>,
-    /// The generation of the overlays' holder the job was handed to.
-    pub owner: i64,
+    /// The generation of the overlays' holder the job was handed to, `None` while it waits for one.
+    pub owner: Option<i64>,
     pub context: OverlayLaunchContext,
     pub state: OverlayJobState,
+    /// What a claim of the current offer must carry; `None` for an offer to a presenter without
+    /// [`crate::remote::hub::JOB_TOKEN_KIND`], which a claim by id alone takes.
+    offer_token: Option<String>,
 }
 
 /// How the table reaches a claimed job's helper.
@@ -123,38 +128,85 @@ impl OverlayJobs {
         self.jobs.get(id)
     }
 
-    /// Registers a job handed to a presenter; returns its id.
+    /// Registers a job handed to a presenter under `owner`, whose claim must carry `token` when given; returns its id.
     pub fn register(
         &mut self,
         session: Uuid,
         pane: Option<OverlayPane>,
         owner: i64,
         context: OverlayLaunchContext,
+        token: Option<String>,
+    ) -> String {
+        let id = self.register_unpresented(session, pane, context);
+        self.offer(&id, owner, token);
+        id
+    }
+
+    /// Holds a job for a presenter to come (upstream's `registerUnpresented`); its launch window starts at the offer.
+    pub fn register_unpresented(
+        &mut self,
+        session: Uuid,
+        pane: Option<OverlayPane>,
+        context: OverlayLaunchContext,
     ) -> String {
         let id = uuid_string(Uuid::new_v4());
-        let deadline = (self.now)() + LAUNCH_WINDOW;
         self.jobs.insert(
             id.clone(),
             OverlayJob {
                 id: id.clone(),
                 session,
                 pane,
-                owner,
+                owner: None,
                 context,
-                state: OverlayJobState::Unclaimed { deadline },
+                state: OverlayJobState::Unpresented,
+                offer_token: None,
             },
         );
         id
     }
 
-    /// A helper claims the job. Single use: the context is handed out once, only to a claim that beats the launch
-    /// deadline. `cancel` is how the table reaches that helper later.
-    pub fn claim(&mut self, id: &str, cancel: CancelHook) -> Option<OverlayLaunchContext> {
-        let now = (self.now)();
-        let claimable = self
+    /// Hands an unpresented job to the presenter `owner` under `token`, starting its launch window. False for a job
+    /// that is not unpresented.
+    pub fn offer(&mut self, id: &str, owner: i64, token: Option<String>) -> bool {
+        let deadline = (self.now)() + LAUNCH_WINDOW;
+        let Some(job) = self
             .jobs
-            .get(id)
-            .is_some_and(|job| matches!(job.state, OverlayJobState::Unclaimed { deadline } if now < deadline));
+            .get_mut(id)
+            .filter(|job| job.state == OverlayJobState::Unpresented)
+        else {
+            return false;
+        };
+        job.owner = Some(owner);
+        job.offer_token = token;
+        job.state = OverlayJobState::Unclaimed { deadline };
+        true
+    }
+
+    /// Takes an offered job nobody claimed back to unpresented, which ends its offer token (upstream's `withdraw`).
+    /// False for a job no longer unclaimed: a claimed or running one keeps its helper.
+    pub fn withdraw(&mut self, id: &str) -> bool {
+        let Some(job) = self
+            .jobs
+            .get_mut(id)
+            .filter(|job| matches!(job.state, OverlayJobState::Unclaimed { .. }))
+        else {
+            return false;
+        };
+        job.owner = None;
+        job.offer_token = None;
+        job.state = OverlayJobState::Unpresented;
+        true
+    }
+
+    /// A helper claims the job. Single use: the context is handed out once, only to a claim that beats the launch
+    /// deadline and carries the offer's token when the offer had one. `cancel` is how the table reaches that helper
+    /// later.
+    pub fn claim(&mut self, id: &str, token: Option<&str>, cancel: CancelHook) -> Option<OverlayLaunchContext> {
+        let now = (self.now)();
+        let claimable = self.jobs.get(id).is_some_and(|job| {
+            matches!(job.state, OverlayJobState::Unclaimed { deadline } if now < deadline)
+                && job.offer_token.as_deref().is_none_or(|offered| Some(offered) == token)
+        });
         if !claimable {
             self.expire();
             return None;
@@ -216,7 +268,7 @@ impl OverlayJobs {
             return false;
         };
         match state {
-            OverlayJobState::Unclaimed { .. } => {
+            OverlayJobState::Unpresented | OverlayJobState::Unclaimed { .. } => {
                 self.finish(id, OverlayJobOutcome::Canceled);
             }
             OverlayJobState::Claimed { .. } | OverlayJobState::Running => {
@@ -325,20 +377,65 @@ mod tests {
     }
 
     fn register(jobs: &mut OverlayJobs) -> String {
-        jobs.register(Uuid::new_v4(), None, 1, context())
+        jobs.register(Uuid::new_v4(), None, 1, context(), None)
     }
 
     fn no_hook() -> CancelHook {
         Box::new(|| {})
     }
 
+    /// Upstream's `aTokenedOfferNeedsItsTokenAndAnUntokenedOneTakesAnIdOnlyClaim`.
+    #[test]
+    fn a_tokened_offer_needs_its_token_and_an_untokened_one_takes_an_id_only_claim() {
+        let (mut jobs, _) = table();
+        let tokened = jobs.register(Uuid::new_v4(), None, 1, context(), Some("t1".to_owned()));
+        let legacy = register(&mut jobs);
+        assert_eq!(jobs.claim(&tokened, None, no_hook()), None);
+        assert_eq!(jobs.claim(&tokened, Some("t2"), no_hook()), None);
+        assert_eq!(jobs.claim(&tokened, Some("t1"), no_hook()), Some(context()));
+        assert_eq!(jobs.claim(&legacy, None, no_hook()), Some(context()));
+    }
+
+    /// Upstream's `anUnpresentedJobStartsItsWindowAtTheOfferAndAWithdrawalVoidsTheToken`.
+    #[test]
+    fn an_unpresented_job_starts_its_window_at_the_offer_and_a_withdrawal_voids_the_token() {
+        let (mut jobs, clock) = table();
+        let job = jobs.register_unpresented(Uuid::new_v4(), None, context());
+        advance(&clock, LAUNCH_WINDOW * 2);
+        jobs.expire();
+        assert_eq!(jobs.job(&job).map(|job| job.state), Some(OverlayJobState::Unpresented));
+        assert_eq!(jobs.claim(&job, None, no_hook()), None);
+        assert!(jobs.offer(&job, 2, Some("a".to_owned())));
+        assert!(!jobs.offer(&job, 3, None), "an offered job is not offered twice");
+        assert!(jobs.withdraw(&job));
+        assert_eq!(
+            jobs.job(&job).map(|job| (job.state, job.owner)),
+            Some((OverlayJobState::Unpresented, None))
+        );
+        assert_eq!(jobs.claim(&job, Some("a"), no_hook()), None);
+        assert!(jobs.offer(&job, 3, Some("b".to_owned())));
+        advance(&clock, LAUNCH_WINDOW - Duration::from_secs(1));
+        assert_eq!(jobs.claim(&job, Some("b"), no_hook()), Some(context()));
+        assert!(!jobs.withdraw(&job), "a claimed job keeps its helper");
+    }
+
+    /// Upstream's `cancellingAnUnpresentedJobEndsItCanceled`.
+    #[test]
+    fn cancelling_an_unpresented_job_ends_it_canceled() {
+        let (mut jobs, _) = table();
+        let job = jobs.register_unpresented(Uuid::new_v4(), None, context());
+        assert!(jobs.cancel(&job));
+        let finished: Vec<OverlayJobState> = jobs.take_finished().into_iter().map(|job| job.state).collect();
+        assert_eq!(finished, [OverlayJobState::Finished(OverlayJobOutcome::Canceled)]);
+    }
+
     #[test]
     fn a_claim_is_single_use() {
         let (mut jobs, _) = table();
         let id = register(&mut jobs);
-        assert_eq!(jobs.claim(&id, no_hook()), Some(context()));
-        assert_eq!(jobs.claim(&id, no_hook()), None, "the context is handed out once");
-        assert_eq!(jobs.claim("nope", no_hook()), None);
+        assert_eq!(jobs.claim(&id, None, no_hook()), Some(context()));
+        assert_eq!(jobs.claim(&id, None, no_hook()), None, "the context is handed out once");
+        assert_eq!(jobs.claim("nope", None, no_hook()), None);
     }
 
     #[test]
@@ -346,7 +443,7 @@ mod tests {
         let (mut jobs, clock) = table();
         let id = register(&mut jobs);
         advance(&clock, LAUNCH_WINDOW);
-        assert_eq!(jobs.claim(&id, no_hook()), None);
+        assert_eq!(jobs.claim(&id, None, no_hook()), None);
         assert_eq!(
             jobs.job(&id).map(|job| job.state),
             Some(OverlayJobState::Finished(OverlayJobOutcome::LaunchFailed))
@@ -357,7 +454,7 @@ mod tests {
     fn a_start_after_the_claim_deadline_ends_unknown() {
         let (mut jobs, clock) = table();
         let late = register(&mut jobs);
-        jobs.claim(&late, no_hook());
+        jobs.claim(&late, None, no_hook());
         advance(&clock, START_WINDOW);
         jobs.started(&late);
         assert_eq!(
@@ -365,7 +462,7 @@ mod tests {
             Some(OverlayJobState::Finished(OverlayJobOutcome::Unknown))
         );
         let on_time = register(&mut jobs);
-        jobs.claim(&on_time, no_hook());
+        jobs.claim(&on_time, None, no_hook());
         jobs.started(&on_time);
         advance(&clock, START_WINDOW * 10);
         jobs.expire();
@@ -376,7 +473,7 @@ mod tests {
     fn only_the_first_outcome_counts() {
         let (mut jobs, _) = table();
         let id = register(&mut jobs);
-        jobs.claim(&id, no_hook());
+        jobs.claim(&id, None, no_hook());
         jobs.started(&id);
         assert!(jobs.finish(&id, OverlayJobOutcome::Exited(3)));
         assert!(!jobs.finish(&id, OverlayJobOutcome::Canceled));
@@ -398,13 +495,13 @@ mod tests {
             jobs.job(&unclaimed).map(|job| job.state),
             Some(OverlayJobState::Finished(OverlayJobOutcome::Canceled))
         );
-        assert_eq!(jobs.claim(&unclaimed, no_hook()), None, "a late claim is refused");
+        assert_eq!(jobs.claim(&unclaimed, None, no_hook()), None, "a late claim is refused");
         assert!(!jobs.cancel(&unclaimed), "already over");
 
         let reached = Rc::new(RefCell::new(0));
         let counter = Rc::clone(&reached);
         let claimed = register(&mut jobs);
-        jobs.claim(&claimed, Box::new(move || *counter.borrow_mut() += 1));
+        jobs.claim(&claimed, None, Box::new(move || *counter.borrow_mut() += 1));
         assert!(jobs.cancel(&claimed));
         assert_eq!(*reached.borrow(), 1);
         assert!(matches!(
@@ -419,7 +516,7 @@ mod tests {
         let (mut jobs, clock) = table();
         let unclaimed = register(&mut jobs);
         let claimed = register(&mut jobs);
-        jobs.claim(&claimed, no_hook());
+        jobs.claim(&claimed, None, no_hook());
         advance(&clock, LAUNCH_WINDOW);
         jobs.expire();
         let state = |id: &str| jobs.job(id).map(|job| job.state);

@@ -322,6 +322,13 @@ impl AppStore {
         }
     }
 
+    /// Hands session `session`'s ask, held here, to the presenter of generation `owner` (upstream's `offerPendingAsk`).
+    pub(crate) fn hand_session_ask_over(&mut self, session: Uuid, owner: i64) {
+        if let Some(pending) = self.session_mut(session).and_then(|found| found.ask.as_mut()) {
+            pending.remote_owner = Some(owner);
+        }
+    }
+
     /// Empties session `session`'s ask slot without an outcome, for an ask that moves to another owner rather than
     /// ending (upstream's `releaseAsk`).
     pub fn release_session_ask(&mut self, session: Uuid) {

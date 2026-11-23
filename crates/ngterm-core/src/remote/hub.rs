@@ -69,6 +69,8 @@ pub enum HubEvent {
     /// A viewer just became the one showing the session's `surface`, after any answer it was due went out (this
     /// build's addition: the owner hands it the pages parked since the last one).
     SurfaceGained(Uuid, Surface),
+    /// A viewer just took the session's presenter role and was told so (upstream's `onPresenterGranted`).
+    PresenterGranted(Uuid),
     /// What the session's presenter sent about an ask, or its surface holder about an overlay or a page. Frames of
     /// these kinds from any other viewer are dropped before they get here.
     PresenterFrame(Uuid, Box<Body>),
@@ -279,7 +281,7 @@ pub const PAGE_DETACHED_KIND: &str = "page.detached";
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
-pub const SUPPORTED_KINDS: [&str; 29] = [
+pub const SUPPORTED_KINDS: [&str; 31] = [
     "status",
     "hud",
     "notify",
@@ -296,6 +298,8 @@ pub const SUPPORTED_KINDS: [&str; 29] = [
     STATUS_SHAPES_KIND,
     STATUS_CHECKMARK_KIND,
     LINK_CLICK_KIND,
+    PENDING_SNAPSHOT_KIND,
+    JOB_TOKEN_KIND,
     super::page_tunnel::TUNNEL_KIND,
     COMPANION_PAGE_KIND,
     PAGE_DETACHED_KIND,
@@ -310,6 +314,15 @@ pub const SUPPORTED_KINDS: [&str; 29] = [
     PICK_KINDS[2],
     PICK_KINDS[3],
 ];
+
+/// A presenter's capability of taking a headless origin's pending interactions as one batch (upstream's
+/// `pendingSnapshotKind`): the chunks and the commit of [`PresentationHub::commit_batch`].
+pub const PENDING_SNAPSHOT_KIND: &str = "pending.snapshot";
+/// A presenter's capability of passing an overlay job's offer token to its helper (upstream's `jobTokenKind`).
+pub const JOB_TOKEN_KIND: &str = "job.token";
+/// What a presenter lists to be handed what a headless origin held for it ([`PENDING_SNAPSHOT_KIND`],
+/// [`JOB_TOKEN_KIND`]); an older one sees only what opens while it holds the session.
+pub const HELD_KINDS: [&str; 2] = [PENDING_SNAPSHOT_KIND, JOB_TOKEN_KIND];
 
 /// The kinds a presenter must speak to be handed a session-bound pick (upstream's `pickKinds`), the last of
 /// [`SUPPORTED_KINDS`].
@@ -362,6 +375,8 @@ pub struct PresentationHub {
     grant: PresenterGrant,
     surfaces: SurfaceHolders,
     events: Vec<HubEvent>,
+    /// What is handed to a presenter while its batch is open ([`PresentationHub::open_batch`]), by subscriber.
+    batches: HashMap<SubscriberId, Vec<Body>>,
 }
 
 impl fmt::Debug for PresentationHub {
@@ -388,6 +403,7 @@ impl PresentationHub {
             grant: PresenterGrant::default(),
             surfaces: SurfaceHolders::default(),
             events: Vec::new(),
+            batches: HashMap::new(),
         }
     }
 
@@ -471,7 +487,7 @@ impl PresentationHub {
         if negotiated(body.kind()) && !self.holder_supports(holder, body.kind()) {
             return false;
         }
-        self.send(body, holder)
+        self.hand(body, holder)
     }
 
     /// Who shows `session`'s `surface` (this build's extension): the presenter, unless it shows none (a phone) and
@@ -497,7 +513,7 @@ impl PresentationHub {
         if negotiated(body.kind()) && !self.holder_supports(holder, body.kind()) {
             return false;
         }
-        self.send(body, holder)
+        self.hand(body, holder)
     }
 
     /// Counts changes of `session`'s [`PresentationHub::surface_holder`] of `surface`, which the work handed to it is
@@ -510,7 +526,46 @@ impl PresentationHub {
     /// Sends `body` to subscriber `id` alone, unless it is an opt-in kind ([`OPT_IN_KINDS`]) its hello did not list.
     /// False when it was not sent, or the subscriber stalled and was dropped.
     pub fn send_to(&mut self, body: Body, id: SubscriberId) -> bool {
-        self.takes(id, body.kind()) && self.send(body, id)
+        self.takes(id, body.kind()) && self.hand(body, id)
+    }
+
+    /// Starts gathering what is handed to `session`'s presenter (upstream's `batchToPresenter`), until
+    /// [`PresentationHub::commit_batch`]; nothing with no presenter.
+    pub fn open_batch(&mut self, session: Uuid) {
+        if let Some(holder) = self.grant.holder(session) {
+            self.batches.insert(holder, Vec::new());
+        }
+    }
+
+    /// Sends what was handed to `session`'s presenter since [`PresentationHub::open_batch`] as pending chunks and one
+    /// commit, so the presenter applies it all together or, when the stream ends first, none of it. An empty batch
+    /// sends nothing.
+    pub fn commit_batch(&mut self, session: Uuid) {
+        let Some(holder) = self.grant.holder(session) else {
+            return;
+        };
+        let bodies = self.batches.remove(&holder).unwrap_or_default();
+        if bodies.is_empty() {
+            return;
+        }
+        let Ok(chunks) = frames::PendingBatch::chunks(&bodies) else {
+            return;
+        };
+        for chunk in chunks {
+            if !self.send(Body::PendingChunk(chunk), holder) {
+                return;
+            }
+        }
+        self.send(Body::PendingCommit, holder);
+    }
+
+    /// Hands work to subscriber `id`, into its open batch when it has one.
+    fn hand(&mut self, body: Body, id: SubscriberId) -> bool {
+        if let Some(batch) = self.batches.get_mut(&id) {
+            batch.push(body);
+            return true;
+        }
+        self.send(body, id)
     }
 
     /// Tells subscriber `id` to drop its replica of `page`, which stays open here to be handed on. Its answer to this
@@ -599,6 +654,7 @@ impl PresentationHub {
                 self.send(Body::Ack, from);
             }
             Body::PresenterAcquire => {
+                let taken = self.grant.holder(session) != Some(from);
                 let granted = self.grant.acquire(session, from);
                 let answer = if granted {
                     Body::PresenterGranted
@@ -607,6 +663,9 @@ impl PresentationHub {
                 };
                 // the answer can drop a stalled viewer, which releases the role it was just given
                 if self.send(answer, from) {
+                    if granted && taken {
+                        self.events.push(HubEvent::PresenterGranted(session));
+                    }
                     self.reroute_surfaces(session);
                 }
             }
@@ -719,6 +778,7 @@ impl PresentationHub {
     }
 
     fn release(&mut self, id: SubscriberId, session: Uuid) {
+        self.batches.remove(&id);
         for session in self.grant.release(id) {
             self.events.push(HubEvent::PresenterLost(session));
         }
@@ -864,6 +924,11 @@ mod tests {
             .iter()
             .map(|surface| HubEvent::SurfaceGained(session, *surface))
             .collect()
+    }
+
+    /// What a grant announces: the new presenter, then both surfaces it shows.
+    fn granted(session: Uuid) -> Vec<HubEvent> {
+        [vec![HubEvent::PresenterGranted(session)], gained(session, &BOTH)].concat()
     }
 
     fn lost(session: Uuid, surfaces: &[Surface], holder: SubscriberId) -> Vec<HubEvent> {
@@ -1378,6 +1443,8 @@ mod tests {
                 "status.shapes",
                 "status.checkmark",
                 "link.click",
+                "pending.snapshot",
+                "job.token",
                 "page.tunnel",
                 "companion.page",
                 "page.detached",
@@ -1532,11 +1599,7 @@ mod tests {
         assert_eq!(bodies(&second_seen).last(), Some(&Body::PresenterRefused));
         assert!(hub.has_presenter(session));
         assert_eq!(hub.presenter_generation(session), 1);
-        assert_eq!(
-            hub.take_events(),
-            gained(session, &BOTH),
-            "only the new holder is announced"
-        );
+        assert_eq!(hub.take_events(), granted(session), "only the new holder is announced");
         hub.publish(&Body::Status(None), session);
         assert_eq!(bodies(&second_seen).last(), Some(&Body::Status(None)), "still mirrors");
         // a repeated acquire never preempts the holder, and the holder's own repeat is granted again
@@ -1554,7 +1617,7 @@ mod tests {
             [
                 vec![HubEvent::PresenterLost(session)],
                 lost(session, &BOTH, first),
-                gained(session, &BOTH)
+                granted(session)
             ]
             .concat()
         );
@@ -1581,7 +1644,7 @@ mod tests {
             let session = Uuid::new_v4();
             let (id, _) = subscribe(&mut hub, session, PresentationMode::Presenter);
             hub.receive(frame(id, Body::PresenterAcquire), id);
-            assert_eq!(hub.take_events(), gained(session, &BOTH));
+            assert_eq!(hub.take_events(), granted(session));
             if stale {
                 hub.heartbeat();
                 advance(&clock, 31);
@@ -1631,7 +1694,7 @@ mod tests {
         assert_eq!(
             hub.take_events(),
             [
-                gained(session, &BOTH),
+                granted(session),
                 vec![HubEvent::PresenterFrame(session, Box::new(rejected))]
             ]
             .concat()
@@ -1649,7 +1712,7 @@ mod tests {
         let (presenter, _) = subscribe(&mut hub, session, PresentationMode::Presenter);
         let (mirror, _) = subscribe(&mut hub, session, PresentationMode::Mirror);
         hub.receive(frame(presenter, Body::PresenterAcquire), presenter);
-        assert_eq!(hub.take_events(), gained(session, &BOTH));
+        assert_eq!(hub.take_events(), granted(session));
         let closed = Body::PageClosed(PresentationPageChange::page("p1"));
         // this build's detach goes the same way
         let detached = Body::PageDetached(PresentationPageChange::page("p1"));
@@ -1805,7 +1868,7 @@ mod tests {
             [Some(phone); 2],
             "a viewer that asked to mirror is handed nothing"
         );
-        assert_eq!(hub.take_events(), gained(session, &BOTH));
+        assert_eq!(hub.take_events(), granted(session));
         let (desktop, desktop_seen) = attach(&mut hub, session, PresentationMode::Presenter, Shows::Both);
         assert_eq!(bodies(&desktop_seen).last(), Some(&Body::PresenterRefused));
         assert!(hub.presenter_supports("status", session));
@@ -1979,6 +2042,6 @@ mod tests {
         attach(&mut hub, session, PresentationMode::Presenter, Shows::Both);
         attach(&mut hub, session, PresentationMode::Presenter, Shows::Nothing);
         assert_eq!(holders(&hub, session), [Some(desktop); 2]);
-        assert_eq!(hub.take_events(), gained(session, &BOTH));
+        assert_eq!(hub.take_events(), granted(session));
     }
 }

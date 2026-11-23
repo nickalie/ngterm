@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+use base64::Engine as _;
 use ngterm_proto::{AskButton, AskChoice};
 use serde::de::{self, DeserializeOwned};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -558,6 +559,10 @@ pub struct PresentationOverlay {
     pub background_color: Option<String>,
     pub follow: bool,
     pub wait: bool,
+    /// The offer token the presenter passes to the job's helper, sent only to one listing
+    /// [`super::hub::JOB_TOKEN_KIND`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 impl PresentationOverlay {
@@ -1131,6 +1136,10 @@ pub enum Body {
     LinkClick(PresentationLinkClick),
     /// The origin did not open a forwarded click.
     LinkRefused(PresentationLinkRefusal),
+    /// A slice of what a headless origin held for a new presenter, applied only at the commit.
+    PendingChunk(PresentationPendingChunk),
+    /// Applies every chunk since the presenter was granted, in order.
+    PendingCommit,
     /// A kind this build does not speak, kept with its place in the order.
     Unknown(String),
 }
@@ -1180,6 +1189,8 @@ impl Body {
             Self::Agent(_) => super::hub::AGENT_KIND,
             Self::LinkClick(_) => super::hub::LINK_CLICK_KIND,
             Self::LinkRefused(_) => "link.refused",
+            Self::PendingChunk(_) => "pending.chunk",
+            Self::PendingCommit => "pending.commit",
             Self::Unknown(kind) => kind,
         }
     }
@@ -1223,6 +1234,7 @@ impl Body {
             Self::Agent(agent) => entry("agent", serde_json::to_value(agent)),
             Self::LinkClick(click) => entry("link", serde_json::to_value(click)),
             Self::LinkRefused(refusal) => entry("link", serde_json::to_value(refusal)),
+            Self::PendingChunk(chunk) => entry("pending", serde_json::to_value(chunk)),
             Self::Status(None)
             | Self::Context(None)
             | Self::Info(None)
@@ -1232,8 +1244,106 @@ impl Body {
             | Self::PresenterAcquire
             | Self::PresenterGranted
             | Self::PresenterRefused
+            | Self::PendingCommit
             | Self::Unknown(_) => Ok(None),
         }
+    }
+}
+
+/// Slice `index` of the frames a headless origin hands a new presenter at once (upstream's
+/// `PresentationPendingChunk`): base64 of their encoded array, cut at a byte count so an entry of any size stays behind
+/// the commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresentationPendingChunk {
+    pub index: i64,
+    pub data: String,
+}
+
+/// Why a pending batch could not be applied (upstream's `PresentationPendingBatch.Failure`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingBatchError {
+    /// A chunk came out of order, or did not decode.
+    OutOfOrder(i64),
+    /// The gathered bytes are not an array of frames.
+    Malformed,
+}
+
+/// Cuts a batch into chunks and gathers chunks back into it (upstream's `PresentationPendingBatch`).
+#[derive(Debug, Default)]
+pub struct PendingBatch {
+    data: Vec<u8>,
+    count: i64,
+    failure: Option<PendingBatchError>,
+}
+
+impl PendingBatch {
+    /// Raw batch bytes per chunk: base64 grows them by a third and still leaves room under [`MAX_FRAME_BYTES`]
+    /// (upstream's `CatalogCodec.chunkBytes`).
+    pub const CHUNK_BYTES: usize = 128 * 1024;
+
+    /// `bodies` encoded as one array of frames and cut into slices.
+    ///
+    /// # Errors
+    ///
+    /// A body cannot be encoded.
+    pub fn chunks(bodies: &[Body]) -> Result<Vec<PresentationPendingChunk>, FrameError> {
+        let frames = bodies
+            .iter()
+            .map(|body| {
+                frame_object(&PresentationFrame {
+                    generation: 0,
+                    rev: 0,
+                    body: body.clone(),
+                })
+            })
+            .collect::<Result<Vec<Value>, FrameError>>()?;
+        let data = serde_json::to_vec(&frames).map_err(malformed)?;
+        Ok(data
+            .chunks(Self::CHUNK_BYTES)
+            .zip(0..)
+            .map(|(slice, index)| PresentationPendingChunk {
+                index,
+                data: base64::engine::general_purpose::STANDARD.encode(slice),
+            })
+            .collect())
+    }
+
+    /// Gathers `chunk`; one out of order, or that does not decode, fails the batch at its commit.
+    pub fn add(&mut self, chunk: &PresentationPendingChunk) {
+        if self.failure.is_some() {
+            return;
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&chunk.data);
+        match bytes {
+            Ok(bytes) if chunk.index == self.count => {
+                self.data.extend_from_slice(&bytes);
+                self.count += 1;
+            }
+            _ => self.failure = Some(PendingBatchError::OutOfOrder(chunk.index)),
+        }
+    }
+
+    /// The gathered batch, starting over; nothing for a commit with no chunk before it.
+    ///
+    /// # Errors
+    ///
+    /// A chunk came out of order, or the gathered bytes are not an array of frames.
+    pub fn commit(&mut self) -> Result<Vec<Body>, PendingBatchError> {
+        let batch = std::mem::take(self);
+        if let Some(failure) = batch.failure {
+            return Err(failure);
+        }
+        if batch.count == 0 {
+            return Ok(Vec::new());
+        }
+        let Ok(Value::Array(frames)) = serde_json::from_slice::<Value>(&batch.data) else {
+            return Err(PendingBatchError::Malformed);
+        };
+        frames
+            .into_iter()
+            .map(|frame| frame_of(frame).map(|frame| frame.body))
+            .collect::<Result<Vec<Body>, FrameError>>()
+            .map_err(|_| PendingBatchError::Malformed)
     }
 }
 
@@ -1271,7 +1381,20 @@ impl std::error::Error for FrameError {}
 ///
 /// The frame cannot be encoded, or its line would reach [`MAX_FRAME_BYTES`].
 pub fn encode(frame: &PresentationFrame) -> Result<Vec<u8>, FrameError> {
-    let malformed = |error: serde_json::Error| FrameError::Malformed(error.to_string());
+    let mut line = serde_json::to_vec(&frame_object(frame)?).map_err(malformed)?;
+    if line.len() >= MAX_FRAME_BYTES {
+        return Err(FrameError::Oversize(line.len()));
+    }
+    line.push(b'\n');
+    Ok(line)
+}
+
+fn malformed(error: serde_json::Error) -> FrameError {
+    FrameError::Malformed(error.to_string())
+}
+
+/// `frame` as the JSON object its line carries.
+fn frame_object(frame: &PresentationFrame) -> Result<Value, FrameError> {
     let mut object = Map::new();
     object.insert("kind".to_owned(), Value::from(frame.body.kind()));
     object.insert("gen".to_owned(), Value::from(frame.generation));
@@ -1279,12 +1402,7 @@ pub fn encode(frame: &PresentationFrame) -> Result<Vec<u8>, FrameError> {
     if let Some((key, value)) = frame.body.payload().map_err(malformed)? {
         object.insert(key.to_owned(), value);
     }
-    let mut line = serde_json::to_vec(&Value::Object(object)).map_err(malformed)?;
-    if line.len() >= MAX_FRAME_BYTES {
-        return Err(FrameError::Oversize(line.len()));
-    }
-    line.push(b'\n');
-    Ok(line)
+    Ok(Value::Object(object))
 }
 
 /// Decodes one line, without its newline.
@@ -1297,6 +1415,10 @@ pub fn decode(line: &[u8]) -> Result<PresentationFrame, FrameError> {
         return Err(FrameError::Oversize(line.len()));
     }
     let value: Value = serde_json::from_slice(line).map_err(|error| FrameError::Malformed(error.to_string()))?;
+    frame_of(value)
+}
+
+fn frame_of(value: Value) -> Result<PresentationFrame, FrameError> {
     let Value::Object(mut object) = value else {
         return Err(FrameError::Malformed("a frame is a JSON object".to_owned()));
     };
@@ -1384,6 +1506,8 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "agent" => Body::Agent(required(object, "agent")?),
         super::hub::LINK_CLICK_KIND => Body::LinkClick(required(object, "link")?),
         "link.refused" => Body::LinkRefused(required(object, "link")?),
+        "pending.chunk" => Body::PendingChunk(required(object, "pending")?),
+        "pending.commit" => Body::PendingCommit,
         other => Body::Unknown(other.to_owned()),
     })
 }
@@ -1556,6 +1680,7 @@ mod tests {
                 background_color: Some("#102030".to_owned()),
                 follow: true,
                 wait: true,
+                token: Some("t1".to_owned()),
             }),
             Body::OverlayRequest(PresentationOverlay {
                 width: None,
@@ -1566,7 +1691,13 @@ mod tests {
                 background_color: None,
                 follow: false,
                 wait: false,
+                token: None,
             }),
+            Body::PendingChunk(PresentationPendingChunk {
+                index: 0,
+                data: "W10=".to_owned(),
+            }),
+            Body::PendingCommit,
             Body::OverlayRejected(change(None)),
             Body::OverlayClose(change(None)),
             Body::OverlayResize(change(Some(40))),

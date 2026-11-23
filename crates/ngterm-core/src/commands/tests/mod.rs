@@ -24,6 +24,7 @@ mod events;
 mod font;
 mod forwarded_clicks;
 mod headless;
+mod held_interactions;
 mod hooks;
 mod hud;
 mod keymap;

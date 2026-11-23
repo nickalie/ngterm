@@ -601,6 +601,7 @@ fn hand_over(store: &mut AppStore, session: Uuid, pane: Option<OverlayPane>, han
         ended: false,
         page: Some(handed),
         presenter_sized: false,
+        request: None,
     };
     assert!(store.reserve_remote_overlay(session, slot));
 }

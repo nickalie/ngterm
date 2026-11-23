@@ -432,6 +432,7 @@ impl Core {
         let mut client = PresentationClient::new(session, self.remote.viewer.last_client, argv, version);
         client.set_shows_pages(self.shows_replica_pages());
         client.set_shows_picks(true);
+        client.set_takes_held(true);
         let Some(transport) = self.remote.viewer.transport.clone() else {
             tracing::debug!(%session, "no presentation transport installed");
             return;
@@ -807,7 +808,7 @@ impl Core {
         let peer = store.remote_peer_of(found);
         let Some(Ok(argv)) = found.remote_host().map(|host| {
             let peer = peer.unwrap_or_else(|| super::peer::peer_of(host));
-            super::ssh::run_job_command(host, peer, &overlay.job)
+            super::ssh::run_job_command(host, peer, &overlay.job, overlay.token.as_deref())
         }) else {
             return false;
         };

@@ -840,6 +840,7 @@ fn a_viewer_without_web_views_refuses_pages_and_lists_no_page_kind() {
     let hello = replica.viewer.sent("hello");
     let mut kinds = crate::remote::client::viewer_kinds(true);
     kinds.extend(crate::remote::hub::PICK_KINDS.map(str::to_owned));
+    kinds.extend(crate::remote::hub::HELD_KINDS.map(str::to_owned));
     assert_eq!(hello[0]["hello"]["kinds"], json!(kinds));
 
     replica.host.0.borrow_mut().unavailable = Some("no GPU".to_owned());

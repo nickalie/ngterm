@@ -886,7 +886,7 @@ fn a_job_claim_is_validated_then_single_use() {
         .core
         .jobs
         .jobs
-        .register(Uuid::new_v4(), None, 1, context.clone());
+        .register(Uuid::new_v4(), None, 1, context.clone(), None);
     let claimed = claim(&mut fixture, Some(&job));
     assert_eq!(claimed.result.unwrap(), json!({"id": job}));
     assert_eq!(claim(&mut fixture, Some(&job)), failure("job not claimable"));
@@ -933,7 +933,7 @@ fn a_job_cancelled_before_its_connection_gets_the_cancel_after_the_context() {
         .core
         .jobs
         .jobs
-        .register(Uuid::new_v4(), None, 1, context.clone());
+        .register(Uuid::new_v4(), None, 1, context.clone(), None);
     assert!(claim(&mut fixture, Some(&job)).ok);
     assert!(fixture.core.cancel_overlay_job(&job));
     let helper = Recorded::default();

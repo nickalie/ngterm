@@ -17,6 +17,7 @@ use crate::error::ControlError;
 use crate::modal::{MAX_PICK_ITEMS, PICK_ALREADY_PENDING, PendingPick, TIMEOUT_ERROR, is_valid_timeout};
 use crate::model::{AgentStatus, StatusShape, is_valid_color_hex};
 use crate::pane_env::uuid_string;
+use crate::remote::frames::PresentationPick;
 use crate::resolve::Resolver;
 use crate::windows::WindowRequest;
 
@@ -135,10 +136,27 @@ fn open_session_pick(
     follow: bool,
 ) -> Result<(), ControlError> {
     let resolved = Resolver::new(core.library()).session(Some(target), window)?;
+    let headless = core.presenter_only();
+    // a request no frame can carry would wait for a presenter forever
+    if headless && !PresentationPick::new(&pick, i64::MAX, follow).fits_frame() {
+        return Err(ControlError::rejected("pick is too large to send to a Mac"));
+    }
     match core.present_pick_remotely(&pick, resolved.session, Some(resolved.window), follow) {
         Some(true) => return Ok(()),
         Some(false) => return Err(ControlError::rejected(PICK_ALREADY_PENDING)),
         None => {}
+    }
+    // a headless origin holds it until a presenter that can show it takes the session
+    if headless {
+        return if core
+            .modals
+            .session_picks
+            .open_unpresented(pick, resolved.session, follow)
+        {
+            Ok(())
+        } else {
+            Err(ControlError::rejected(PICK_ALREADY_PENDING))
+        };
     }
     core.modals
         .open_session_pick_local(pick, resolved.session, resolved.window)

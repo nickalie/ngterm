@@ -43,6 +43,9 @@ pub struct RemoteOverlaySlot {
     /// A picture the presenter fitted itself, whose points only it knows (upstream's `presenterSized`): a point resize
     /// sends only its own axes to merge into them, until a resize replaces the size whole.
     pub presenter_sized: bool,
+    /// The program's request as opened, kept for a headless origin to hand to each presenter its job is offered to
+    /// (upstream's `RemoteOverlaySlot.request`); `None` for a page.
+    pub request: Option<crate::remote::frames::PresentationOverlay>,
 }
 
 /// A visibility sent to the presenter and not yet echoed back.
@@ -236,6 +239,14 @@ impl RemoteOverlays {
     #[cfg(test)]
     pub(crate) fn slots_mut(&mut self) -> &mut [RemoteOverlaySlot] {
         &mut self.slots
+    }
+
+    /// The held program under `job` is offered to the holder of generation `owner`.
+    fn offer(&mut self, job: &str, owner: i64, wait: bool) {
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.job == job) {
+            slot.owner = owner;
+            slot.wait = wait;
+        }
     }
 
     pub(crate) fn reserve(&mut self, slot: RemoteOverlaySlot) {
@@ -560,6 +571,14 @@ impl AppStore {
         .unwrap_or_default()
     }
 
+    /// The held program under `job` was offered to the overlays' holder of generation `owner`: its slot is held for that
+    /// viewer, and for its surface after the program ends when the request asked to `wait`.
+    pub(crate) fn offer_remote_overlay(&mut self, session: Uuid, job: &str, owner: i64, wait: bool) {
+        if let Some(found) = self.session_mut(session) {
+            found.remote_overlays.offer(job, owner, wait);
+        }
+    }
+
     /// The viewer showing `session`'s pages is gone or gave them up: each page it showed is parked for the next one.
     /// The pages parked now are returned, for the caller to shut their channels.
     pub fn park_remote_pages(&mut self, session: Uuid) -> Vec<Uuid> {
@@ -726,6 +745,7 @@ mod tests {
             ended: false,
             page: None,
             presenter_sized: false,
+            request: None,
         }
     }
 

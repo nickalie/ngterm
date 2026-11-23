@@ -344,7 +344,10 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         follow: args.follow == Some(true),
     };
     let window = args.window.as_deref();
-    let opened = if ask.style == AskStyle::Terminal {
+    let opened = if core.presenter_only() && (target.is_some() || ask.style == AskStyle::Terminal) {
+        let resolved = Resolver::new(core.library()).session(target, window)?;
+        open_held(core, ask, resolved.window, resolved.session, &placement)
+    } else if ask.style == AskStyle::Terminal {
         let resolved = Resolver::new(core.library()).session(target, window)?;
         open_terminal(core, ask, resolved.window, resolved.session, &placement)
     } else if target.is_some() {
@@ -386,6 +389,39 @@ fn present_remotely(
         invalid_pane: INVALID_PANE,
     };
     crate::remote::present_ask_remotely(core, ask, window, session, &remote)
+}
+
+/// An ask on a headless origin (upstream's server `openAsk`): session-bound like a pick, drawn by the viewer presenting
+/// the session, else held there, unpresented, until a presenter that can show it takes the session or its deadline
+/// ends it. The pane only has to exist, as nothing is drawn here.
+fn open_held(core: &mut Core, ask: PendingAsk, window: Uuid, session: Uuid, placement: &Placement<'_>) -> Outcome {
+    let found = core
+        .library()
+        .store(window)
+        .and_then(|store| store.session(session))
+        .ok_or_else(no_such_session)?;
+    let resolved = resolve_pane_placement(found, placement.pane, placement.pane_id, false, INVALID_PANE)?;
+    let identity = resolved.map(|(identity, _)| identity);
+    // a request no frame can carry would wait for a presenter forever
+    let request = crate::remote::frames::PresentationAsk::new(
+        &ask,
+        identity.map(crate::remote::frames::PresentationPane::Identity),
+        i64::MAX,
+    );
+    if !request.fits_frames() {
+        return Err(ControlError::rejected("ask is too large to send to a Mac"));
+    }
+    if let Some(outcome) = present_remotely(core, &ask, window, session, placement) {
+        return outcome;
+    }
+    let id = ask.id.clone();
+    let store = core.library_mut().store_mut(window).ok_or_else(no_such_session)?;
+    if !store.open_session_ask(session, ask, identity) {
+        return Err(ControlError::rejected("ask already pending"));
+    }
+    core.modals
+        .register_ask(id.clone(), AskOwner::Session { session, window });
+    Ok(opened(id, resolved.map(|(_, pane)| pane)))
 }
 
 /// Upstream's `presentTerminalAsk`: the pane must be laid out, the session's slot free.

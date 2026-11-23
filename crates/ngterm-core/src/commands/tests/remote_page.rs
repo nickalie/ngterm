@@ -1198,6 +1198,7 @@ fn a_reservation_whose_stream_is_gone_refuses_without_reopening() {
         ended: false,
         page: Some(RemotePage::new(page, "t".to_owned(), Instant::now())),
         presenter_sized: false,
+        request: None,
     };
     assert!(
         origin

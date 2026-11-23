@@ -150,20 +150,29 @@ pub(super) fn both_apps_tail(bound: u64) -> String {
 ///
 /// # Errors
 ///
-/// A host ssh may not take, or a job id that is not one plain token.
-pub fn run_job_command(host: &str, peer: RemotePeer, job: &str) -> Result<Vec<String>, InvocationError> {
+/// A host ssh may not take, or a job id or offer token that is not one plain token.
+pub fn run_job_command(
+    host: &str,
+    peer: RemotePeer,
+    job: &str,
+    token: Option<&str>,
+) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
-    if !is_plain(job) {
+    if !is_plain(job) || token.is_some_and(|token| !is_plain(token)) {
         return Err(InvocationError::InvalidSession);
     }
     let form = OriginForm::of(host, peer);
+    let mut words = vec!["session", "overlay", "run-job", job];
+    if let Some(token) = token {
+        words.extend(["--token", token]);
+    }
     let tail = match form.shell {
-        _ if form.is_agterm() => agterm_cli_tail(&["session", "overlay", "run-job", job], true),
+        _ if form.is_agterm() => agterm_cli_tail(&words, true),
         OriginShell::Posix => remote_cli_chain(&format!(
             "exec {REMOTE_CLI} session overlay run-job {}",
-            shell_quoted_line(&[job])
+            shell_quoted_line(&words[3..])
         )),
-        OriginShell::Windows => windows_cli_tail(&["session", "overlay", "run-job", job]),
+        OriginShell::Windows => windows_cli_tail(&words),
     };
     let mut argv = ssh_arguments(host, 5, true);
     argv.push(tail);
@@ -648,9 +657,14 @@ mod tests {
             ),
             ["session", "new", "--name=it's %x% $y", "--json"]
         );
-        let job = run_job_command(host, RemotePeer::Ngterm, "job1").unwrap();
+        let job = run_job_command(host, RemotePeer::Ngterm, "job1", None).unwrap();
         assert_eq!(job[1], "-tt");
         assert_eq!(words(job.last().unwrap()), ["session", "overlay", "run-job", "job1"]);
+        let tokened = run_job_command(host, RemotePeer::Ngterm, "job1", Some("tok1")).unwrap();
+        assert_eq!(
+            words(tokened.last().unwrap()),
+            ["session", "overlay", "run-job", "job1", "--token", "tok1"]
+        );
         assert_eq!(
             words(
                 page_serve_command(host, RemotePeer::Ngterm, "tok")
@@ -885,14 +899,20 @@ mod tests {
 
     #[test]
     fn run_job_forces_a_pty_and_reaches_the_installed_cli() {
-        let argv = run_job_command("buildbox", RemotePeer::Ngterm, "J1").unwrap();
+        let argv = run_job_command("buildbox", RemotePeer::Ngterm, "J1", None).unwrap();
         assert_eq!(argv[1], "-tt");
         assert!(argv.last().unwrap().contains("exec ngtermctl session overlay run-job "));
         assert!(argv.last().unwrap().contains("$HOME/.local/bin"));
         assert_eq!(
-            run_job_command("buildbox", RemotePeer::Ngterm, "j 1"),
+            run_job_command("buildbox", RemotePeer::Ngterm, "j 1", None),
             Err(InvocationError::InvalidSession)
         );
+        assert_eq!(
+            run_job_command("buildbox", RemotePeer::Ngterm, "J1", Some("t 1")),
+            Err(InvocationError::InvalidSession)
+        );
+        let tokened = run_job_command("buildbox", RemotePeer::Ngterm, "J1", Some("T1")).unwrap();
+        assert!(tokened.last().unwrap().contains("--token"), "{tokened:?}");
     }
 
     #[test]

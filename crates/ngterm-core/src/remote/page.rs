@@ -293,6 +293,7 @@ pub(crate) fn open_remote_page(
             ended: false,
             page: Some(reserved),
             presenter_sized,
+            request: None,
         },
     );
     core.register_viewer_page_outcome(page);

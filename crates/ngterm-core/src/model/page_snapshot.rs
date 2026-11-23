@@ -270,6 +270,7 @@ fn park_page(session: &mut Session, overlay: HtmlOverlay, parked: ParkedPage) {
         ended: false,
         page: Some(page),
         presenter_sized: false,
+        request: None,
     });
 }
 

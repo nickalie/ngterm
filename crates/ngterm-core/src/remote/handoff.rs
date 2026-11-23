@@ -17,7 +17,7 @@ use super::frames::{
     Body, MAX_FRAME_BYTES, PresentationAsk, PresentationAskRef, PresentationOverlay, PresentationOverlayChange,
     PresentationPageAction, PresentationPane, PresentationSound,
 };
-use super::hub::{ASK_FORM_KIND, ASK_OTHER_KIND, PresentationHub, SubscriberId, Surface};
+use super::hub::{ASK_FORM_KIND, ASK_OTHER_KIND, JOB_TOKEN_KIND, PresentationHub, SubscriberId, Surface};
 use super::presentation_status_pane;
 use crate::Core;
 use crate::commands::Outcome;
@@ -30,7 +30,7 @@ use crate::model::{
 };
 use crate::overlay_capture::OverlayLaunchContext;
 use crate::overlay_jobs::{OverlayJobFrame, OverlayJobOutcome, OverlayJobState};
-use crate::pane_env::{self, SessionPane};
+use crate::pane_env::{self, SessionPane, uuid_string};
 
 /// The reason an ask carries when its presenter was lost and this instance could not show it.
 pub const PRESENTATION_LOST: &str = "presentation-lost";
@@ -118,7 +118,8 @@ impl Core {
 
     /// Takes back the ask a viewer was presenting for `session`, after the viewer went away or refused it (upstream's
     /// `takeBackRemoteAsk`). A terminal ask is drawn here from now on; a GUI one moves into its window's slot when its
-    /// target is shown and the slot is free, and otherwise ends cancelled with `presentation-lost`.
+    /// target is shown and the slot is free, and otherwise ends cancelled with `presentation-lost`. On a headless origin
+    /// either waits, unpresented, for the next presenter.
     pub(crate) fn take_back_remote_ask(&mut self, session: Uuid) {
         let Some(window) = self.library().window_holding_session(session) else {
             return;
@@ -130,7 +131,9 @@ impl Core {
             return;
         };
         let id = pending.ask.id.clone();
-        if pending.ask.style != AskStyle::Gui {
+        // a headless origin draws neither style: it holds the ask for the next presenter (upstream's
+        // `returnAskToPending`)
+        if pending.ask.style != AskStyle::Gui || self.presenter_only() {
             if let Some(store) = self.library_mut().store_mut(window) {
                 store.take_session_ask_back(session);
             }
@@ -178,7 +181,9 @@ impl Core {
             .is_some_and(|pane| session.renders_overlay_pane(pane))
     }
 
-    /// Upstream's `onPresenterLost` for program overlays; a holder still attached closes them too.
+    /// Upstream's `onPresenterLost` for program overlays; a holder still attached closes them too. A headless origin
+    /// keeps the jobs nobody claimed for the next viewer (upstream's `withdrawRemoteOverlays`); a claimed or running job
+    /// keeps its slot until its helper reports, and is never launched again.
     pub(crate) fn overlays_lost(&mut self, session: Uuid, holder: SubscriberId) {
         let jobs = self
             .library_mut()
@@ -193,7 +198,8 @@ impl Core {
                 .jobs
                 .job(&job)
                 .is_some_and(|found| matches!(found.state, OverlayJobState::Unclaimed { .. }));
-            if unclaimed {
+            // a headless origin has nowhere to draw it: an unclaimed job waits for the next viewer
+            if unclaimed && !(self.presenter_only() && self.jobs.jobs.withdraw(&job)) {
                 self.cancel_overlay_job(&job);
             }
         }
@@ -430,7 +436,7 @@ pub(crate) fn present_ask_remotely(
 /// Whether `session`'s presenter can show `request` as the origin means it (upstream's gate in `presentAskRemotely`):
 /// a form or a cancel role needs a presenter listing `ask.form` and a request whose frames fit, and a choice list's
 /// free-form row needs `ask.other` too. Otherwise the ask stays here.
-fn presenter_can_show(hub: &PresentationHub, request: &PresentationAsk, session: Uuid) -> bool {
+pub(super) fn presenter_can_show(hub: &PresentationHub, request: &PresentationAsk, session: Uuid) -> bool {
     if request.needs_form_support() && !(hub.presenter_supports(ASK_FORM_KIND, session) && request.fits_frames()) {
         return false;
     }
@@ -446,7 +452,8 @@ pub(crate) struct RemoteProgram<'a> {
 
 /// Hands an overlay to the viewer presenting `session` (upstream's `openRemoteOverlay`, both halves): registers the
 /// job, reserves the slot so no second overlay opens there, and asks the presenter to show it. Nothing is mounted
-/// here, so the session stays uncovered. The launch context is built as a local overlay's would be.
+/// here, so the session stays uncovered. The launch context is built as a local overlay's would be. A headless origin
+/// with no presenter holds the job, unpresented, for the next one ([`Core::offer_held_jobs`]).
 pub(crate) fn open_remote_overlay(
     core: &mut Core,
     window: Uuid,
@@ -454,7 +461,8 @@ pub(crate) fn open_remote_overlay(
     request: &RemoteProgram<'_>,
 ) -> RemoteOverlayOpen {
     let pane = request.pane;
-    if !core.remote.hub.has_presenter(session) {
+    let presented = core.remote.hub.has_presenter(session);
+    if !presented && !core.presenter_only() {
         return RemoteOverlayOpen::NotPresented;
     }
     let Some(found) = core.library().store(window).and_then(|store| store.session(session)) else {
@@ -471,7 +479,7 @@ pub(crate) fn open_remote_overlay(
             None => return RemoteOverlayOpen::PaneMissing,
         },
     };
-    if !core.follows_remotely(found, identity) {
+    if !core.presents_remotely(found, identity) {
         return RemoteOverlayOpen::NotPresented;
     }
     let context = launch_context(core, window, found, request.program);
@@ -492,8 +500,19 @@ pub(crate) fn open_remote_overlay(
     if pane.is_none() && hud {
         store.close_hud(session);
     }
-    let job = core.jobs.jobs.register(session, pane, owner, context);
-    core.arm_job_launch_expiry();
+    let token = (presented
+        && core
+            .remote
+            .hub
+            .surface_supports(Surface::Overlays, JOB_TOKEN_KIND, session))
+    .then(|| uuid_string(Uuid::new_v4()));
+    let job = if presented {
+        let job = core.jobs.jobs.register(session, pane, owner, context, token.clone());
+        core.arm_job_launch_expiry();
+        job
+    } else {
+        core.jobs.jobs.register_unpresented(session, pane, context)
+    };
     let size = (request.program.size_percent)
         .filter(|_| pane.is_none())
         .map(|percent| percent.clamp(1, 100));
@@ -502,12 +521,23 @@ pub(crate) fn open_remote_overlay(
     } else {
         OverlayPointSize::default()
     };
+    let held = PresentationOverlay {
+        width: points.width,
+        height: points.height,
+        job: job.clone(),
+        pane: identity.map(PresentationPane::Identity),
+        size_percent: size,
+        background_color: request.program.background_color.clone(),
+        follow: request.follow,
+        wait: request.program.wait,
+        token: None,
+    };
     if let Some(store) = core.library_mut().store_mut(window) {
         store.reserve_remote_overlay(
             session,
             RemoteOverlaySlot {
                 points,
-                job: job.clone(),
+                job,
                 pane,
                 owner,
                 size_percent: size,
@@ -515,24 +545,74 @@ pub(crate) fn open_remote_overlay(
                 ended: false,
                 page: None,
                 presenter_sized: false,
+                request: Some(held.clone()),
             },
         );
     }
-    let sent = core.presentable_points(Surface::Overlays, session, points);
-    let overlay = PresentationOverlay {
-        width: sent.width,
-        height: sent.height,
-        job,
-        pane: identity.map(PresentationPane::Identity),
-        size_percent: size,
-        background_color: request.program.background_color.clone(),
-        follow: request.follow,
-        wait: request.program.wait,
-    };
-    core.remote
-        .hub
-        .send_to_surface(Surface::Overlays, Body::OverlayRequest(overlay), session);
+    if presented {
+        let sent = core.presentable_points(Surface::Overlays, session, points);
+        let overlay = PresentationOverlay {
+            width: sent.width,
+            height: sent.height,
+            token,
+            ..held
+        };
+        core.remote
+            .hub
+            .send_to_surface(Surface::Overlays, Body::OverlayRequest(overlay), session);
+    }
     RemoteOverlayOpen::Opened
+}
+
+impl Core {
+    /// Hands the programs a headless origin holds for `session` to the viewer now showing its overlays, each under a
+    /// fresh offer token (upstream's `offerPendingOverlay`): only to one listing [`JOB_TOKEN_KIND`], which passes the
+    /// token to the job's helper. Each job's launch window starts here.
+    pub(crate) fn offer_held_jobs(&mut self, session: Uuid) {
+        if !self
+            .remote
+            .hub
+            .surface_supports(Surface::Overlays, JOB_TOKEN_KIND, session)
+        {
+            return;
+        }
+        let owner = self.remote.hub.surface_generation(Surface::Overlays, session);
+        let held: Vec<(String, PresentationOverlay, Option<i64>, OverlayPointSize)> = self
+            .presented_session(session)
+            .map(|found| {
+                found
+                    .remote_overlays()
+                    .slots()
+                    .iter()
+                    .filter_map(|slot| {
+                        let request = slot.request.clone()?;
+                        Some((slot.job.clone(), request, slot.size_percent, slot.points))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (job, request, size_percent, points) in held {
+            let token = uuid_string(Uuid::new_v4());
+            if !self.jobs.jobs.offer(&job, owner, Some(token.clone())) {
+                continue;
+            }
+            if let Some(store) = self.library_mut().store_for_session_mut(session) {
+                store.offer_remote_overlay(session, &job, owner, request.wait);
+            }
+            let sent = self.presentable_points(Surface::Overlays, session, points);
+            let overlay = PresentationOverlay {
+                size_percent,
+                width: sent.width,
+                height: sent.height,
+                token: Some(token),
+                ..request
+            };
+            self.remote
+                .hub
+                .send_to_surface(Surface::Overlays, Body::OverlayRequest(overlay), session);
+            self.arm_job_launch_expiry();
+        }
+    }
 }
 
 /// What the program starts with on this instance, the same identities a local overlay gets.

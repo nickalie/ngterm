@@ -167,10 +167,44 @@ impl Core {
     }
 
     /// Takes `session`'s presenter-held pick back into the session's window after the presenter refused it
-    /// (`refused`) or went away (upstream's `takeBackRemotePick`); one that cannot be shown there ends cancelled.
+    /// (`refused`) or went away (upstream's `takeBackRemotePick`); one that cannot be shown there ends cancelled. A
+    /// headless origin, which draws nothing, holds it for the next presenter instead (upstream's `returnToPending`).
     pub(crate) fn take_back_remote_pick(&mut self, session: Uuid, refused: Option<&PresentationPickRef>) {
+        if self.presenter_only() {
+            self.modals.session_picks.return_to_pending(session, refused);
+            return;
+        }
         let window = self.library().window_holding_session(session);
         self.modals.hand_back_session_pick(session, refused, window);
+    }
+
+    /// Hands `session`'s unpresented pick to its presenter under the current generation (upstream's
+    /// `offerPendingPick`), ending it first when its deadline passed, so an expired pick is never shown. It stays
+    /// unpresented when the presenter cannot show it.
+    pub(crate) fn offer_held_pick(&mut self, session: Uuid) {
+        let Some((pick, follow)) = self
+            .modals
+            .session_picks
+            .unpresented(session)
+            .map(|(pick, follow)| (pick.clone(), follow))
+        else {
+            return;
+        };
+        if self.modals.expired(&pick.id) {
+            drop(crate::commands::pick::cancel(self, &pick.id, None));
+            return;
+        }
+        let hub = &self.remote.hub;
+        if !hub.has_presenter(session) || !hub.presenter_supports("pick.request", session) {
+            return;
+        }
+        let owner = hub.presenter_generation(session);
+        let request = PresentationPick::new(&pick, owner, follow);
+        if !request.fits_frame() {
+            return;
+        }
+        self.modals.session_picks.offer(session, owner);
+        self.remote.hub.send_to_presenter(Body::PickRequest(request), session);
     }
 
     /// Applies the presenter's answer to a pick it was handed; a stale or invalid one changes nothing.

@@ -19,6 +19,12 @@ const RETAINED_LIMIT: usize = 32;
 
 /// `pick already pending`: the session, or the window slot a pick needs, holds one.
 pub const PICK_ALREADY_PENDING: &str = "pick already pending";
+/// An interaction's state while a headless origin holds it for a presenter (upstream's `ControlInteraction.unpresented`).
+pub const INTERACTION_UNPRESENTED: &str = "unpresented";
+/// An interaction's state while it is handed to a presenter (upstream's `ControlInteraction.offered`).
+pub const INTERACTION_OFFERED: &str = "offered";
+/// An interaction's state once its helper or channel holds it (upstream's `ControlInteraction.claimed`).
+pub const INTERACTION_CLAIMED: &str = "claimed";
 
 /// Where a session's pick in flight is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +33,8 @@ pub enum Placement {
     Presenter { owner: i64 },
     /// In this window's modal slot.
     Local(Uuid),
+    /// Held by a headless origin until a presenter can show it.
+    Unpresented,
 }
 
 #[derive(Debug)]
@@ -35,6 +43,8 @@ struct Entry {
     pick: PendingPick,
     placement: Placement,
     window: Option<Uuid>,
+    /// `--follow`, which each presenter it is offered to is asked again.
+    follow: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -85,9 +95,83 @@ impl SessionPicks {
             pick,
             placement: Placement::Presenter { owner },
             window,
+            follow: false,
         };
         self.entries.insert(entry.pick.id.clone(), entry);
         true
+    }
+
+    /// Books `pick` for `session` on a headless origin, which holds it until a presenter can show it (upstream's
+    /// `openUnpresented`); false when the session already has one.
+    pub(crate) fn open_unpresented(&mut self, pick: PendingPick, session: Uuid, follow: bool) -> bool {
+        if self.placement(session).is_some() {
+            return false;
+        }
+        let entry = Entry {
+            session,
+            pick,
+            placement: Placement::Unpresented,
+            window: None,
+            follow,
+        };
+        self.entries.insert(entry.pick.id.clone(), entry);
+        true
+    }
+
+    /// `session`'s unpresented pick and its `--follow`.
+    #[must_use]
+    pub(crate) fn unpresented(&self, session: Uuid) -> Option<(&PendingPick, bool)> {
+        self.entry_of(session)
+            .filter(|(_, entry)| entry.placement == Placement::Unpresented)
+            .map(|(_, entry)| (&entry.pick, entry.follow))
+    }
+
+    /// Marks `session`'s unpresented pick as handed to its presenter under `owner` (upstream's `offer`).
+    pub(crate) fn offer(&mut self, session: Uuid, owner: i64) {
+        if let Some(entry) = self
+            .entries
+            .values_mut()
+            .find(|entry| entry.session == session && entry.placement == Placement::Unpresented)
+        {
+            entry.placement = Placement::Presenter { owner };
+        }
+    }
+
+    /// Takes `session`'s presenter-held pick back as unpresented after its presenter was lost or refused it
+    /// (`refused`, which must name it under its owner); an answer from that presenter is then stale (upstream's
+    /// `returnToPending`).
+    pub(crate) fn return_to_pending(&mut self, session: Uuid, refused: Option<&PresentationPickRef>) {
+        let Some(entry) = self.entries.values_mut().find(|entry| entry.session == session) else {
+            return;
+        };
+        let Placement::Presenter { owner } = entry.placement else {
+            return;
+        };
+        if refused.is_some_and(|reference| reference.id != entry.pick.id || reference.owner != owner) {
+            return;
+        }
+        entry.placement = Placement::Unpresented;
+    }
+
+    /// `session`'s pick as `interactions` lists it while a presenter holds it or one is awaited, with its deadline
+    /// from `deadline`; `None` for none or one drawn in a window here (upstream's `interaction`).
+    pub(crate) fn interaction(
+        &self,
+        session: Uuid,
+        deadline: impl Fn(&str) -> Option<f64>,
+    ) -> Option<ngterm_proto::ControlInteraction> {
+        let (id, entry) = self.entry_of(session)?;
+        let state = match entry.placement {
+            Placement::Presenter { .. } => INTERACTION_OFFERED,
+            Placement::Unpresented => INTERACTION_UNPRESENTED,
+            Placement::Local(_) => return None,
+        };
+        Some(ngterm_proto::ControlInteraction {
+            kind: "pick".to_owned(),
+            id: id.clone(),
+            state: state.to_owned(),
+            deadline: deadline(id),
+        })
     }
 
     /// Pick `id`'s outcome: pending while booked, then the retained answer.
@@ -213,6 +297,7 @@ impl Modals {
                 pick,
                 placement: Placement::Local(window),
                 window: Some(window),
+                follow: false,
             },
         );
         Ok(())
@@ -227,7 +312,7 @@ impl Modals {
         let cancelled = ControlPickResult::outcome(ControlPickOutcome::Cancelled);
         match entry.placement {
             Placement::Local(window) if self.slot_pick_is(window, id) => self.resolve_pick(window, cancelled),
-            Placement::Local(_) => self.session_picks.finish(id, cancelled),
+            Placement::Local(_) | Placement::Unpresented => self.session_picks.finish(id, cancelled),
             Placement::Presenter { owner } => {
                 let session = entry.session;
                 self.session_picks.finish(id, cancelled);

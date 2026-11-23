@@ -127,9 +127,10 @@ impl JobRunner {
         Canceler(Arc::clone(&self.shared))
     }
 
-    /// Sends the claim and returns the launch context, or the app's refusal, having launched nothing.
-    pub fn claim(&self, job: &str) -> Result<OverlayLaunchContext, String> {
-        let mut line = serde_json::to_vec(&claim_request(job))
+    /// Sends the claim, with the offer's `token` when the job was handed over with one, and returns the launch
+    /// context, or the app's refusal, having launched nothing.
+    pub fn claim(&self, job: &str, token: Option<&str>) -> Result<OverlayLaunchContext, String> {
+        let mut line = serde_json::to_vec(&claim_request(job, token))
             .map_err(|error| format!("could not encode the request: {error}"))?;
         line.push(b'\n');
         client::send_all(&self.socket, &line).map_err(|_| "could not send the request".to_owned())?;
@@ -265,12 +266,15 @@ impl JobRunner {
     }
 }
 
-/// The claim: the job id rides as the target.
-fn claim_request(job: &str) -> Request {
+/// The claim: the job id rides as the target, the offer token as `token`.
+fn claim_request(job: &str, token: Option<&str>) -> Request {
     Request {
         cmd: Command::Session(SessionCmd::OverlayJobRun),
         target: Some(job.to_owned()),
-        args: None,
+        args: token.map(|token| ngterm_proto::Args {
+            token: Some(token.to_owned()),
+            ..ngterm_proto::Args::default()
+        }),
     }
 }
 
@@ -323,6 +327,9 @@ pub struct RunJob {
     #[arg(help = "The job id the other Mac was handed.")]
     job: String,
 
+    #[arg(long, help = "The offer token the other Mac was handed with the job.")]
+    token: Option<String>,
+
     #[command(flatten)]
     options: BasicOptions,
 }
@@ -334,13 +341,13 @@ impl RequestCommand for RunJob {
 
     /// The claim the run sends first.
     fn make_request(&self) -> Request {
-        claim_request(&self.job)
+        claim_request(&self.job, self.token.as_deref())
     }
 
     fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
         let socket = client::connect(&self.options.socket_path(env))?;
         let runner = JobRunner::new(socket, Some(sys::stdin_terminal()), DEFAULT_GRACE);
-        let context = match runner.claim(&self.job) {
+        let context = match runner.claim(&self.job, self.token.as_deref()) {
             Ok(context) => context,
             Err(message) => {
                 eprintln!("error: {message}");
@@ -460,7 +467,7 @@ mod tests {
     fn run_to_end(command: &str, base: &[(OsString, OsString)]) -> (i32, Vec<OverlayJobFrame>) {
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(command)), false);
         let runner = runner(helper, DEFAULT_GRACE);
-        let claimed = runner.claim("job").unwrap();
+        let claimed = runner.claim("job", None).unwrap();
         let status = runner.run(&claimed, base);
         drop(runner);
         (status, origin.frames())
@@ -514,7 +521,7 @@ mod tests {
     fn a_program_exiting_three_reports_three_and_the_helper_exits_three() {
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context("exit 3")), false);
         let runner = runner(helper, DEFAULT_GRACE);
-        let status = runner.run(&runner.claim("job-id").unwrap(), &plain_base());
+        let status = runner.run(&runner.claim("job-id", None).unwrap(), &plain_base());
         drop(runner);
         assert_eq!(status, 3);
         let (claim, frames) = origin.finish();
@@ -529,7 +536,7 @@ mod tests {
     fn a_refused_claim_launches_nothing() {
         let (helper, origin) = FakeOrigin::serve(r#"{"ok":false,"error":"job not claimable"}"#, None, false);
         let runner = runner(helper, DEFAULT_GRACE);
-        assert_eq!(runner.claim("job"), Err("job not claimable".to_owned()));
+        assert_eq!(runner.claim("job", None), Err("job not claimable".to_owned()));
         drop(runner);
         assert!(origin.frames().is_empty());
     }
@@ -538,7 +545,10 @@ mod tests {
     fn a_claim_answered_without_a_context_reports_the_missing_context() {
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, None, true);
         let runner = runner(helper, DEFAULT_GRACE);
-        assert_eq!(runner.claim("job"), Err("the app sent no launch context".to_owned()));
+        assert_eq!(
+            runner.claim("job", None),
+            Err("the app sent no launch context".to_owned())
+        );
         drop(runner);
         let _ = origin.finish();
     }
@@ -599,7 +609,7 @@ mod tests {
         let (context, stopped, ready) = long_running(dir.path());
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context), false);
         let runner = runner(helper, Duration::from_millis(300));
-        let claimed = runner.claim("job").unwrap();
+        let claimed = runner.claim("job", None).unwrap();
         let status = thread::scope(|scope| {
             scope.spawn(|| {
                 match &ready {
@@ -621,7 +631,7 @@ mod tests {
         let ready = dir.path().join("ready");
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(stubborn(&ready)), false);
         let runner = runner(helper, Duration::from_millis(300));
-        let claimed = runner.claim("job").unwrap();
+        let claimed = runner.claim("job", None).unwrap();
         let canceler = runner.canceler();
         let status = thread::scope(|scope| {
             scope.spawn(|| {
@@ -716,7 +726,7 @@ mod tests {
         let grace = Duration::from_secs(2);
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(&command)), false);
         let runner = runner(helper, grace);
-        let claimed = runner.claim("job").unwrap();
+        let claimed = runner.claim("job", None).unwrap();
         let canceler = runner.canceler();
         let (status, canceled_at) = thread::scope(|scope| {
             let canceling = scope.spawn(|| {
@@ -743,7 +753,7 @@ mod tests {
         let command = "ping -n 2 127.0.0.1 >nul & exit 5";
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(command)), true);
         let runner = runner(helper, DEFAULT_GRACE);
-        let claimed = runner.claim("job").unwrap();
+        let claimed = runner.claim("job", None).unwrap();
         assert!(origin.frames().is_empty());
         assert_eq!(runner.run(&claimed, &plain_base()), 5);
     }
@@ -755,7 +765,7 @@ mod tests {
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context("exit 9")), false);
         let fd = helper.as_raw_fd();
         let runner = runner(helper, DEFAULT_GRACE);
-        let mut claimed = runner.claim("job").unwrap();
+        let mut claimed = runner.claim("job", None).unwrap();
         // the context is the app's to choose, so the test may aim it at the descriptor it now knows
         let probe = format!("test ! -e /dev/fd/{fd}");
         claimed.environment.insert("NGTERM_OVL_CMD".to_owned(), probe.clone());
@@ -860,7 +870,7 @@ mod tests {
             }
             let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context), false);
             let runner = runner(helper, DEFAULT_GRACE);
-            let status = runner.run(&runner.claim("job").unwrap(), &base);
+            let status = runner.run(&runner.claim("job", None).unwrap(), &base);
             drop(runner);
             assert_eq!(status, 0, "context override: {context_override:?}");
             assert_eq!(
@@ -891,7 +901,7 @@ mod tests {
         let runner = runner(helper, DEFAULT_GRACE);
         let path = format!("{}:/usr/bin:/bin", bin.path().display());
         let base = base(&[("PATH", &path), ("HOME", "/home/x"), ("NGTERM_SESSION_ID", "stale")]);
-        let status = runner.run(&runner.claim("job").unwrap(), &base);
+        let status = runner.run(&runner.claim("job", None).unwrap(), &base);
         drop(runner);
         assert_eq!(status, 0);
         assert_eq!(
@@ -913,7 +923,7 @@ mod tests {
         );
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(&command)), false);
         let runner = runner(helper, Duration::from_millis(300));
-        let claimed = runner.claim("job").unwrap();
+        let claimed = runner.claim("job", None).unwrap();
         thread::scope(|scope| {
             scope.spawn(|| {
                 wait_for_file(&ready);
@@ -931,7 +941,7 @@ mod tests {
         let context = OverlayLaunchContext::new("true", "/nonexistent-ngterm-run-job", PaneEnv::new());
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context), false);
         let runner = runner(helper, DEFAULT_GRACE);
-        let status = runner.run(&runner.claim("job").unwrap(), &plain_base());
+        let status = runner.run(&runner.claim("job", None).unwrap(), &plain_base());
         drop(runner);
         assert_eq!(status, 127);
         let frames = origin.frames();
@@ -961,7 +971,7 @@ mod tests {
             ("HOME".into(), "C:\\Users\\x".into()),
             ("NGTERM_SESSION_ID".into(), "stale".into()),
         ]);
-        let status = runner.run(&runner.claim("job").unwrap(), &base);
+        let status = runner.run(&runner.claim("job", None).unwrap(), &base);
         drop(runner);
         assert_eq!(status, 0);
         assert_eq!(
@@ -1050,7 +1060,7 @@ mod tests {
         let grace = Duration::from_secs(5);
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(probe(Probe::Trap, &[(PROBE_READY, &ready)])), false);
         let runner = runner(helper, grace);
-        let claimed = runner.claim("job").unwrap();
+        let claimed = runner.claim("job", None).unwrap();
         let canceler = runner.canceler();
         let (status, canceled_at) = thread::scope(|scope| {
             let canceling = scope.spawn(|| {
@@ -1078,7 +1088,7 @@ mod tests {
         let context = probe(Probe::Ignore, &[(PROBE_PID, &pid_file)]);
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context), false);
         let runner = runner(helper, Duration::from_millis(300));
-        let claimed = runner.claim("job").unwrap();
+        let claimed = runner.claim("job", None).unwrap();
         thread::scope(|scope| {
             scope.spawn(|| {
                 let _ = read_pid(&pid_file);
@@ -1103,7 +1113,7 @@ mod tests {
             // the origin stays to read what the helper sends until its end closes
             let (helper, origin) = FakeOrigin::serve(reply, None, false);
             let runner = runner(helper, DEFAULT_GRACE);
-            assert_eq!(runner.claim("job").unwrap_err(), expected);
+            assert_eq!(runner.claim("job", None).unwrap_err(), expected);
             drop(runner);
             assert!(origin.frames().is_empty());
         }

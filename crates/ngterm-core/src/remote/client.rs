@@ -15,13 +15,13 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::frames::{
-    self, Body, PresentationAgent, PresentationAsk, PresentationAskRef, PresentationCompanion, PresentationFrame,
-    PresentationHello, PresentationHud, PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay,
-    PresentationOverlayChange, PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationRespawns,
-    PresentationSound, PresentationStatus,
+    self, Body, PendingBatch, PresentationAgent, PresentationAsk, PresentationAskRef, PresentationCompanion,
+    PresentationFrame, PresentationHello, PresentationHud, PresentationLayout, PresentationMode, PresentationNotify,
+    PresentationOverlay, PresentationOverlayChange, PresentationPage, PresentationPageChange, PresentationPageCommand,
+    PresentationRespawns, PresentationSound, PresentationStatus,
 };
 use super::hub::{
-    AGENT_KIND, COMPANION_PAGE_KIND, LINK_CLICK_KIND, NO_OVERLAYS_KIND, OPT_IN_KINDS, PAGE_CONTENT_KIND,
+    AGENT_KIND, COMPANION_PAGE_KIND, HELD_KINDS, LINK_CLICK_KIND, NO_OVERLAYS_KIND, OPT_IN_KINDS, PAGE_CONTENT_KIND,
     PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, PAGE_LINKS_KIND, PICK_KINDS, SUPPORTED_KINDS,
 };
 use super::reconnect::retry_delay;
@@ -50,7 +50,7 @@ pub fn viewer_kinds(pages: bool) -> Vec<String> {
         .iter()
         // listed once this build's presenter loads a link page from the machine that opened it
         .filter(|kind| **kind != PAGE_LINKS_KIND)
-        .filter(|kind| !PICK_KINDS.contains(kind))
+        .filter(|kind| !PICK_KINDS.contains(kind) && !HELD_KINDS.contains(kind))
         .filter(|kind| {
             pages
                 || !(PAGE_KINDS.contains(kind)
@@ -159,6 +159,10 @@ pub struct PresentationClient {
     shows_pages: bool,
     /// [`PICK_KINDS`] while the hello lists them ([`PresentationClient::set_shows_picks`]), else empty.
     pick_kinds: &'static [&'static str],
+    /// [`HELD_KINDS`] while the hello lists them ([`PresentationClient::set_takes_held`]), else empty.
+    held_kinds: &'static [&'static str],
+    /// The chunks of a headless origin's pending batch since the last commit.
+    pending: PendingBatch,
     /// The [`OPT_IN_KINDS`] the hello lists; [`AGENT_KIND`]'s frames are reported only when it is one.
     opt_in: Vec<&'static str>,
     /// The kinds the origin's last hello answer listed, kept after its link goes so what is said about that link's
@@ -200,6 +204,8 @@ impl PresentationClient {
             mode: None,
             shows_pages: false,
             pick_kinds: &[],
+            held_kinds: &[],
+            pending: PendingBatch::default(),
             opt_in: Vec::new(),
             origin_kinds: Vec::new(),
         }
@@ -214,6 +220,13 @@ impl PresentationClient {
     /// ([`PICK_KINDS`]); off by default, so a viewer that draws none (the mobile apps) is never handed one.
     pub fn set_shows_picks(&mut self, shows_picks: bool) {
         self.pick_kinds = if shows_picks { &PICK_KINDS } else { &[] };
+    }
+
+    /// Whether this viewer takes what a headless origin held for its next presenter, which the next hello says
+    /// ([`HELD_KINDS`]): the pending batch, and the offer token it passes to an overlay job's helper. Off by default, so
+    /// a viewer that does neither (the mobile apps) sees only what opens while it presents.
+    pub fn set_takes_held(&mut self, takes_held: bool) {
+        self.held_kinds = if takes_held { &HELD_KINDS } else { &[] };
     }
 
     /// Whether this viewer shows what each pane runs (the Android chat view): the next hello lists [`AGENT_KIND`], an
@@ -252,6 +265,7 @@ impl PresentationClient {
     fn hello_kinds(&self) -> Vec<String> {
         let mut kinds = viewer_kinds(self.shows_pages);
         kinds.extend(self.pick_kinds.iter().map(|kind| (*kind).to_owned()));
+        kinds.extend(self.held_kinds.iter().map(|kind| (*kind).to_owned()));
         kinds.extend(
             OPT_IN_KINDS
                 .iter()
@@ -427,6 +441,17 @@ impl PresentationClient {
             Body::CompanionPage(companion) => effects.push(ClientEffect::CompanionPage(companion)),
             Body::LinkRefused(refusal) => effects.push(ClientEffect::LinkRefused(refusal.reason)),
             Body::Agent(agent) if self.opt_in.contains(&AGENT_KIND) => effects.push(ClientEffect::Agent(agent)),
+            Body::PendingChunk(chunk) => self.pending.add(&chunk),
+            Body::PendingCommit => match self.pending.commit() {
+                Ok(entries) => {
+                    for entry in entries {
+                        if !matches!(entry, Body::PendingChunk(_) | Body::PendingCommit) {
+                            self.apply(entry, effects);
+                        }
+                    }
+                }
+                Err(_) => effects.push(ClientEffect::Warn("malformed pending batch".to_owned())),
+            },
             Body::Ack
             | Body::PresenterAcquire
             | Body::LinkClick(_)
@@ -450,6 +475,7 @@ impl PresentationClient {
         self.retry_at = None;
         self.generation = None;
         self.revision = -1;
+        self.pending = PendingBatch::default();
         self.last_frame_at = Some(now);
         self.report(RemoteConnection::Connecting, effects);
         self.launch_count += 1;
@@ -877,6 +903,7 @@ mod tests {
         let mut harness = Harness::new(Some(1));
         harness.client.set_shows_pages(true);
         harness.client.set_shows_picks(true);
+        harness.client.set_takes_held(true);
         harness.start();
         let hello = harness.transport.link(0).0.borrow().sent[0].body.clone();
         let Body::Hello(hello) = hello else {
@@ -884,6 +911,7 @@ mod tests {
         };
         let mut expected = viewer_kinds(true);
         expected.extend(PICK_KINDS.map(str::to_owned));
+        expected.extend(HELD_KINDS.map(str::to_owned));
         assert_eq!(hello.kinds, expected);
         assert_eq!(
             hello.kinds.len(),

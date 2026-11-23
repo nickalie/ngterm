@@ -84,7 +84,7 @@ fn a_pinned_host_sends_every_line_to_agterm_and_ssh_only_its_destination() {
     let present = present_command("agterm:me@studio", pinned, "S1").unwrap();
     assert_eq!(present[6], "me@studio");
     assert_eq!(present[7], present_tail(AGTERM_FORM, "S1").unwrap());
-    let job = run_job_command("agterm:me@studio", pinned, "J1").unwrap();
+    let job = run_job_command("agterm:me@studio", pinned, "J1", None).unwrap();
     assert_eq!(job[1], "-tt");
     assert_eq!(job[6], "me@studio");
     assert!(

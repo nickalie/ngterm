@@ -41,6 +41,7 @@ pub mod frames;
 /// One parent and its freshly discovered companion group.
 pub(crate) mod group_attach;
 mod handoff;
+mod held;
 pub mod hub;
 mod layout;
 pub mod link_click;
@@ -657,6 +658,7 @@ impl Core {
                         self.take_back_remote_ask(session);
                         self.take_back_remote_pick(session, None);
                     }
+                    HubEvent::PresenterGranted(session) => self.presenter_granted(session),
                     HubEvent::SurfaceLost {
                         session,
                         surface: Surface::Overlays,
@@ -668,7 +670,7 @@ impl Core {
                         holder,
                     } => self.pages_lost(session, holder),
                     HubEvent::SurfaceGained(session, Surface::Pages) => self.hand_on_parked_pages(session),
-                    HubEvent::SurfaceGained(_, Surface::Overlays) => {}
+                    HubEvent::SurfaceGained(session, Surface::Overlays) => self.offer_held_jobs(session),
                     HubEvent::PresenterFrame(session, body) => self.receive_presenter_frame(session, *body),
                 }
             }

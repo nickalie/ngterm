@@ -90,7 +90,7 @@ impl Viewer {
         self.0.borrow().lines.len()
     }
 
-    fn generation(&self) -> i64 {
+    pub(super) fn generation(&self) -> i64 {
         self.last("hello").and_then(|hello| hello["gen"].as_i64()).unwrap()
     }
 }
@@ -1086,6 +1086,7 @@ fn a_point_resize_after_the_program_presenter_changed_preserves_the_slot() {
             ended: false,
             page: None,
             presenter_sized: false,
+            request: None,
         },
     );
     live.fixture.core.commit();

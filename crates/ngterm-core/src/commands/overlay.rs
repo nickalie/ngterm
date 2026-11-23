@@ -152,7 +152,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::OverlayToggle => visibility(core, target, args, OverlayVisibilityMode::Toggle),
         SessionCmd::OverlayFollow => follow(core, target, args),
         SessionCmd::OverlayWrap => super::overlay_text::wrap(core, request),
-        SessionCmd::OverlayJobRun => claim_job(core, target),
+        SessionCmd::OverlayJobRun => claim_job(core, target, args.token.as_deref()),
         SessionCmd::OverlayPageServe => claim_page_serve(core, target),
         other => Err(ControlError::NotSupported(ngterm_proto::Command::Session(other))),
     }
@@ -927,13 +927,13 @@ impl fmt::Debug for JobRuntime {
 /// `session.overlay.job.run` (upstream's `claimOverlayJob`): the request is the claim, so an `ok` here is the one
 /// winner of the race against the job's launch deadline; the frontend then hands the connection to
 /// [`Core::adopt_overlay_job_stream`].
-fn claim_job(core: &mut Core, target: Option<&str>) -> Outcome {
+fn claim_job(core: &mut Core, target: Option<&str>, token: Option<&str>) -> Outcome {
     let job = trimmed(target).ok_or_else(|| ControlError::rejected(JOB_REQUIRED))?;
     parse_uuid(job).ok_or_else(|| ControlError::rejected(INVALID_JOB))?;
     let requests = Rc::clone(&core.jobs.cancel_requests);
     let owned = job.to_owned();
     let hook = Box::new(move || requests.borrow_mut().push(owned.clone()));
-    if core.jobs.jobs.claim(job, hook).is_none() {
+    if core.jobs.jobs.claim(job, token, hook).is_none() {
         return Err(ControlError::rejected(JOB_NOT_CLAIMABLE));
     }
     core.jobs.expiries.push(START_WINDOW + EXPIRY_SLACK);
