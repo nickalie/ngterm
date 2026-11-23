@@ -82,6 +82,7 @@ const USAGE: &str = "usage: ngterm-session <command>
   version                                   print this build, its protocol and the running server's
   server <namespace directory>              run the server (started by an attach)
     [--handoff-import <channel> <token>]    taking over an updated server's sessions (started by its handoff)
+    [--launchd-job <label>]                 as that launchd job (macOS 27 and later)
 
 The namespace is the directory NGTERM_LIVE_DIR names.";
 
@@ -238,16 +239,23 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
         }
         "version" | "-v" | "--version" => Ok(Command::Version),
         "help" | "-h" | "--help" => Ok(Command::Help),
-        // the binary runs `server <namespace directory>` and a handoff's `server <namespace directory>
-        // --handoff-import <channel> <token>` itself, before these commands
+        // the binary runs `server <namespace directory>`, a handoff's `server <namespace directory>
+        // --handoff-import <channel> <token>` and a job's `server <namespace directory> --launchd-job <label>` itself,
+        // before these commands
         "server" => Err(match rest.as_slice() {
             [] => "server needs the namespace directory".to_owned(),
             [_] => "server runs only as ngterm-session's own command line".to_owned(),
             [_, flag, _, _] if flag == handoff::IMPORT_FLAG => {
                 "server runs only as ngterm-session's own command line".to_owned()
             }
+            [_, flag, _] if flag == crate::server::spawn::job::JOB_FLAG => {
+                "server runs only as ngterm-session's own command line".to_owned()
+            }
             [_, flag, ..] if flag == handoff::IMPORT_FLAG => {
                 format!("server's {} takes a channel and a token", handoff::IMPORT_FLAG)
+            }
+            [_, flag, ..] if flag == crate::server::spawn::job::JOB_FLAG => {
+                format!("server's {} takes a label", crate::server::spawn::job::JOB_FLAG)
             }
             [_, extra, ..] => format!("server takes one namespace directory, not {extra:?} too"),
         }),

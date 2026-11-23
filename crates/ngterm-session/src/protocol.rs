@@ -53,7 +53,8 @@
 //!   carries the server's build id and capabilities, a refusal's included; [`CAPABILITY_HANDOFF_REQUEST`] says the
 //!   server takes the request. The same role retires a server of an earlier login that holds no session:
 //!   `hello(control) → welcome → retire.request.v1 → retire.result.v1` (a server that predates it closes instead).
-//!   A welcome carries the server's login where the OS has one ([`crate::login`]).
+//!   A welcome carries the server's login where the OS has one ([`crate::login`]), and the label of the launchd job
+//!   the server runs as, if any.
 //!
 //! A [`HandoffResult`] that is `ok` means the handoff committed; a failure means it failed before its commit. A
 //! connection that ends before the result leaves the outcome unknown: the client reconnects and reads the server's
@@ -617,6 +618,10 @@ pub struct Welcome {
     /// server that predates the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<i64>,
+    /// The label of the launchd job the server runs as (macOS 27 and later, `server::spawn::job`); `None` for a
+    /// spawned server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
 }
 
 /// Why the server refused a control operation.
@@ -778,6 +783,7 @@ pub fn welcome(hello: &Hello, client: u32, build: &str, capabilities: &[String])
         pid: std::process::id(),
         error: check_hello(hello.role, client).err(),
         login: None,
+        job: None,
     }
 }
 

@@ -170,6 +170,22 @@ fn a_malformed_handoff_import_server_line_says_what_the_import_takes() {
 }
 
 #[test]
+fn a_malformed_launchd_job_server_line_says_what_the_job_takes() {
+    let wrong_count = Err("server's --launchd-job takes a label".to_owned());
+    for bad in [
+        &["server", "/ns", "--launchd-job"][..],
+        &["server", "/ns", "--launchd-job", "label", "extra"],
+    ] {
+        assert_eq!(parse(&args(bad)), wrong_count, "{bad:?}");
+    }
+    assert_eq!(
+        parse(&args(&["server", "/ns", "--launchd-job", "label"])),
+        Err("server runs only as ngterm-session's own command line".to_owned())
+    );
+    assert!(USAGE.contains("[--launchd-job <label>]"));
+}
+
+#[test]
 fn list_and_screen_lines_are_zmxs() {
     let record = SessionRecord {
         name: "ngterm-1".to_owned(),

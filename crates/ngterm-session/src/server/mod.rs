@@ -119,6 +119,8 @@ pub struct ServerConfig {
     pub handoff: Support,
     /// The login session its welcome reports ([`crate::login::current`]).
     pub login: Option<i64>,
+    /// The launchd job it runs as, which its welcome reports ([`spawn::job`]).
+    pub job: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -130,6 +132,7 @@ impl Default for ServerConfig {
             resync_budget: ResyncBudget::default(),
             handoff: Support::of_this_host(),
             login: crate::login::current(),
+            job: None,
         }
     }
 }
@@ -262,35 +265,67 @@ fn serve(endpoint: &Endpoint, accepting: Accepting, shared: &Arc<Shared>) -> Sto
 /// What `ngterm-session server <args…>` runs, `args` being what follows `server` (module docs), with its exit status:
 /// [`EXIT_STOPPED`] once it stopped by itself or handed its sessions over, [`EXIT_TAKEN`] when another server holds
 /// the namespace, [`EXIT_USAGE`] for arguments it does not take (after a usage line on standard error), else
-/// [`EXIT_FAILED`].
+/// [`EXIT_FAILED`]. A server of a launchd job (`server <directory> --launchd-job <label>`, [`spawn::job`]) refuses a
+/// label not of its namespace before it takes the endpoint, and removes its job however serving ends.
 #[must_use]
 pub fn command(args: &[OsString]) -> ExitCode {
-    let (directory, import) = match args {
-        [directory] => (directory, None),
-        [directory, flag, channel, token] if flag == handoff::IMPORT_FLAG => (directory, Some((channel, token))),
+    let (directory, line) = match args {
+        [directory] => (directory, Line::Plain),
+        [directory, flag, channel, token] if flag == handoff::IMPORT_FLAG => (directory, Line::Import(channel, token)),
+        [directory, flag, label] if flag == spawn::job::JOB_FLAG => (directory, Line::Job(label.to_string_lossy())),
         _ => {
             eprintln!(
-                "usage: ngterm-session server <namespace directory> [{} <channel> <token>]",
-                handoff::IMPORT_FLAG
+                "usage: ngterm-session server <namespace directory> [{} <channel> <token> | {} <label>]",
+                handoff::IMPORT_FLAG,
+                spawn::job::JOB_FLAG
             );
             return ExitCode::from(EXIT_USAGE);
         }
     };
-    let config = ServerConfig {
+    let mut config = ServerConfig {
         build: crate::build_id::of_this_process(),
         ..ServerConfig::default()
     };
     // the directory is made absolute before the server leaves the working directory it was started in
-    let result = std::path::absolute(Path::new(directory)).and_then(|directory| {
-        std::env::set_current_dir(working_directory(&directory)?)?;
-        match import {
-            None => run(&directory, &config),
-            Some((channel, token)) => {
+    let directory = match std::path::absolute(Path::new(directory)) {
+        Ok(directory) => directory,
+        Err(error) => return exit_status(Err(error)),
+    };
+    if let Line::Job(label) = &line {
+        if !spawn::job::is_own(label, &directory) {
+            eprintln!(
+                "ngterm-session server: the launchd job {label} is not the one of {}",
+                directory.display()
+            );
+            return ExitCode::from(EXIT_FAILED);
+        }
+        config.job = Some(label.clone().into_owned());
+    }
+    let result = working_directory(&directory)
+        .and_then(std::env::set_current_dir)
+        .and_then(|()| match &line {
+            Line::Plain | Line::Job(_) => run(&directory, &config),
+            Line::Import(channel, token) => {
                 let token = token.to_string_lossy();
                 run_import(&directory, Path::new(channel), &token, &config)
             }
-        }
-    });
+        });
+    let status = exit_status(result);
+    if let Line::Job(label) = &line {
+        remove_job(label);
+    }
+    status
+}
+
+/// A server line's form after its namespace directory.
+enum Line<'a> {
+    Plain,
+    Import(&'a OsString, &'a OsString),
+    Job(std::borrow::Cow<'a, str>),
+}
+
+/// The exit status of a server that served with `result`, which it reports on standard error unless it stopped.
+fn exit_status(result: io::Result<StopReason>) -> ExitCode {
     match result {
         Ok(_) => ExitCode::from(EXIT_STOPPED),
         Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
@@ -302,6 +337,17 @@ pub fn command(args: &[OsString]) -> ExitCode {
             ExitCode::from(EXIT_FAILED)
         }
     }
+}
+
+/// Removes this server's launchd job once its endpoint is closed, so that a client coming meanwhile starts a new
+/// server; a removal that succeeds ends this process.
+fn remove_job(label: &str) {
+    let outcome = spawn::job::bootout(label, Instant::now() + spawn::job::LAUNCHCTL_BUDGET);
+    if outcome == spawn::job::Outcome::Succeeded {
+        return;
+    }
+    tracing::error!(label, ?outcome, "the live session server's launchd job was not removed");
+    eprintln!("ngterm-session server: the launchd job {label} was not removed: {outcome:?}");
 }
 
 /// What this server process reports about itself.
@@ -321,6 +367,7 @@ struct Identity {
     build: String,
     capabilities: Vec<String>,
     login: Option<i64>,
+    job: Option<String>,
 }
 
 impl Identity {
@@ -328,6 +375,7 @@ impl Identity {
     fn welcome(&self, hello: &Hello, client: u32) -> Welcome {
         Welcome {
             login: self.login,
+            job: self.job.clone(),
             ..welcome(hello, client, &self.build, &self.capabilities)
         }
     }
@@ -407,6 +455,7 @@ impl Shared {
                 build: config.build.clone(),
                 capabilities: capabilities(&config.handoff),
                 login: config.login,
+                job: config.job.clone(),
             },
             panes: Panes::new(),
             jobs: Sweeper::live(),
@@ -617,6 +666,7 @@ fn refusal(identity: &Identity, error: ControlError) -> Welcome {
         pid: std::process::id(),
         error: Some(error),
         login: identity.login,
+        job: identity.job.clone(),
     }
 }
 
@@ -715,6 +765,7 @@ mod tests {
             build: "test-build".to_owned(),
             capabilities: vec![CAPABILITY_DETACHED.to_owned()],
             login: Some(100_007),
+            job: Some("com.nickalie.ngterm.session-server.0123.deadbeef".to_owned()),
         }
     }
 
@@ -738,6 +789,10 @@ mod tests {
         assert_eq!(welcome.capabilities, [CAPABILITY_DETACHED]);
         assert_eq!(welcome.pid, std::process::id());
         assert_eq!(welcome.login, Some(100_007));
+        assert_eq!(
+            welcome.job.as_deref(),
+            Some("com.nickalie.ngterm.session-server.0123.deadbeef")
+        );
     }
 
     #[test]

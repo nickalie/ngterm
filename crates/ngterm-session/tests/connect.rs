@@ -200,6 +200,7 @@ fn serve(mut stream: Stream, endpoint: &Endpoint, script: &Script, seen: &Mutex<
         pid: std::process::id(),
         error: refusal.map(|code| ControlError::new(code, "refused by the fake")),
         login: None,
+        job: None,
     };
     if write_control(&mut stream, &Control::Welcome(welcome)).is_err() || refusal.is_some() {
         return;
@@ -688,6 +689,7 @@ fn a_server_started_here_that_is_not_detached_is_stopped() -> TestResult {
             pid,
             error: None,
             login: None,
+            job: None,
         };
         write_control(&mut stream, &Control::Welcome(welcome)).unwrap();
         // held until the client goes

@@ -5530,6 +5530,7 @@ dependencies = [
  "ngterm-host",
  "ngterm-proto",
  "ngterm-pty",
+ "plist",
  "postcard",
  "rustix",
  "serde",

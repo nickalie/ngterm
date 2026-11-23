@@ -364,6 +364,7 @@ fn every_control_operation_round_trips() {
         pid: 77,
         error: None,
         login: Some(100_004),
+        job: None,
     }))
     .unwrap();
     roundtrip_control(&Control::Welcome(Welcome {
@@ -372,6 +373,7 @@ fn every_control_operation_round_trips() {
         pid: 77,
         error: Some(ControlError::new(ErrorCode::ProtocolMismatch, "mismatch")),
         login: None,
+        job: None,
     }))
     .unwrap();
     roundtrip_control(&Control::HandoffRequest(HandoffRequest {
@@ -431,6 +433,7 @@ fn the_control_operations_are_frozen() {
                 pid: 7,
                 error: Some(ControlError::new(ErrorCode::ProtocolMismatch, "m")),
                 login: None,
+                job: None,
             }),
             r#"{"op":"welcome.v1","build":"b","capabilities":["handoff.request.v1"],"pid":7,"error":{"code":"protocol_mismatch","message":"m"}}"#,
         ),
@@ -453,8 +456,9 @@ fn the_control_operations_are_frozen() {
                 pid: 7,
                 error: None,
                 login: Some(100_004),
+                job: Some("com.nickalie.ngterm.session-server.0123.deadbeef".into()),
             }),
-            r#"{"op":"welcome.v1","build":"b","capabilities":[],"pid":7,"login":100004}"#,
+            r#"{"op":"welcome.v1","build":"b","capabilities":[],"pid":7,"login":100004,"job":"com.nickalie.ngterm.session-server.0123.deadbeef"}"#,
         ),
         (Control::RetireRequest, r#"{"op":"retire.request.v1"}"#),
         (

@@ -36,6 +36,11 @@
 //! there. One that holds sessions is connected to as it is, once per call, and its sessions' panes read as on an
 //! earlier host (`crate::host`).
 //!
+//! # A launchd job on macOS 27 and later
+//!
+//! There a client starts the server as a launchd job of the user's GUI domain ([`job`]) and falls back to the spawn
+//! when the job fails to load; the server it connects to is the one it started when the welcome names its job.
+//!
 //! # Private images on Windows
 //!
 //! A running executable cannot be replaced on Windows, so a server never runs from the staged binary there: each start
@@ -61,6 +66,7 @@ mod windows;
 use windows as sys;
 
 mod attempts;
+pub mod job;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -155,6 +161,8 @@ pub enum SpawnPath {
     Breakaway,
     /// On Windows, inside a job that refuses breakaway: created by WMI's `Win32_Process.Create`, outside the job.
     Wmi,
+    /// On macOS 27 and later, a launchd job of the user's GUI domain ([`job`]).
+    LaunchdJob,
 }
 
 impl fmt::Display for SpawnPath {
@@ -163,6 +171,7 @@ impl fmt::Display for SpawnPath {
             Self::Detached => "detached",
             Self::Breakaway => "breakaway from the launcher's job",
             Self::Wmi => "WMI Win32_Process.Create",
+            Self::LaunchdJob => "launchd job",
         })
     }
 }
@@ -508,28 +517,113 @@ fn request_retire(endpoint: &Endpoint, options: &StartOptions, pid: u32) -> Resu
 
 /// The server connection for `hello`, started when none answers (the [`connect_or_start`] without its build check).
 fn start(endpoint: &Endpoint, hello: &Hello, options: &StartOptions) -> Result<Connected, StartError> {
+    start_with(endpoint, hello, options, &Native)
+}
+
+/// What starts a server for [`start_with`]: [`Native`], or a test's.
+trait Starter {
+    /// Whether a server starts as a launchd job here ([`job::supported`]).
+    fn launchd_supported(&self) -> bool;
+    fn bootstrap(&self, job: &job::Job, directory: &Path, deadline: Instant) -> job::Outcome;
+    fn spawn(&self, executable: &Path, directory: &Path) -> io::Result<Spawned>;
+}
+
+/// This system's start.
+struct Native;
+
+impl Starter for Native {
+    fn launchd_supported(&self) -> bool {
+        job::supported()
+    }
+
+    fn bootstrap(&self, job: &job::Job, directory: &Path, deadline: Instant) -> job::Outcome {
+        job.bootstrap(directory, deadline)
+    }
+
+    fn spawn(&self, executable: &Path, directory: &Path) -> io::Result<Spawned> {
+        spawn_server(executable, directory)
+    }
+}
+
+/// How one [`start_with`] call started servers.
+#[derive(Default)]
+struct Starts {
+    spawned: Vec<Started>,
+    child: Option<Spawned>,
+    /// The label of the job this call loaded, or may have loaded.
+    job: Option<String>,
+    job_tried: bool,
+}
+
+impl Starts {
+    /// Starts a server for a namespace nobody serves, unless one this call started may still come: a job first where
+    /// one is supported, then the spawn when that job failed to load.
+    fn start(
+        &mut self,
+        endpoint: &Endpoint,
+        options: &StartOptions,
+        starter: &dyn Starter,
+        deadline: Instant,
+    ) -> Result<(), StartError> {
+        if self.job.is_some() || !needs_start(endpoint, self.child.as_mut())? {
+            return Ok(());
+        }
+        if !self.job_tried && starter.launchd_supported() {
+            self.job_tried = true;
+            self.job = submit_job(starter, &options.executable, endpoint.directory(), deadline);
+            if self.job.is_some() {
+                return Ok(());
+            }
+        }
+        let child = starter
+            .spawn(&options.executable, endpoint.directory())
+            .map_err(|source| StartError::Spawn {
+                executable: options.executable.display().to_string(),
+                source,
+            })?;
+        self.spawned.push(Started {
+            pid: child.pid(),
+            path: child.path(),
+        });
+        self.child = Some(child);
+        Ok(())
+    }
+}
+
+/// Loads a job that starts the server of `directory`; its label when it loaded or may have loaded. `launchctl` gets
+/// [`job::LAUNCHCTL_BUDGET`], cut to the time left before `deadline`.
+fn submit_job(starter: &dyn Starter, executable: &Path, directory: &Path, deadline: Instant) -> Option<String> {
+    let job = job::Job::new(executable, directory, job::current_umask());
+    let budget = deadline.min(Instant::now() + job::LAUNCHCTL_BUDGET);
+    match starter.bootstrap(&job, directory, budget) {
+        job::Outcome::Succeeded => Some(job.label),
+        job::Outcome::Uncertain => {
+            tracing::error!(label = %job.label, "the live session server's launchd job did not load in time; waiting for it");
+            Some(job.label)
+        }
+        job::Outcome::Failed(reason) => {
+            tracing::error!(label = %job.label, %reason, "the live session server's launchd job failed; spawning the server");
+            None
+        }
+    }
+}
+
+/// [`start`] with the servers started by `starter`.
+fn start_with(
+    endpoint: &Endpoint,
+    hello: &Hello,
+    options: &StartOptions,
+    starter: &dyn Starter,
+) -> Result<Connected, StartError> {
     let deadline = Instant::now() + options.timeout;
-    let mut spawned: Vec<Started> = Vec::new();
-    let mut child: Option<Spawned> = None;
+    let mut starts = Starts::default();
     loop {
         let last = match probe(endpoint, hello, deadline) {
             Probe::Ready(stream, welcome) => {
-                return ready(endpoint, stream, *welcome, child, spawned);
+                return ready(endpoint, stream, *welcome, starts);
             }
             Probe::Absent(reason) => {
-                if needs_start(endpoint, child.as_mut())? {
-                    let started = spawn_server(&options.executable, endpoint.directory()).map_err(|source| {
-                        StartError::Spawn {
-                            executable: options.executable.display().to_string(),
-                            source,
-                        }
-                    })?;
-                    spawned.push(Started {
-                        pid: started.pid(),
-                        path: started.path(),
-                    });
-                    child = Some(started);
-                }
+                starts.start(endpoint, options, starter, deadline)?;
                 reason
             }
             Probe::Busy(reason) => reason,
@@ -583,14 +677,16 @@ pub fn connect_existing(
     }
 }
 
-/// The connection found: checks that a server this call started outlives it.
-fn ready(
-    endpoint: &Endpoint,
-    stream: Stream,
-    welcome: Welcome,
-    child: Option<Spawned>,
-    spawned: Vec<Started>,
-) -> Result<Connected, StartError> {
+/// The connection found: checks that a server this call spawned outlives it, and counts the job's server among the
+/// started ones when it is the one found.
+fn ready(endpoint: &Endpoint, stream: Stream, welcome: Welcome, starts: Starts) -> Result<Connected, StartError> {
+    let Starts {
+        mut spawned,
+        child,
+        job,
+        ..
+    } = starts;
+    spawned.extend(job_started(job.as_deref(), &welcome));
     let connected = Connected {
         stream,
         welcome,
@@ -612,6 +708,14 @@ fn ready(
         });
     }
     Ok(connected)
+}
+
+/// The server of `welcome` as started by this call, when it runs as the job this call loaded (`job`).
+fn job_started(job: Option<&str>, welcome: &Welcome) -> Option<Started> {
+    (job.is_some() && welcome.job.as_deref() == job).then_some(Started {
+        pid: welcome.pid,
+        path: SpawnPath::LaunchdJob,
+    })
 }
 
 /// Whether a server must be started: none was yet, or the last one exited after losing the namespace to another
@@ -1207,6 +1311,9 @@ fn quote_windows_arg(value: &str) -> String {
 }
 
 #[cfg(test)]
+mod start_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1435,6 +1542,7 @@ mod tests {
             pid: 1,
             error: None,
             login: None,
+            job: None,
         };
         assert_eq!(
             attempt("old".to_owned(), "new", &welcome("new"), Err("lost".to_owned())),
@@ -1464,6 +1572,7 @@ mod tests {
         assert_eq!(SpawnPath::Detached.to_string(), "detached");
         assert_eq!(SpawnPath::Breakaway.to_string(), "breakaway from the launcher's job");
         assert_eq!(SpawnPath::Wmi.to_string(), "WMI Win32_Process.Create");
+        assert_eq!(SpawnPath::LaunchdJob.to_string(), "launchd job");
     }
 
     #[test]

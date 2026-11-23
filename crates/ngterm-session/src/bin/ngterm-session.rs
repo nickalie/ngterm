@@ -1,6 +1,7 @@
 //! `ngterm-session`: ngterm's live-session server, `ngterm-session server <namespace directory>`, which the client that
 //! finds no server runs (`ngterm_session::server::spawn::connect_or_start`), detached from itself, or an update
-//! handoff's replacement, `server <namespace directory> --handoff-import <channel> <token>` (both
+//! handoff's replacement, `server <namespace directory> --handoff-import <channel> <token>`, or a launchd job's server
+//! on macOS 27 and later, `server <namespace directory> --launchd-job <label>` (all
 //! [`ngterm_session::server::command`]); and its clients' commands (`attach`, `list`, `kill`, `screen`, `type`,
 //! `print`, `version`: [`ngterm_session::cli`]), which also say what is wrong with any other `server` line.
 //!
@@ -12,6 +13,7 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 
 use ngterm_session::cli;
+use ngterm_session::server::spawn::job;
 use ngterm_session::server::{self, handoff};
 
 fn main() -> ExitCode {
@@ -25,11 +27,12 @@ fn main() -> ExitCode {
     }
 }
 
-/// Whether `rest`, what follows `server`, is a line [`server::command`] runs: the namespace directory, alone or with
-/// a handoff's import.
+/// Whether `rest`, what follows `server`, is a line [`server::command`] runs: the namespace directory, alone, with
+/// a handoff's import or with its launchd job.
 fn is_server_line(rest: &[OsString]) -> bool {
     match rest {
         [_] => true,
+        [_, flag, _] => flag == job::JOB_FLAG,
         [_, flag, _, _] => flag == handoff::IMPORT_FLAG,
         _ => false,
     }

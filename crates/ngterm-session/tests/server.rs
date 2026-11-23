@@ -3,7 +3,9 @@
 //! are no frame) is closed, the server serving on; `server` with arguments it does not take is a usage error, and a
 //! handoff's replacement whose source is not there fails. The server runs in the test process (`server::run`) on a
 //! private namespace and stops by itself once its clients left; the binary runs with the test's environment without
-//! the live ngterm's `NGTERM_*` and `AGTERM_*` variables.
+//! the live ngterm's `NGTERM_*` and `AGTERM_*` variables. A launchd job's server line refuses a label of another
+//! namespace before it takes one, and reports its job and stops whether or not the job is loaded (upstream's
+//! `SessionHostServerTests` `jobHost*` cases, #987).
 
 #[expect(
     dead_code,
@@ -12,18 +14,21 @@
 mod support;
 
 use std::ffi::OsString;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
+use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use ngterm_session::endpoint::{self, Endpoint, Stream};
 use ngterm_session::protocol::{
-    Control, ErrorCode, FramingError, HandoffRequest, Hello, PROTOCOL_VERSION, Role, read_frame, write_control,
+    Control, ErrorCode, FramingError, HandoffRequest, Hello, PROTOCOL_VERSION, RetireResult, Role, read_frame,
+    write_control,
 };
 use ngterm_session::server::handoff::IMPORT_FLAG;
 use ngterm_session::server::lifecycle::{Graces, StopReason};
-use ngterm_session::server::{self, EXIT_FAILED, EXIT_USAGE, ServerConfig};
+use ngterm_session::server::spawn::{connect_existing, job};
+use ngterm_session::server::{self, EXIT_FAILED, EXIT_STOPPED, EXIT_USAGE, ServerConfig};
 use support::{PATIENCE, TestResult, exe};
 
 const BUILD: &str = "server-test";
@@ -184,5 +189,98 @@ fn a_replacement_without_its_source_fails() -> TestResult {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.starts_with("ngterm-session server: "), "{stderr}");
     assert!(!root.path().join("live").exists(), "nothing was taken over");
+    Ok(())
+}
+
+/// A private root, short on Unix, where a socket path holds about a hundred bytes.
+fn short_root() -> TestResult<tempfile::TempDir> {
+    #[cfg(unix)]
+    let root = tempfile::Builder::new().prefix("ngjb-").tempdir_in("/tmp")?;
+    #[cfg(windows)]
+    let root = tempfile::tempdir()?;
+    Ok(root)
+}
+
+/// The binary as the server of `directory` for the launchd job `label`, with the test's environment.
+fn job_server(directory: &Path, label: &str) -> Command {
+    let mut command = Command::new(exe());
+    command
+        .arg("server")
+        .arg(directory)
+        .arg(job::JOB_FLAG)
+        .arg(label)
+        .env_clear()
+        .envs(std::env::vars_os().filter(|(name, _)| {
+            let name = name.to_string_lossy().to_ascii_uppercase();
+            !name.starts_with("NGTERM_") && !name.starts_with("AGTERM_")
+        }))
+        .stdin(Stdio::null());
+    command
+}
+
+#[test]
+fn a_job_server_refuses_a_label_not_of_its_namespace_before_taking_it() -> TestResult {
+    let root = short_root()?;
+    let directory = root.path().join("live");
+    for label in [
+        format!("{}deadbeef", job::label_prefix(&root.path().join("other"))),
+        "com.example.other.deadbeef".to_owned(),
+    ] {
+        let output = job_server(&directory, &label).output()?;
+        assert_eq!(output.status.code(), Some(i32::from(EXIT_FAILED)), "{label}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("the launchd job {label} is not the one of")),
+            "{stderr}"
+        );
+        assert!(!directory.exists(), "{label}: the namespace was taken");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_job_server_reports_its_job_and_stops_though_the_job_is_not_loaded() -> TestResult {
+    let root = short_root()?;
+    let directory = root.path().join("live");
+    let label = format!("{}deadbeef", job::label_prefix(&directory));
+    let mut child = job_server(&directory, &label)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let endpoint = Endpoint::new(&directory);
+    let deadline = Instant::now() + PATIENCE;
+    let connected = loop {
+        if let Some(connected) = connect_existing(&endpoint, &hello(Role::Control), PATIENCE)? {
+            break connected;
+        }
+        assert!(Instant::now() < deadline, "the job's server never served");
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(connected.welcome.job.as_deref(), Some(label.as_str()));
+    let mut stream = connected.stream;
+    write_control(&mut stream, &Control::RetireRequest)?;
+    let answer = read_frame(&mut stream)?.control()?;
+    assert!(
+        matches!(answer, Control::RetireResult(RetireResult(Ok(())))),
+        "{answer:?}"
+    );
+    drop(stream);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            panic!("the job's server did not stop");
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(i32::from(EXIT_STOPPED)));
+    let mut stderr = String::new();
+    child.stderr.take().unwrap().read_to_string(&mut stderr)?;
+    assert!(
+        stderr.contains(&format!("the launchd job {label} was not removed")),
+        "{stderr}"
+    );
     Ok(())
 }

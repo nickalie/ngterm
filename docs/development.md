@@ -951,6 +951,12 @@ panes keep a PTY of their own, and an instance with live sessions off starts no 
   itself, so it and its sessions keep their own privacy permissions rather than the app's; on Windows a detached
   process outside every job of the launcher's, run from a private copy of the binary in the namespace directory, so
   a new build can be staged over the running one.
+- macOS 27 and later: the client starts the server as a one-shot launchd job of the user's GUI domain
+  (`server <namespace> --launchd-job <label>`, `server::spawn::job`), which gives the server and its sessions a
+  coalition of their own. A program in a session that is switched off in Allow in the Background is then force-quit
+  alone; in the app's coalition, its force-quit closed the sessions with it (upstream's #985). The job ends with
+  the GUI login. A job that fails to load falls back to the spawn; one whose `launchctl` times out starts nothing
+  more. The server removes its job however it stops, and refuses a label of another namespace.
 - Stopped by itself: never while a session lives, and a few seconds after it holds no session and no client.
   Sessions end with their programs, or through `ngtermctl live kill` and `live reset`.
 - The app's live panes attach in process through the server's client library: the session's snapshot, then its raw

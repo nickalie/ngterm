@@ -1,0 +1,172 @@
+//! The start's choice between a launchd job and the spawn, on a fake starter in a namespace nobody serves.
+//!
+//! Upstream: `agtermCore/Tests/SessionHostRuntimeTests/ClientConnectorTests.swift` (#987).
+
+use std::cell::RefCell;
+
+use super::*;
+use crate::protocol::Role;
+
+/// A starter whose job ends in `outcome` and whose spawn is refused.
+struct Fake {
+    launchd: bool,
+    outcome: job::Outcome,
+    jobs: RefCell<Vec<(job::Job, PathBuf, Instant)>>,
+    spawns: RefCell<Vec<PathBuf>>,
+}
+
+impl Fake {
+    fn new(launchd: bool, outcome: job::Outcome) -> Self {
+        Self {
+            launchd,
+            outcome,
+            jobs: RefCell::default(),
+            spawns: RefCell::default(),
+        }
+    }
+}
+
+impl Starter for Fake {
+    fn launchd_supported(&self) -> bool {
+        self.launchd
+    }
+
+    fn bootstrap(&self, job: &job::Job, directory: &Path, deadline: Instant) -> job::Outcome {
+        self.jobs
+            .borrow_mut()
+            .push((job.clone(), directory.to_path_buf(), deadline));
+        self.outcome.clone()
+    }
+
+    fn spawn(&self, _executable: &Path, directory: &Path) -> io::Result<Spawned> {
+        self.spawns.borrow_mut().push(directory.to_path_buf());
+        Err(io::Error::other("spawn refused"))
+    }
+}
+
+/// A namespace nobody serves.
+struct Namespace {
+    _root: tempfile::TempDir,
+    endpoint: Endpoint,
+}
+
+impl Namespace {
+    fn new() -> Self {
+        // short on Unix, where a socket path holds about a hundred bytes
+        #[cfg(unix)]
+        let root = tempfile::Builder::new().prefix("ngjs-").tempdir_in("/tmp").unwrap();
+        #[cfg(windows)]
+        let root = tempfile::tempdir().unwrap();
+        let endpoint = Endpoint::new(root.path().join("live"));
+        Self { _root: root, endpoint }
+    }
+
+    fn start(&self, starter: &Fake, timeout: Duration) -> Result<Connected, StartError> {
+        let options = StartOptions {
+            timeout,
+            ..StartOptions::new("/opt/ngterm/bin/ngterm-session")
+        };
+        let hello = Hello {
+            role: Role::Control,
+            build: "start-test".to_owned(),
+            capabilities: Vec::new(),
+        };
+        start_with(&self.endpoint, &hello, &options, starter)
+    }
+}
+
+#[test]
+fn a_loaded_or_uncertain_job_is_never_started_twice() {
+    for outcome in [job::Outcome::Succeeded, job::Outcome::Uncertain] {
+        let namespace = Namespace::new();
+        let starter = Fake::new(true, outcome.clone());
+        let error = namespace.start(&starter, Duration::from_millis(300)).unwrap_err();
+        assert!(matches!(error, StartError::NotReady { .. }), "{outcome:?}: {error}");
+        assert_eq!(starter.jobs.borrow().len(), 1, "{outcome:?}");
+        assert!(starter.spawns.borrow().is_empty(), "{outcome:?}");
+    }
+}
+
+#[test]
+fn a_failed_job_falls_back_to_the_spawn() {
+    let namespace = Namespace::new();
+    let starter = Fake::new(
+        true,
+        job::Outcome::Failed("launchctl bootstrap exit status: 5".to_owned()),
+    );
+    let error = namespace.start(&starter, Duration::from_secs(10)).unwrap_err();
+    assert!(matches!(error, StartError::Spawn { .. }), "{error}");
+    assert_eq!(starter.jobs.borrow().len(), 1);
+    assert_eq!(*starter.spawns.borrow(), [namespace.endpoint.directory()]);
+}
+
+#[test]
+fn a_system_without_jobs_spawns_as_before() {
+    let namespace = Namespace::new();
+    let starter = Fake::new(false, job::Outcome::Succeeded);
+    let error = namespace.start(&starter, Duration::from_secs(10)).unwrap_err();
+    assert!(matches!(error, StartError::Spawn { .. }), "{error}");
+    assert!(starter.jobs.borrow().is_empty());
+    assert_eq!(*starter.spawns.borrow(), [namespace.endpoint.directory()]);
+}
+
+#[test]
+fn the_job_runs_this_executable_as_the_namespaces_server() {
+    let namespace = Namespace::new();
+    let starter = Fake::new(true, job::Outcome::Failed("x".to_owned()));
+    let _ = namespace.start(&starter, Duration::from_secs(10));
+    let jobs = starter.jobs.borrow();
+    let (job, directory, _) = jobs.first().unwrap();
+    let namespace_directory = namespace.endpoint.directory();
+    assert!(job::is_own(&job.label, namespace_directory), "{}", job.label);
+    assert_eq!(
+        job.arguments,
+        [
+            OsString::from("/opt/ngterm/bin/ngterm-session"),
+            OsString::from("server"),
+            namespace_directory.as_os_str().to_owned(),
+            OsString::from(job::JOB_FLAG),
+            OsString::from(&job.label),
+        ]
+    );
+    assert_eq!(directory, namespace_directory);
+}
+
+#[test]
+fn launchctl_gets_its_budget_cut_to_the_start_deadline() {
+    for (timeout, budget) in [
+        (Duration::from_secs(10), job::LAUNCHCTL_BUDGET),
+        (Duration::from_millis(300), Duration::from_millis(300)),
+    ] {
+        let namespace = Namespace::new();
+        let starter = Fake::new(true, job::Outcome::Failed("x".to_owned()));
+        let begun = Instant::now();
+        let _ = namespace.start(&starter, timeout);
+        let ended = Instant::now();
+        let deadline = starter.jobs.borrow().first().unwrap().2;
+        assert!(deadline >= begun + budget, "{timeout:?}: {:?}", deadline - begun);
+        assert!(deadline <= ended + budget, "{timeout:?}: {:?}", deadline - begun);
+    }
+}
+
+#[test]
+fn the_server_of_the_loaded_job_counts_as_started_here() {
+    let welcome = |job: Option<&str>| Welcome {
+        build: "b".to_owned(),
+        capabilities: Vec::new(),
+        pid: 42,
+        error: None,
+        login: None,
+        job: job.map(str::to_owned),
+    };
+    assert_eq!(
+        job_started(Some("a.1"), &welcome(Some("a.1"))),
+        Some(Started {
+            pid: 42,
+            path: SpawnPath::LaunchdJob
+        })
+    );
+    assert_eq!(job_started(Some("a.1"), &welcome(Some("a.2"))), None);
+    assert_eq!(job_started(Some("a.1"), &welcome(None)), None);
+    assert_eq!(job_started(None, &welcome(None)), None);
+}

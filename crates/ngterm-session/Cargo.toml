@@ -18,6 +18,8 @@ ngterm-pty.workspace = true
 # The attach client's OSC 52 answers of its outer terminal.
 base64.workspace = true
 interprocess.workspace = true
+# The definition of a server's launchd job on macOS 27 and later.
+plist.workspace = true
 postcard.workspace = true
 serde.workspace = true
 serde_json.workspace = true

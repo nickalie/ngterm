@@ -525,9 +525,11 @@ patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned t
 ### The session host (upstream v0.42.1 and v0.42.2)
 
 Upstream starts a new `agterm-session-host` for each helper build and login (#972) and, on macOS 27 and later, as a
-launchd job (#987). This build has one session server per namespace, and its update handoff already moves every
-session to a new build, so no server is left behind by an update. What remains is a server left from an earlier macOS
-login:
+launchd job (#987). This build starts its one session server per namespace as a launchd job there too, labelled
+`com.nickalie.ngterm.session-server.<namespace hash>.<nonce>`, with upstream's fallback to the spawn; an update
+handoff's replacement is spawned by the old server, a job itself, and outlives that job's removal. The update
+handoff already moves every session to a new build, so no server is left behind by an update. What remains is a
+server left from an earlier macOS login:
 
 - Its welcome carries the server's login (the audit session id of a GUI login; none outside one, an ssh login
   included); a client of another GUI login asks a server that holds no session to retire (`retire.request.v1`) and

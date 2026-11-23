@@ -60,13 +60,17 @@ pub(super) fn spawn(command: &ServerCommand) -> io::Result<(u32, SpawnPath, Proc
     Ok((pid.cast_unsigned(), SpawnPath::Detached, process))
 }
 
+/// Detached: it leads its own session, or runs in launchd's as a launchd job does ([`super::job`]), and is
+/// responsible for itself.
 pub(super) fn current_process_is_detached() -> bool {
     let pid = rustix::process::getpid();
-    let leads_its_session = rustix::process::getsid(None).is_ok_and(|session| session == pid);
+    let session = rustix::process::getsid(None).ok();
+    let leads_its_session = session == Some(pid);
+    let in_launchds_session = session.is_some_and(|session| session.as_raw_nonzero().get() == 1);
     let raw = pid.as_raw_nonzero().get();
     // without the SPI to read it, responsibility is not asked for
     let responsible_for_itself = responsible_for().is_none() || responsible_pid(raw) == Some(raw);
-    leads_its_session && responsible_for_itself
+    (leads_its_session || in_launchds_session) && responsible_for_itself
 }
 
 fn c_string(value: &OsStr) -> io::Result<CString> {
