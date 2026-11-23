@@ -776,16 +776,25 @@ test("settings.json is read from the state directory the app uses", () => {
 });
 
 test("a jq that ends its lines with CRLF, as a native one under Git Bash does, still opens and selects", () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "go-to-repo-"));
+  spawnSync("git", ["init", "-q", repo]);
+  spawnSync("git", ["-C", repo, "symbolic-ref", "HEAD", "refs/heads/topic"]);
+  const t = structuredClone(tree);
+  t.workspaces[0].sessions[1].splitCwd = repo;
   const shim = fs.mkdtempSync(path.join(os.tmpdir(), "go-to-jq-"));
   const real = spawnSync("bash", ["-c", "command -v jq"], { encoding: "utf8" }).stdout.trim();
   fs.writeFileSync(path.join(shim, "jq"), `#!/usr/bin/env bash\n"${real}" "$@" | perl -pe 's/\\n/\\r\\n/'\n`, { mode: 0o755 });
   const env = { PATH: `${shim}${path.delimiter}${process.env.PATH}` };
-  const run = runScript([], { env, settings: '{"htmlOverlayZoom": 1.25}',
+  const run = runScript([], { treeJson: t, env, settings: '{"htmlOverlayZoom": 1.25}',
                               openOut: JSON.stringify({ outcome: "submitted", value: "p:S2:right" }) });
   fs.rmSync(shim, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
   assert.equal(run.status, 0, run.stderr);
   assert.ok(!run.calls.join("\n").includes("\r"), "no CR reaches ngtermctl");
-  assert.equal(run.height, opensAt(tree, 1.25));
+  const data = run.page.split("\n").find(l => l.startsWith("const GOTO = "));
+  const GOTO = new Function(`${data}; return GOTO;`)();
+  assert.deepEqual(GOTO.branches, { [repo]: "topic" }, "the branch map is keyed by the bare directory");
+  assert.equal(run.height, opensAt(t, 1.25));
   assert.ok(run.calls.includes("session select --target S2"));
   assert.ok(run.calls.includes("session focus right --target S2"));
 });

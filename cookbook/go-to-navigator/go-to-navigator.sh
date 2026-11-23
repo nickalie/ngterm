@@ -29,6 +29,7 @@ branches=$(
   jq -r '.workspaces[].sessions[] | select(.remoteHost == null) | .cwd, .splitCwd | select(. != null)' <<<"$tree" |
     sort -u |
     while IFS= read -r dir; do
+      dir=${dir%$'\r'}
       [ -d "$dir" ] || continue
       branch=$(git -C "$dir" symbolic-ref --short -q HEAD 2>/dev/null) || continue
       jq -nc --arg d "$dir" --arg b "$branch" '{($d): $b}'
