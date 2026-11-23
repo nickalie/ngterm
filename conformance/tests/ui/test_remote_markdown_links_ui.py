@@ -2,8 +2,9 @@
 the viewer that presents its session (#931): a click on a link loads the linked file from the origin, with its pictures,
 and Back, Forward and Reload work as on a local page. A link the origin cannot serve keeps the shown file, and a page
 the origin sends with no grant keeps its links as text. The origin is a second instance of the build behind the
-harness's own sshd (`remote_origin`), and the page files are on the origin only. A link is followed by a click alone,
-so the cases are ui tests."""
+harness's own sshd (`remote_origin`). The two instances share one filesystem, so the viewer could also read the page
+files at their paths: these cases show what the viewer loads, not where it read the bytes. A link is followed by a click
+alone, so the cases are ui tests."""
 
 import uuid
 from contextlib import contextmanager
@@ -52,8 +53,8 @@ def _shown(viewer, local, name, **expected):
     return page
 
 
-def _folder(origin):
-    folder = origin.instance.root / f"remote-links-{uuid.uuid4().hex}"
+def _folder(instance):
+    folder = instance.root / f"remote-links-{uuid.uuid4().hex}"
     (folder / "sub").mkdir(parents=True)
     return folder
 
@@ -119,7 +120,8 @@ def _stays(viewer, local, name, **expected):
 
     def moved(tree):
         (page,) = find_session(tree, local)["htmlOverlays"]
-        assert not str(page.get("page", "")).endswith(name) or page["state"] != "loaded", page
+        # a refused link can be `loading` for an origin round trip before it settles back: only a change counts
+        assert not str(page.get("page", "")).endswith(name) or page["state"] == "failed" or page.get("error"), page
         return True
 
     with pytest.raises(WaitTimeout):
@@ -134,7 +136,7 @@ def _stays(viewer, local, name, **expected):
     "session.overlay.open", "session.overlay.navigate", "ui:htmlOverlay.page", "field:tree.session.htmlOverlays"
 )
 def test_a_markdown_page_shown_for_the_origin_follows_a_link_and_goes_back(remote_origin, remote_viewer, ui_for):
-    folder = _folder(Ctl(remote_origin.instance))
+    folder = _folder(remote_origin.instance)
     (folder / "sub" / "guide.md").write_text("# Guide\n", encoding="utf-8")
     readme = folder / "README.md"
     _link_page(readme, "sub/guide.md")
@@ -160,8 +162,8 @@ def test_a_markdown_page_shown_for_the_origin_follows_a_link_and_goes_back(remot
 def test_a_followed_link_shows_its_pictures_from_the_origin_and_goes_forward_and_reloads(
     remote_origin, remote_viewer, ui_for
 ):
-    folder = _folder(Ctl(remote_origin.instance))
-    # a picture elsewhere in the page's folder, which the viewer has no copy of
+    folder = _folder(remote_origin.instance)
+    # a picture elsewhere in the page's folder, outside the folder of the linked file
     _picture(folder / "pictures" / "red.png", RED)
     _picture(folder / "pictures" / "blue.png", BLUE)
     guide = folder / "sub" / "guide.md"
@@ -182,7 +184,7 @@ def test_a_followed_link_shows_its_pictures_from_the_origin_and_goes_forward_and
         assert ui.text("htmlOverlay.identity") == "guide.md"
         _shows_picture(ui, RED)
 
-        # a reload reads the file from the origin again
+        # a reload shows the changed file
         guide.write_text("![blue](../pictures/blue.png)\n", encoding="utf-8")
         assert_ok(remote_viewer.request("session.overlay.reload", local))
         _shown(remote_viewer, local, "guide.md", canGoBack=True)
@@ -194,7 +196,7 @@ def test_a_followed_link_shows_its_pictures_from_the_origin_and_goes_forward_and
 @pytest.mark.covers("session.overlay.open", "ui:htmlOverlay.page", "field:tree.session.htmlOverlays")
 @pytest.mark.parametrize("target", ["sub/missing.md", "../outside.md"], ids=["missing", "outside-the-root"])
 def test_a_link_the_origin_cannot_serve_keeps_the_shown_file(remote_origin, remote_viewer, ui_for, target):
-    folder = _folder(Ctl(remote_origin.instance))
+    folder = _folder(remote_origin.instance)
     (folder.parent / "outside.md").write_text("# Outside\n", encoding="utf-8")
     readme = folder / "README.md"
     _link_page(readme, target)
@@ -209,7 +211,7 @@ def test_a_link_the_origin_cannot_serve_keeps_the_shown_file(remote_origin, remo
 @pytest.mark.since("0.42.0")
 @pytest.mark.covers("session.overlay.open", "ui:htmlOverlay.page", "field:tree.session.htmlOverlays")
 def test_a_markdown_page_the_origin_shows_with_no_grant_keeps_its_links_as_text(remote_origin, remote_viewer, ui_for):
-    folder = _folder(Ctl(remote_origin.instance))
+    folder = _folder(remote_origin.instance)
     (folder / "sub" / "guide.md").write_text("# Guide\n", encoding="utf-8")
     readme = folder / "README.md"
     _link_page(readme, "sub/guide.md")
