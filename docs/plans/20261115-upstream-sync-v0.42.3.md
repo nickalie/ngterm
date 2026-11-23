@@ -612,15 +612,15 @@ or a recorded deviation where no host here can produce them.
 `liveHostStale`, and the two fields stay exempted in `catalog.yaml` unless the macOS work gives the suite a way to
 reach them.
 
-- [ ] One device-attributes answer during attach: no stray `62;22c` at a new pane's prompt (a PTY test in
+- [x] One device-attributes answer during attach: no stray `62;22c` at a new pane's prompt (a PTY test in
   `ngterm-session`). Check what `0005-detached-create` changes for a detached create and port what applies.
-- [ ] macOS: a session server left from an earlier login session is detected; `liveHostStale`/`splitLiveHostStale`
+- [x] macOS: a session server left from an earlier login session is detected; `liveHostStale`/`splitLiveHostStale`
   report its panes; the Live sessions reset selects them as `staleHost` (marker version 3; an older build discards
   such a marker), and each launch asks an earlier server to stop once it holds no session.
-- [ ] macOS 27 and later: the session server starts as its own launchd job, so a force-quit of a background-disabled
+- [x] macOS 27 and later: the session server starts as its own launchd job, so a force-quit of a background-disabled
   program reaches only that program; a failed job falls back to the spawn. Checked on the Mac.
-- [ ] Linux and Windows: record in rust-build.md why the two fields stay omitted there.
-- [ ] Rust unit tests with the Swift cases that apply.
+- [x] Linux and Windows: record in rust-build.md why the two fields stay omitted there.
+- [x] Rust unit tests with the Swift cases that apply.
 
 ### Task 26: Session-bound picks and timeouts (#949)
 
