@@ -281,7 +281,7 @@ impl Core {
             seq,
             session,
             owner,
-            deadline: (self.remote.clock)() + PresentationPageResult::DEADLINE,
+            deadline: self.remote_now() + PresentationPageResult::DEADLINE,
         };
         let command = action.command(wait.job.clone(), seq);
         if !self
@@ -310,7 +310,7 @@ impl Core {
         }
         let failure = if !self.text_wait_held(wait) {
             VIEWER_GONE
-        } else if (self.remote.clock)() >= wait.deadline {
+        } else if self.remote_now() >= wait.deadline {
             PRESENTER_SILENT
         } else {
             return RemoteTextPoll::Pending;

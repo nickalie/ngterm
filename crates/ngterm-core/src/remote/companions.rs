@@ -386,7 +386,7 @@ fn handed_page(result: &RemoteCommandResult, host: &str) -> Result<PresentationP
 }
 
 impl Core {
-    /// The clock the remote companion waits are timed by (tests advance it).
+    /// The clock the remote waits are timed by, companions' and text actions' among them (tests advance it).
     pub(super) fn remote_now(&self) -> Instant {
         (self.remote.clock)()
     }

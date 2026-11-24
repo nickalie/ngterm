@@ -194,7 +194,7 @@ pub(crate) struct PresentationRuntime {
     pub(crate) page_serve: page_serve::PageServeRuntime,
     /// The origin's respawn counts and the waits for a respawned daemon's new leader.
     pub(crate) respawns: respawn::OriginRespawns,
-    /// The clock a remote companion's wait for its session to become attachable is timed by (tests advance it).
+    /// The clock the remote waits are timed by, companions' and text actions' among them (tests advance it).
     pub(crate) clock: Box<dyn Fn() -> Instant>,
     /// The text actions waiting for their presenter's result.
     pub(crate) text_waits: remote_text::TextWaits,
