@@ -76,8 +76,8 @@ impl TextPageAction {
         )
     }
 
-    /// The page command carrying this action; a query is cut to [`text_page::MAX_QUERY`], which keeps the frame
-    /// inside its cap.
+    /// The page command carrying this action; a query is cut by [`text_page::cut_query`], whose byte budget keeps
+    /// the frame inside its cap.
     pub(crate) fn command(&self, page: String, seq: i64) -> PresentationPageCommand {
         let toggle = |mode: ToggleMode| match mode {
             ToggleMode::On => PresentationToggle::On,
@@ -357,6 +357,7 @@ impl super::PresentationRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote::frames::{MAX_FRAME_BYTES, fits};
 
     /// Upstream's `TextPageAction` round trip: every action reads back from the command it travels in, a query cut to
     /// its limit, and a command missing its field or mixing two is no action.
@@ -381,6 +382,12 @@ mod tests {
         let long = "x".repeat(text_page::MAX_QUERY + 1);
         let command = TextPageAction::Search(SearchRequest::Query(long)).command("p".to_owned(), 1);
         assert_eq!(command.query.map(|query| query.len()), Some(text_page::MAX_QUERY));
+        let marks = |count: usize| format!("\"{}", "\u{301}".repeat(count));
+        let combining = marks((text_page::MAX_QUERY_BYTES - 1) / 2) + &marks(MAX_FRAME_BYTES);
+        for query in [combining, "\u{1}".repeat(text_page::MAX_QUERY_BYTES)] {
+            let command = TextPageAction::Search(SearchRequest::Query(query)).command("p".to_owned(), 1);
+            assert!(fits(Body::PageCommand(command)));
+        }
         let mut mixed = TextPageAction::Search(SearchRequest::Next).command("p".to_owned(), 1);
         mixed.query = Some("a".to_owned());
         assert_eq!(TextPageAction::of(&mixed), None);

@@ -449,3 +449,12 @@ fn a_query_is_cut_by_grapheme_clusters() {
     assert_eq!(cut_query(&query), format!("{}e\u{301}", "a".repeat(MAX_QUERY - 1)));
     assert_eq!(cut_query("short"), "short");
 }
+
+/// One grapheme cluster has no length limit, so the cut also stops on the cluster that would pass the byte budget.
+#[test]
+fn a_query_is_cut_before_the_cluster_that_passes_the_byte_budget() {
+    let long_cluster = format!("e{}", "\u{301}".repeat(MAX_QUERY_BYTES));
+    assert_eq!(cut_query(&format!("ab{long_cluster}c")), "ab");
+    let wide = "\u{1F600}".repeat(MAX_QUERY);
+    assert_eq!(cut_query(&wide).len(), MAX_QUERY_BYTES);
+}

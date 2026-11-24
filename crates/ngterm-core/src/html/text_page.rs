@@ -24,14 +24,25 @@ pub const DEFAULT_TAIL: usize = 5_000;
 pub const MAX_TAIL: usize = 100_000;
 /// The most a log page reads from its file's end, so one huge line cannot pull in the file.
 pub const MAX_TAIL_BYTES: usize = 2 << 20;
-/// The longest search query in characters (upstream's `TextSearch.maxQuery`): a longer one is cut where it is set, so
-/// the page searches what the model stores and a page command carrying it stays inside a frame.
+/// The longest search query in grapheme clusters (upstream's `TextSearch.maxQuery`): a longer one is cut where it is
+/// set, so the page searches what the model stores.
 pub const MAX_QUERY: usize = 16_384;
+/// The most UTF-8 bytes a cut query keeps, as one grapheme cluster has no length limit: with it a page command
+/// carrying the query stays inside a frame.
+pub const MAX_QUERY_BYTES: usize = MAX_QUERY * 4;
 
-/// `query` cut to [`MAX_QUERY`] grapheme clusters, as Swift's `String.prefix` counts them.
+/// `query` cut to [`MAX_QUERY`] grapheme clusters, as Swift's `String.prefix` counts them, and before the cluster that
+/// would take it over [`MAX_QUERY_BYTES`].
 #[must_use]
 pub fn cut_query(query: &str) -> String {
-    query.graphemes(true).take(MAX_QUERY).collect()
+    let mut end = 0;
+    for cluster in query.graphemes(true).take(MAX_QUERY) {
+        if end + cluster.len() > MAX_QUERY_BYTES {
+            break;
+        }
+        end += cluster.len();
+    }
+    query[..end].to_owned()
 }
 
 /// Lowercased extensions a plain click opens as a log page, following its end.
