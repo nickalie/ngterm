@@ -3,10 +3,10 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use ngterm_mobile::{CellPoint, PaneColorScheme};
+use ngterm_mobile::{CellPoint, PaneColorScheme, PaneRole};
 
 use crate::machine::World;
-use crate::phone::{Client, block_on, enter, poll, screen_text};
+use crate::phone::{Client, GRID, MACHINE_ID, block_on, enter, poll, screen_text};
 
 /// The color scheme report of a dark (`1`) or light (`2`) appearance, as the screen shows it with its ESC dropped.
 const DARK_REPORT: &str = "[?997;1n";
@@ -54,6 +54,71 @@ pub(crate) fn typing_clears_the_origins_badge(world: &World, client: &mut Client
     assert!(pane.key(enter()).expect("press enter"));
     poll("the badge cleared by the phone's key", || {
         (unseen(world, session) == 0).then_some(())
+    });
+}
+
+/// A key the phone types into the session's split pane clears the badge too: the origin splits the session, the
+/// phone shows the split's other pane, and Enter there clears what a notification raised.
+pub(crate) fn typing_in_the_split_pane_clears_the_origins_badge(world: &World, client: &mut Client, session: &str) {
+    let main = client.pane.clone().expect("the main pane's id");
+    world
+        .headless
+        .ctl(&["session", "split", "on", "--target", session])
+        .expect("split the session");
+    client.wait("the split's layout", |seen| {
+        seen.layout
+            .as_ref()
+            .is_some_and(|layout| layout.panes.len() == 2 && layout.shown)
+    });
+    let layout = client.seen.layout.clone().expect("a layout");
+    let split = layout
+        .panes
+        .iter()
+        .find(|pane| **pane != main)
+        .cloned()
+        .unwrap_or_else(|| panic!("no split pane in {layout:?}"));
+    client.drain();
+    let roles = client.seen.roles.len();
+    // a pane shows from the machine's last listing, which the split came after: the app lists again on the tree's
+    // change, as this does
+    let shown = poll("the split pane shown", || {
+        client.list();
+        block_on(
+            client
+                .core
+                .show_pane(MACHINE_ID.to_owned(), session.to_owned(), split.clone(), GRID),
+        )
+        .ok()
+    });
+    client.wait("the split pane's role", |seen| {
+        seen.roles[roles..].iter().any(Option::is_some)
+    });
+    if client.seen.role != Some(PaneRole::Leader) {
+        client.take_lead(session, &split);
+    }
+
+    world
+        .headless
+        .ctl(&["notify", "e2e split badge", "--target", session])
+        .expect("notify the session");
+    poll("the origin's unseen badge", || {
+        (unseen(world, session) > 0).then_some(())
+    });
+    assert!(shown.key(enter()).expect("press enter in the split pane"));
+    poll("the badge cleared by the phone's key in the split pane", || {
+        (unseen(world, session) == 0).then_some(())
+    });
+
+    client
+        .core
+        .hide_pane(MACHINE_ID.to_owned(), session.to_owned(), split)
+        .expect("hide the split pane");
+    world
+        .headless
+        .ctl(&["session", "split", "off", "--target", session])
+        .expect("hide the split");
+    client.wait("the split hidden", |seen| {
+        seen.layout.as_ref().is_some_and(|layout| !layout.shown)
     });
 }
 
