@@ -41,8 +41,10 @@ internal final class SessionsTests: XCTestCase {
         let row = app.descendants(matching: .any)["session-api"].firstMatch
         if !row.exists {
             app.navigationBars.buttons.element(boundBy: 0).tap()
+            FakeApp.expectGone(app.buttons["session-menu"], "the session's menu button")
         }
         FakeApp.expect(row, "the new session's row")
+        FakeApp.settle(newSession)
         try FakeApp.audit(app)
 
         row.swipeLeft()

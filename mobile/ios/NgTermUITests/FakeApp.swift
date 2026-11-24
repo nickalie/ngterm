@@ -218,6 +218,26 @@ internal enum FakeApp {
         }
     }
 
+    /// Waits until `button` has kept still for some reads running, before an audit measures it.
+    ///
+    /// When a phone goes back, the navigation bar's Liquid Glass turns the leaving screen's button into the coming
+    /// screen's, and the app's switch for no animations does not stop that: an audit during the change measured the
+    /// button too small to touch, and the button it named had gone when the test looked for it.
+    @MainActor
+    internal static func settle(_ button: XCUIElement) {
+        var before = CGRect.null
+        var quiet = 0
+        for _ in 0..<settleReads {
+            _ = XCTWaiter.wait(for: [XCTestExpectation(description: "a beat")], timeout: settleBeat)
+            let now = button.frame
+            quiet = now == before ? quiet + 1 : 0
+            if quiet >= settleQuietReads {
+                return
+            }
+            before = now
+        }
+    }
+
     // reads the rows' frames and the text's a beat apart until they agree for `settleQuietReads` reads running with
     // every text inside a row; false when they don't come to that
     @MainActor

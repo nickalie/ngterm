@@ -145,6 +145,7 @@ internal final class SessionViewTests: XCTestCase {
         FakeApp.expect(row, "the attached session under its machine")
         if !Self.isPad {
             XCTAssertFalse(app.descendants(matching: .any)["session-title"].firstMatch.exists, "the session left")
+            FakeApp.settle(add)
             try FakeApp.audit(app)
         }
         row.tap()
