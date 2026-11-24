@@ -10,21 +10,11 @@ import subprocess
 import termios
 import threading
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from types import TracebackType
-from typing import Protocol, Self
+from typing import Self
 
 from agterm_conformance import llvm_profiles
-
-STOP_TIMEOUT = 5.0
-_KEPT_OUTPUT = 65536
-
-
-class LiveInstance(Protocol):
-    """What a leading client reads of the instance whose session it attaches."""
-
-    live_dir: str
-    home: Path
+from agterm_conformance.live_client import KEPT_OUTPUT, STOP_TIMEOUT
 
 
 class PtyProcess:
@@ -58,7 +48,7 @@ class PtyProcess:
                 return
             with self._lock:
                 self._output += chunk
-                del self._output[:-_KEPT_OUTPUT]
+                del self._output[:-KEPT_OUTPUT]
 
     def output(self) -> str:
         with self._lock:

@@ -1,8 +1,10 @@
+import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from agterm_conformance.live_client import GONE_GUARD, leading_client
+from agterm_conformance.live_client import GONE_GUARD, WINDOWS_GONE_GUARD, PipedProcess, leading_client
 from agterm_conformance.wait import wait_until
 from agterm_conformance.pty_process import PtyProcess
 
@@ -14,7 +16,7 @@ def _script(tmp_path: Path, body: str) -> Path:
     return path
 
 
-def _printed(process: PtyProcess, text: str) -> None:
+def _printed(process: PtyProcess | PipedProcess, text: str) -> None:
     wait_until(lambda: text in process.output() or process.process.poll() is not None, timeout=5)
     assert text in process.output(), process.output()
 
@@ -52,3 +54,32 @@ def test_leading_client_refuses_another_instances_namespace(instance: SimpleName
 def test_leading_client_refuses_a_relative_executable(instance: SimpleNamespace) -> None:
     with pytest.raises(ValueError, match="not absolute"):
         leading_client(instance, {"executable": "ngterm-session", "socketDirectory": instance.live_dir}, "ngterm-abc")
+
+
+def test_piped_process_echoes_its_input_and_exits_on_its_own_when_stopped() -> None:
+    process = PipedProcess(["cat"], {"PATH": os.environ["PATH"]})
+    assert process.process.stdin is not None
+    process.process.stdin.write(b"hello pipe\n")
+    process.process.stdin.flush()
+    _printed(process, "hello pipe")
+    process.stop()
+    assert process.process.returncode == 0
+
+
+def test_leading_client_on_windows_attaches_on_pipes_without_the_instances_app_variables(
+    tmp_path: Path, instance: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _script(
+        tmp_path,
+        'printf "%s|" "$@"; echo\n'
+        'echo "env [${NGTERM_SOCKET-unset}] [$KEPT] $NGTERM_LIVE_DIR $NGTERM_LIVE_MANAGED_CLAIM"\n'
+        "exec cat\n",
+    )
+    instance.env = {"NGTERM_SOCKET": "/tmp/the-apps-socket", "KEPT": "kept", "PATH": "/nowhere"}
+    endpoint = {"executable": str(fake), "socketDirectory": instance.live_dir}
+    monkeypatch.setattr(sys, "platform", "win32")
+    with leading_client(instance, endpoint, "ngterm-abc") as client:
+        assert isinstance(client, PipedProcess)
+        _printed(client, "attach|ngterm-abc|" + "|".join(WINDOWS_GONE_GUARD) + "|")
+        _printed(client, f"env [unset] [kept] {instance.live_dir} 1")
+    assert client.process.returncode == 0

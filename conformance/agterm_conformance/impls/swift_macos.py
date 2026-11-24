@@ -34,7 +34,8 @@ from agterm_conformance.vocabulary import GROUP, Vocabulary, fnv1a64, foundation
 from agterm_conformance.wait import WaitTimeout, wait_until
 
 if TYPE_CHECKING:
-    from agterm_conformance.pty_process import LiveInstance, PtyProcess
+    from agterm_conformance.live_client import LiveInstance
+    from agterm_conformance.pty_process import PtyProcess
 
 PARITY_LEVEL = "0.42.3"
 BASE_CAPABILITIES = frozenset(

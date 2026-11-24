@@ -29,8 +29,9 @@ if TYPE_CHECKING:
 GONE_GUARD = "printf '%s\\n' 'ngterm: remote session is gone'; exit 1"
 # The same guard in Windows' own command interpreter, which every Windows has.
 WINDOWS_GONE_GUARD = ("cmd.exe", "/d", "/c", "echo ngterm: remote session is gone& exit /b 1")
+# Shared with `pty_process`, which loads on POSIX only.
 STOP_TIMEOUT = 5.0
-_KEPT_OUTPUT = 65536
+KEPT_OUTPUT = 65536
 
 
 class LiveInstance(Protocol):
@@ -59,7 +60,7 @@ class PipedProcess:
         while chunk := self.process.stdout.read1(4096):
             with self._lock:
                 self._output += chunk
-                del self._output[:-_KEPT_OUTPUT]
+                del self._output[:-KEPT_OUTPUT]
 
     def output(self) -> str:
         with self._lock:

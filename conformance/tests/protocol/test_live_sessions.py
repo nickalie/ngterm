@@ -1997,11 +1997,13 @@ def test_a_page_helper_that_stops_reading_loses_its_channel(live, adapter, tmp_p
             huge = page.parent / "huge.bin"
             huge.write_bytes(bytes(range(256)) * (16 * 1024))
             helper.send({"kind": "resource", "id": 1, "path": str(huge)})
+            # the origin started to serve the file; the helper reads nothing more of it
+            assert helper.read()["kind"] == "head"
             closed = wait_frame(presenter.read, "page.close", presenter.send, timeout=30)
             assert closed["page"] == {"page": page_id}
             kinds = _until_ended(helper)
             # Windows' pipe disconnect discards what the helper left unread; a socket's close keeps it readable.
-            assert (WINDOWS or kinds) and set(kinds) <= {"head", "chunk"}, kinds
+            assert set(kinds) <= {"chunk"}, kinds
         if adapter.has("pages-survive"):
             parked = [{"pageID": page_id, "parked": True}]
             live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == parked)
