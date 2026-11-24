@@ -1006,7 +1006,10 @@ structural command sent with `--op-id` runs once and answers a receipt that `ngt
 catalog's id (`catalog-id`) and the receipts (`catalog-operations.json`) live in the state dir; a start refuses a
 `catalog-id` that is not a UUID rather than give its viewers another catalog. Upstream keeps the receipts in the
 window snapshot, so one write lands both; here a receipt is written only after the windows it vouches for, and a
-failed window write keeps it unsaved, as a failed receipt write does.
+failed window write keeps it unsaved, as a failed receipt write does. Upstream answers a repeat or a `catalog.op` of
+an id whose command still runs with the in-flight `applied` marker; here the id has no receipt until its command
+answers, so both get "operation ID is still running" instead. A command that is dropped before it answers (a
+panicked handler, a step that was never resumed) leaves its id `unknown`.
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)

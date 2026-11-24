@@ -18,7 +18,7 @@ pub mod operations;
 pub(crate) mod receipts;
 pub mod root;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -88,7 +88,7 @@ pub(crate) struct Served {
     /// The last write of the table failed: no entry is handed out as a receipt until one lands.
     pub(crate) unsaved: bool,
     /// The ids of the commands that run now: kept out of [`Self::table`], so no write vouches for one before it lands.
-    pub(crate) running: BTreeSet<String>,
+    pub(crate) running: receipts::RunningOperations,
 }
 
 /// The catalog's runtime; [`Self::served`] is `None` on an app with windows.
@@ -201,7 +201,7 @@ impl Core {
             table,
             table_path,
             unsaved: false,
-            running: BTreeSet::new(),
+            running: receipts::RunningOperations::default(),
         });
         self.refresh_catalog();
     }

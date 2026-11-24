@@ -2,6 +2,9 @@
 //! an `opID` runs at most once, its outcome kept in the operation table and answered to every repeat, and `catalog.op`
 //! reads that table, fencing an id it does not hold.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, PoisonError};
+
 use ngterm_proto::command::{SessionCmd, WorkspaceCmd};
 use ngterm_proto::{CatalogReceipt, Command, Request, Response};
 use serde_json::Value;
@@ -39,6 +42,12 @@ fn unsaved(op_id: &str) -> Response {
     ))
 }
 
+fn still_running(op_id: &str) -> Response {
+    Response::failure(format!(
+        "operation {op_id} is still running; ask catalog.op again once it ends"
+    ))
+}
+
 fn receipt_result(receipt: &CatalogReceipt) -> Value {
     serde_json::json!({ "receipt": receipt })
 }
@@ -66,10 +75,55 @@ fn with_receipt(mut response: Response, receipt: &CatalogReceipt) -> Response {
     response
 }
 
-/// Where an operation that runs now leaves the catalog's revisions.
+/// Where an operation's command is: running, or dropped before it answered (a panic, a step that was never resumed).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Run {
+    Active,
+    Abandoned,
+}
+
+/// The served operations whose commands have not answered yet, shared with each one's [`Running`] guard.
+#[derive(Clone, Default)]
+pub(crate) struct RunningOperations(Arc<Mutex<BTreeMap<String, Run>>>);
+
+impl RunningOperations {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Run>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn start(&self, op_id: &str, before: i64) -> Running {
+        self.lock().insert(op_id.to_owned(), Run::Active);
+        Running {
+            op_id: op_id.to_owned(),
+            before,
+            operations: Arc::clone(&self.0),
+        }
+    }
+
+    fn state(&self, op_id: &str) -> Option<Run> {
+        self.lock().get(op_id).copied()
+    }
+
+    fn finish(&self, op_id: &str) {
+        self.lock().remove(op_id);
+    }
+}
+
+/// Where an operation that runs now leaves the catalog's revisions; dropped before it settles, it marks the operation
+/// abandoned, so its id never answers as running again.
 struct Running {
     op_id: String,
     before: i64,
+    operations: Arc<Mutex<BTreeMap<String, Run>>>,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let mut operations = self.operations.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(run) = operations.get_mut(&self.op_id) {
+            *run = Run::Abandoned;
+        }
+    }
 }
 
 impl Core {
@@ -116,6 +170,24 @@ impl Core {
         served.save()
     }
 
+    /// Whether the id's command runs now. An abandoned one is recorded `unknown` here, since its command may have
+    /// changed the model before it stopped, and is then answered from the table.
+    fn operation_running(&mut self, op_id: &str) -> bool {
+        let Some(served) = self.catalog.served.as_ref() else {
+            return false;
+        };
+        match served.running.state(op_id) {
+            Some(Run::Active) => true,
+            Some(Run::Abandoned) => {
+                served.running.finish(op_id);
+                let unknown = operations::receipt(op_id, served.hub.epoch(), outcome::UNKNOWN);
+                self.save_receipt(unknown);
+                false
+            }
+            None => false,
+        }
+    }
+
     /// Whether the disk holds what memory does, retrying a write that failed: an entry only memory holds is never
     /// handed out as a receipt, since a restart would lose it. A running id has no entry until its command lands.
     fn operations_durable(&mut self) -> bool {
@@ -160,7 +232,7 @@ impl Core {
     }
 
     /// A command sent with `op_id` on a served catalog: answered from the table when the id is there, refused for
-    /// another epoch or a changed target, and otherwise run once; while it runs, its id answers as not yet saved.
+    /// another epoch or a changed target, and otherwise run once; while it runs, its id answers as still running.
     pub(crate) fn begin_operation(&mut self, request: &Request, op_id: &str) -> Dispatched {
         if !RECEIPT_COMMANDS.contains(&request.cmd) {
             return Dispatched::Done(Response::failure(format!("{} takes no operation id", request.cmd)));
@@ -168,12 +240,12 @@ impl Core {
         if !CatalogReceipt::is_valid_op_id(op_id) {
             return Dispatched::Done(Response::failure("invalid operation id"));
         }
+        if self.operation_running(op_id) {
+            return Dispatched::Done(still_running(op_id));
+        }
         let Some(served) = self.catalog.served.as_ref() else {
             return Dispatched::Done(Response::failure(crate::dispatch::OPERATION_RECEIPTS_ERROR));
         };
-        if served.running.contains(op_id) {
-            return Dispatched::Done(unsaved(op_id));
-        }
         if let Some(recorded) = served.table.receipt(op_id).cloned() {
             return Dispatched::Done(if self.operations_durable() {
                 reply(&recorded)
@@ -200,13 +272,8 @@ impl Core {
         }
         self.refresh_catalog();
         let before = self.catalog_position().map_or(0, |position| position.rev);
-        if let Some(served) = self.catalog.served.as_mut() {
-            served.running.insert(op_id.to_owned());
-        }
-        let running = Running {
-            op_id: op_id.to_owned(),
-            before,
-        };
+        let operations = self.catalog.served.as_ref().map(|served| served.running.clone());
+        let running = operations.unwrap_or_default().start(op_id, before);
         let dispatched = self.begin_plain(request);
         finish_operation(self, running, dispatched)
     }
@@ -214,12 +281,12 @@ impl Core {
     /// `catalog.op`: the table's receipt of `op_id`, or a fence recorded for it, `unknown` when a drop may have taken
     /// its entry since `sent`.
     pub(crate) fn catalog_operation(&mut self, op_id: &str, sent: Option<&CatalogPosition>) -> Response {
+        if self.operation_running(op_id) {
+            return still_running(op_id);
+        }
         let Some(served) = self.catalog.served.as_ref() else {
             return Response::failure(crate::dispatch::OPERATION_RECEIPTS_ERROR);
         };
-        if served.running.contains(op_id) {
-            return unsaved(op_id);
-        }
         if let Some(recorded) = served.table.receipt(op_id).cloned() {
             if !self.operations_durable() {
                 return unsaved(op_id);
@@ -255,8 +322,8 @@ fn finish_operation(core: &mut Core, running: Running, dispatched: Dispatched) -
 
 /// The receipt of a finished command: refused with its error, applied at the revision its changes reached, or noop.
 fn settle_operation(core: &mut Core, running: &Running, response: Response) -> Response {
-    if let Some(served) = core.catalog.served.as_mut() {
-        served.running.remove(&running.op_id);
+    if let Some(served) = core.catalog.served.as_ref() {
+        served.running.finish(&running.op_id);
     }
     core.refresh_catalog();
     let Some(position) = core.catalog_position() else {

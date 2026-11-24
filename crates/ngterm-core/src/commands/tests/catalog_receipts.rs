@@ -534,7 +534,7 @@ fn a_receipt_that_cannot_be_saved_is_not_handed_out() {
 }
 
 /// A stop while a served command waits on its terminals leaves no `applied` entry behind, even when another request
-/// writes the table meanwhile: the id answers as not yet saved, and the restart fences it rather than vouch for a swap
+/// writes the table meanwhile: the id answers as still running, and the restart fences it rather than vouch for a swap
 /// that never ran.
 #[test]
 fn a_stop_while_an_operation_waits_leaves_no_applied_receipt() {
@@ -554,9 +554,9 @@ fn a_stop_while_an_operation_waits_leaves_no_applied_receipt() {
     let dispatched = f.core.begin(&swap);
     assert!(matches!(dispatched, Dispatched::Pending { .. }));
     let _ = f.core.commit();
-    let not_saved = Response::failure("the receipt for operation waiting could not be saved; ask catalog.op for it");
-    assert_eq!(lookup(&mut f, "waiting", None), not_saved);
-    assert_eq!(f.core.dispatch(&swap), not_saved);
+    let running = Response::failure("operation waiting is still running; ask catalog.op again once it ends");
+    assert_eq!(lookup(&mut f, "waiting", None), running);
+    assert_eq!(f.core.dispatch(&swap), running);
     let other = lookup(&mut f, "other", None);
     assert_eq!(receipt_of(&other).map(|r| r.outcome), Some(outcome::FENCED.to_owned()));
     assert!(on_disk(dir.path()).receipt("waiting").is_none());
@@ -567,6 +567,48 @@ fn a_stop_while_an_operation_waits_leaves_no_applied_receipt() {
     restarted.core.serve_catalog(CATALOG, Some(dir.path()));
     let answer = lookup(&mut restarted, "waiting", None);
     assert_eq!(receipt_of(&answer).map(|r| r.outcome), Some(outcome::FENCED.to_owned()));
+}
+
+/// A command dropped before it answers (a panicked handler, a step never resumed) leaves its id `unknown`, not
+/// running: the repeat and the lookup both answer, and neither runs it again.
+#[test]
+fn a_dropped_operation_answers_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut f = Fixture::new(0);
+    f.core.serve_catalog(CATALOG, Some(dir.path()));
+    let (session, _, _) = split_session(&mut f);
+    let epoch = epoch(&f);
+    let swap = Request {
+        cmd: Command::Session(SessionCmd::Swap),
+        target: Some(wire(session)),
+        args: Some(args(|a| {
+            a.op_id = Some("dropped".to_owned());
+            a.epoch = Some(epoch);
+        })),
+    };
+    let dispatched = f.core.begin(&swap);
+    assert!(matches!(dispatched, Dispatched::Pending { .. }));
+    drop(dispatched);
+    let _ = f.core.commit();
+
+    let repeat = f.core.dispatch(&swap);
+    assert_eq!(
+        repeat.error.as_deref(),
+        Some("operation dropped has an unknown outcome and will not run")
+    );
+    assert_eq!(
+        receipt_of(&repeat).map(|r| r.outcome),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+    let answer = lookup(&mut f, "dropped", None);
+    assert_eq!(
+        receipt_of(&answer).map(|r| r.outcome),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+    assert_eq!(
+        on_disk(dir.path()).receipt("dropped").map(|r| r.outcome.clone()),
+        Some(outcome::UNKNOWN.to_owned())
+    );
 }
 
 /// A core over a library bootstrapped from `dir` that serves its catalog there too, as `ngterm-headless` does; the
