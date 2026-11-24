@@ -935,6 +935,38 @@ fn unsaved_receipt_then_dropped(dir: &Path) -> (Core, PathBuf) {
     (core, file)
 }
 
+/// A blocked window write leaves `ws` unsaved; the block clears and no operation is dropped.
+fn unsaved_receipt(dir: &Path) -> (Core, PathBuf) {
+    let (mut core, file) = persistent_served(dir);
+    block_window(&file);
+    let epoch = core.remote.respawns.epoch().to_owned();
+    let reply = core.dispatch(&Request {
+        cmd: Command::Workspace(WorkspaceCmd::New),
+        target: None,
+        args: Some(args(|a| {
+            a.name = Some("dev".to_owned());
+            a.op_id = Some("ws".to_owned());
+            a.epoch = Some(epoch);
+        })),
+    });
+    assert!(!reply.ok, "{reply:?}");
+    std::fs::remove_dir_all(&file).unwrap();
+    (core, file)
+}
+
+/// A table that waited for its windows reaches the disk with the next window write, also when no operation dropped.
+#[test]
+fn a_commit_after_a_failed_window_write_saves_the_waiting_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, file) = unsaved_receipt(dir.path());
+    let _ = core.commit();
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
+    assert_eq!(
+        on_disk(dir.path()).receipt("ws").map(|r| r.outcome.clone()),
+        Some(outcome::APPLIED.to_owned())
+    );
+}
+
 /// Once the windows can be written again, a dropped command's `unknown` and the receipt that waited reach the disk
 /// with the next window write, not only with a later lookup.
 #[test]
@@ -959,20 +991,7 @@ fn a_commit_after_a_failed_window_write_saves_the_waiting_receipts() {
 #[test]
 fn the_quit_save_writes_a_table_that_waited_for_its_windows() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut core, file) = persistent_served(dir.path());
-    block_window(&file);
-    let epoch = core.remote.respawns.epoch().to_owned();
-    let reply = core.dispatch(&Request {
-        cmd: Command::Workspace(WorkspaceCmd::New),
-        target: None,
-        args: Some(args(|a| {
-            a.name = Some("dev".to_owned());
-            a.op_id = Some("ws".to_owned());
-            a.epoch = Some(epoch);
-        })),
-    });
-    assert!(!reply.ok, "{reply:?}");
-    std::fs::remove_dir_all(&file).unwrap();
+    let (mut core, file) = unsaved_receipt(dir.path());
     assert!(core.save_all());
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
     assert_eq!(
@@ -987,6 +1006,16 @@ fn the_quit_save_writes_a_table_that_waited_for_its_windows() {
         on_disk(dir.path()).receipt("dropped").map(|r| r.outcome.clone()),
         Some(outcome::UNKNOWN.to_owned())
     );
+}
+
+/// A table that cannot be written fails the quit save, though its windows land.
+#[test]
+fn the_quit_save_fails_when_the_waiting_table_cannot_be_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, file) = unsaved_receipt(dir.path());
+    block_window(&dir.path().join(OPERATIONS_FILE_NAME));
+    assert!(!core.save_all());
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
 }
 
 /// Upstream's `theTableIsSavedAndRestoredWithTheStore` and the restart's `adopt`: an operation applied in the last run

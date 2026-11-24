@@ -170,7 +170,7 @@ impl Core {
 
     /// Writes the open windows, then the table: upstream saves both in one store write, so an entry never reaches the
     /// disk before the model change it vouches for. Whether both landed.
-    pub(crate) fn save_operations(&mut self) -> bool {
+    fn save_operations(&mut self) -> bool {
         let windows = self
             .persistence
             .as_mut()
@@ -204,9 +204,7 @@ impl Core {
             return;
         };
         let dropped = served.running.take_unsettled(all);
-        if dropped.is_empty() {
-            return;
-        }
+        let recorded = !dropped.is_empty();
         let position = CatalogPosition::new(served.hub.epoch(), served.hub.rev());
         for op_id in dropped {
             let unknown = operations::receipt(&op_id, served.hub.epoch(), outcome::UNKNOWN);
@@ -214,9 +212,18 @@ impl Core {
         }
         if served.unsaved {
             self.save_operations();
-        } else {
+        } else if recorded {
             served.save();
         }
+    }
+
+    /// Writes a table that waits for its windows, the windows first; whether no table waits now. True without a
+    /// served catalog.
+    pub(crate) fn save_waiting_operations(&mut self) -> bool {
+        if self.catalog.served.as_ref().is_some_and(|served| served.unsaved) {
+            self.save_operations();
+        }
+        self.catalog.served.as_ref().is_none_or(|served| !served.unsaved)
     }
 
     /// Whether the id's command runs now.
@@ -230,10 +237,7 @@ impl Core {
     /// Whether the disk holds what memory does, retrying a write that failed: an entry only memory holds is never
     /// handed out as a receipt, since a restart would lose it. A running id has no entry until its command lands.
     fn operations_durable(&mut self) -> bool {
-        if self.catalog.served.as_ref().is_some_and(|served| served.unsaved) {
-            self.save_operations();
-        }
-        self.catalog.served.as_ref().is_some_and(|served| !served.unsaved)
+        self.catalog.served.is_some() && self.save_waiting_operations()
     }
 
     /// The refusal of an operation decided on what `request`'s target no longer has: a page row a command cannot

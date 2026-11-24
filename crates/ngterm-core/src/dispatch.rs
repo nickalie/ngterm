@@ -750,7 +750,8 @@ impl Core {
     }
 
     /// The quit path: makes every pending close final, then writes every open window and the index (upstream's
-    /// `applicationWillTerminate` save). Whether every write landed.
+    /// `applicationWillTerminate` save), and the catalog's operation table if it waits for its windows. Whether every
+    /// write landed.
     pub fn save_all(&mut self) -> bool {
         self.cancel_all_modals();
         self.library.finalize_all_pending_closes();
@@ -761,8 +762,7 @@ impl Core {
             .persistence
             .as_mut()
             .is_none_or(|persistence| persistence.save_all_checked(&self.library));
-        // the windows just landed, so a receipt that waited for them may go to the disk now
-        let operations = self.catalog.served.as_ref().is_none_or(|served| !served.unsaved) || self.save_operations();
+        let operations = self.save_waiting_operations();
         windows && operations
     }
 
