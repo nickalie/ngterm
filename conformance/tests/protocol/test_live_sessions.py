@@ -1783,6 +1783,106 @@ def test_a_log_page_goes_to_a_presenter_listing_page_text_which_answers_its_text
             _until_closed(helper)
 
 
+def _text_action(live, presenter, sid, command, args, expected):
+    """Runs `command` on the origin while the presenter takes its `page.command`, checks it against `expected` and
+    hands it to the caller, whose answer the origin's reply carries: `(page command, future reply)`."""
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    reply = pool.submit(live.request, command, sid, **args)
+    pool.shutdown(wait=False)
+    sent = wait_frame(presenter.read, "page.command", presenter.send)["page"]
+    assert_subset(sent, expected)
+    return sent, reply
+
+
+def _page_result(presenter, gen, rev, sent, **result):
+    presenter.send({"kind": "page.result", "gen": gen, "rev": rev,
+                    "page": {"page": sent["page"], "seq": sent["seq"], **result}})
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.since("0.42.1")
+@pytest.mark.covers(
+    "live.present",
+    "session.overlay.wrap",
+    "session.overlay.changes",
+    "session.overlay.search",
+    "session.overlay.follow",
+    streams=("live.present",),
+)
+def test_wrap_changes_and_search_on_a_presenters_log_page_answer_its_result_and_a_page_gone_meanwhile_fails(
+    live, tmp_path
+):
+    """`session.overlay.wrap`, `.changes` and `.search` aimed at a log page a `page.text` presenter shows run there in
+    seq order: the origin answers with the presenter's text or error and the tree shows the wrap and query its state
+    carries at once; a page the presenter ends while an action waits answers `the viewer showing this overlay is gone`
+    (#978)."""
+    log = tmp_path / "app.log"
+    log.write_bytes(b"one\ntwo\n")
+    state = {"following": True, "revision": 0, "wrap": False,
+             "log": {"lines": 2, "clipped": False, "waiting": False, "unreadable": False}}
+    with _page_presenter(live, TEXT_PRESENTER_KINDS) as (sid, presenter, gen):
+        page_id, _ = _handed_over(live, sid, presenter, textFile=str(log), followFile=True, tail=50)
+        seqs = []
+
+        sent, reply = _text_action(live, presenter, sid, "session.overlay.wrap", {"mode": "on"},
+                                   {"page": page_id, "action": "wrap", "toggle": "on"})
+        seqs.append(sent["seq"])
+        _page_result(presenter, gen, 2, sent, ok=True, state={**state, "wrap": True})
+        assert assert_ok(reply.result(timeout=10)) == {"id": sid}
+        [shown] = find_session(live.tree(), sid)["htmlOverlays"]
+        assert_subset(shown["text"], {"wrap": True, "following": True})
+
+        sent, reply = _text_action(live, presenter, sid, "session.overlay.search", {"text": "two"},
+                                   {"page": page_id, "action": "search", "query": "two"})
+        seqs.append(sent["seq"])
+        found = {**state, "wrap": True, "query": "two", "revision": 1, "matches": 1, "current": 1}
+        _page_result(presenter, gen, 3, sent, ok=True, text="1 of 1", state=found)
+        assert assert_ok(reply.result(timeout=10)) == {"id": sid, "text": "1 of 1"}
+        [shown] = find_session(live.tree(), sid)["htmlOverlays"]
+        assert shown["text"]["search"] == {"query": "two", "matches": 1, "current": 1}
+
+        sent, reply = _text_action(live, presenter, sid, "session.overlay.changes", {"to": "next"},
+                                   {"page": page_id, "action": "changes", "step": "next"})
+        seqs.append(sent["seq"])
+        _page_result(presenter, gen, 4, sent, ok=False, error="no changes", state=found)
+        assert_error(reply.result(timeout=10), "no changes")
+        assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), seqs
+
+        # the presenter ends the page before it answers
+        _, reply = _text_action(live, presenter, sid, "session.overlay.follow", {"mode": "off"},
+                                {"page": page_id, "action": "follow", "toggle": "off"})
+        presenter.send({"kind": "page.rejected", "gen": gen, "rev": 5, "page": {"page": page_id, "reason": "closed"}})
+        assert_error(reply.result(timeout=10), "the viewer showing this overlay is gone")
+        live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+
+
+@LIVE
+@pytest.mark.since("0.42.1")
+@pytest.mark.covers("live.present", "field:tree.session.remoteOverlays", streams=("live.present",))
+@pytest.mark.parametrize(
+    ("kinds", "text_log"),
+    [
+        pytest.param([*LINK_CLICK_PRESENTER_KINDS, "page.text"], {"tail": 5000, "follow": True}, id="page-text"),
+        pytest.param(LINK_CLICK_PRESENTER_KINDS, None, id="older"),
+    ],
+)
+def test_a_forwarded_log_click_opens_a_log_page_only_on_a_presenter_listing_page_text(live, tmp_path, kinds, text_log):
+    """A `.log` file the presenter forwards with `link.click` opens there as a log page that follows the file's end
+    when the presenter lists `page.text`, and as the plain text page it can show when it does not (#978)."""
+    log = tmp_path / "app.log"
+    log.write_text("one\n")
+    with _page_presenter(live, kinds) as (sid, presenter, gen):
+        _forward_click(presenter, gen, 2, str(log), _pane_id(live, sid))
+        request = wait_frame(presenter.read, "page.request", presenter.send)["page"]
+        assert request["source"] == {"text": {"path": str(log)}}
+        if text_log is None:
+            assert_absent(request, "textLog")
+        else:
+            assert request["textLog"] == text_log
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close", presenter.send)
+
+
 # A presenter that follows a Markdown page's links under the grant its request carries lists `page.links` (#931).
 LINKS_PRESENTER_KINDS = [*CONTENT_PRESENTER_KINDS, "page.links"]
 
