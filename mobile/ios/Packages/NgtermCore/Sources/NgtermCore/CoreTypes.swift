@@ -105,6 +105,10 @@ public typealias PaneSize = NgtermCoreBindings.PaneSize
 public typealias PaneWheel = NgtermCoreBindings.PaneWheel
 /// Where a wheel turn went.
 public typealias PaneWheelOutcome = NgtermCoreBindings.PaneWheelOutcome
+/// The user's answer to a pick: an item, the search text, or none.
+public typealias PickReply = NgtermCoreBindings.PickReply
+/// One row a pick shows: an item, or the search text as the answer.
+public typealias PickRow = NgtermCoreBindings.PickRow
 /// This app's role on an attached session.
 public typealias PresentationRole = NgtermCoreBindings.PresentationRole
 /// One question's answer: the option labels picked, and the text typed into its free-form option.
@@ -119,6 +123,10 @@ public typealias RemoteAskChoice = NgtermCoreBindings.RemoteAskChoice
 public typealias RemoteAskChoices = NgtermCoreBindings.RemoteAskChoices
 /// The text input an ask asks for.
 public typealias RemoteAskInput = NgtermCoreBindings.RemoteAskInput
+/// A pick an attached session's origin bound to it and handed over.
+public typealias RemotePick = NgtermCoreBindings.RemotePick
+/// An item of a pick.
+public typealias RemotePickItem = NgtermCoreBindings.RemotePickItem
 /// The HUD panel over an attached session.
 public typealias RemoteHud = NgtermCoreBindings.RemoteHud
 /// An attached session's panes and their arrangement.

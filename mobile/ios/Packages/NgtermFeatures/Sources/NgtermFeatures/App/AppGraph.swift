@@ -44,6 +44,8 @@ public final class AppGraph {
     public let clipboardReads: ClipboardReads
     /// The asks waiting for the user.
     public let asks: Asks
+    /// The picks the attached sessions' origins handed over.
+    public let picks: Picks
     /// What reaches the user as notifications.
     public let alerts: Alerts
     /// Where the app was asked to go by a notification's tap.
@@ -126,6 +128,7 @@ public final class AppGraph {
         }
         let open = Asks(connections: made)
         asks = open
+        picks = Picks(connections: made)
         notificationPrefs = stores.notificationPrefs
         let center = notices ?? SystemNotices()
         self.notices = center
@@ -189,18 +192,20 @@ public final class AppGraph {
     }
 
     /// The app has nothing to keep connected: every clipboard read still waiting is denied, the origins take their
-    /// asks back (their notifications go), then the core closes every connection quietly until
+    /// asks and picks back (their notifications go), then the core closes every connection quietly until
     /// ``Connections/resume()``.
     public func suspend() {
         clipboardReads.denyAll()
         asks.takeBack()
+        picks.takeBack()
         connections.suspend()
     }
 
-    /// The app is back: asks open again, and the core connects again what ``suspend()`` closed (its reconnects
-    /// reattach, and the origins hand over the asks still waiting).
+    /// The app is back: asks and picks open again, and the core connects again what ``suspend()`` closed (its
+    /// reconnects reattach, and the origins hand over the asks and picks still waiting).
     public func resume() {
         asks.resume()
+        picks.resume()
         connections.resume()
     }
 

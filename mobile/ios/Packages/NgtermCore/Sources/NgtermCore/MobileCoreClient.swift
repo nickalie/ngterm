@@ -61,6 +61,9 @@ public protocol MobileCoreClient: AnyObject, Sendable {
     /// The user's answer to the ask `askId` of an attached session.
     func answerAsk(machineId: String, sessionId: String, askId: String, reply: AskReply) throws
 
+    /// The user's answer to the pick `pickId` of an attached session.
+    func answerPick(machineId: String, sessionId: String, pickId: String, reply: PickReply) throws
+
     /// Shows the pane `paneId` of `sessionId` at `size`; showing a shown pane hands back a handle on the same pane.
     nonisolated(nonsending) func showPane(
         machineId: String,

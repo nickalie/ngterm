@@ -90,6 +90,7 @@ internal struct LiveMobileCoreCallsTests {
         try core.detachSession(machineId: "m1", sessionId: "s1")
         try core.networkChanged()
         try core.answerAsk(machineId: "m1", sessionId: "s1", askId: "a1", reply: Self.cancel)
+        try core.answerPick(machineId: "m1", sessionId: "s1", pickId: "p1", reply: .cancelled)
         try core.hidePane(machineId: "m1", sessionId: "s1", paneId: Self.paneId)
         try core.takeLead(machineId: "m1", sessionId: "s1", paneId: Self.paneId)
         try core.answerClipboardRead(

@@ -179,6 +179,11 @@
         }
 
         /// Records the call.
+        public func answerPick(machineId: String, sessionId: String, pickId: String, reply: PickReply) throws {
+            try record("answerPick", [machineId, sessionId, pickId, reply])
+        }
+
+        /// Records the call.
         public func answerClipboardRead(
             machineId: String,
             sessionId: String,

@@ -101,6 +101,11 @@ public final class LiveMobileCore: MobileCoreClient {
         try core.answerAsk(machineId: machineId, sessionId: sessionId, askId: askId, reply: reply)
     }
 
+    /// Answers a pick of an attached session (api.rs's `answer_pick`).
+    public func answerPick(machineId: String, sessionId: String, pickId: String, reply: PickReply) throws {
+        try core.answerPick(machineId: machineId, sessionId: sessionId, pickId: pickId, reply: reply)
+    }
+
     /// Shows a pane of an attached session (api.rs's `show_pane`).
     nonisolated(nonsending) public func showPane(
         machineId: String,

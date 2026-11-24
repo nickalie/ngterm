@@ -737,6 +737,25 @@ shows, the ask is a sheet over it; out of sight it is a notification (below).
   went (answered elsewhere, ended on the origin, taken back as the app suspends) goes by itself. A draft outlives its
   sheet while the ask is open.
 
+**A pick** (`PickQuestion`, `Data/Picks.swift`) is what an origin hands over for `ngtermctl pick --session` while
+this app presents the session, or what a headless origin held for its next presenter. It shares the ask's sheet and
+shows once none of the session's asks is open; out of sight it waits, with no notification (a list to search is no
+notification's shape), as desktop's picker waits in the window holding the session.
+
+- **The page:** the origin's prompt as the heading ("Pick one" without one); a search field on the raised grouped
+  surface (12 pt corners) with the magnifier in `secondaryText`, the origin's query in it, Return labelled Go; the
+  rows; Cancel, quiet, in the tint. The page scrolls as a whole, as an ask's does.
+- **A row** (`PickItemRow`), at least 44 pt: the label (two lines at most) over its subtitle in `secondaryText`, and
+  at the end the item's status glyph as the sidebar draws it (`AgentStatusLook`, the origin's color made readable);
+  none for an absent or idle status. VoiceOver reads the row as one element, its status word as its value.
+- **Search** ranks the labels as desktop's picker does (the core's `pick_rows`; a subtitle is never searched). A query
+  that matches nothing offers `Use "…"` in the tint when the pick takes a custom answer, otherwise "No matches" in
+  `secondaryText`.
+- **The marked row**, on `tertiarySystemGroupedBackground` with 6 pt corners, is what Go answers with: the origin's
+  selection while the text is as it opened, else the first row; each edit marks the first row again.
+- **Answers:** a tap answers with the row; Cancel or a swipe cancels. A pick the origin takes back (answered
+  elsewhere, its `--timeout` ran out, its stream gone, taken back as the app suspends) closes its sheet unanswered.
+
 **The question about notifying** shows once, as the first session is attached, and only while the user hasn't answered
 the system's question: the bell (`bell.badge`) in the tint, "Get told when an agent needs you" as a heading, what
 reaches the user and that a question can be answered from the notification, then when notifications come (while the

@@ -67,6 +67,9 @@ internal struct FakeMobileCoreTests {
         #expect(core.calls[1] == FakeCall("createSession", ["m1", String?.none]))
         #expect(core.calls[2] == FakeCall("answerAsk", ["m1", "s1", "A1", reply]))
         #expect(core.calls[2] != FakeCall("answerAsk", ["m1", "s1", "A2", reply]))
+        try core.answerPick(machineId: "m1", sessionId: "s1", pickId: "K1", reply: .picked(item: "api"))
+        #expect(core.calls[3] == FakeCall("answerPick", ["m1", "s1", "K1", PickReply.picked(item: "api")]))
+        #expect(core.calls[3] != FakeCall("answerPick", ["m1", "s1", "K1", PickReply.cancelled]))
     }
 
     @Test("emitted events reach the stream in order, and the stream ends once the fake is dropped")
