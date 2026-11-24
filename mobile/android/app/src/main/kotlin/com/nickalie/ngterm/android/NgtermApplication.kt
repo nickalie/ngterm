@@ -19,6 +19,7 @@ import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.NativeKeyMaker
 import com.nickalie.ngterm.android.data.NotificationPrefs
 import com.nickalie.ngterm.android.data.OpenRequests
+import com.nickalie.ngterm.android.data.Picks
 import com.nickalie.ngterm.android.data.SessionChatViews
 import com.nickalie.ngterm.android.data.SettingsStore
 import com.nickalie.ngterm.android.platform.AndroidClipboard
@@ -124,6 +125,7 @@ class NgtermApplication :
             panes = panes,
             chats = PaneChats(scope, connections, live, panes.shown, chatViews),
             asks = asks,
+            picks = Picks(scope, connections),
             notificationPrefs = prefs,
             settings = settings,
             opens = OpenRequests(),

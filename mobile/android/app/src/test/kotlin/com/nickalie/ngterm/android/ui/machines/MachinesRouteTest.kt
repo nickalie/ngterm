@@ -146,6 +146,7 @@ class MachinesRouteTest {
                 base.panes,
                 base.chats,
                 base.asks,
+                base.picks,
                 base.notificationPrefs,
                 base.settings,
                 base.opens,

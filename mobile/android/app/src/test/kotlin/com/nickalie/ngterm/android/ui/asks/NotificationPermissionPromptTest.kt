@@ -83,6 +83,7 @@ class NotificationPermissionPromptTest {
                 panes = original.panes,
                 chats = original.chats,
                 asks = original.asks,
+                picks = original.picks,
                 notificationPrefs = prefs,
                 settings = original.settings,
                 opens = original.opens,

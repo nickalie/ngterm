@@ -8,6 +8,7 @@ import com.nickalie.ngterm.android.data.Creates
 import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.NotificationPrefs
 import com.nickalie.ngterm.android.data.OpenRequests
+import com.nickalie.ngterm.android.data.Picks
 import com.nickalie.ngterm.android.data.SettingsStore
 import com.nickalie.ngterm.android.platform.PinnedHostKeys
 import com.nickalie.ngterm.android.ui.chat.PaneChats
@@ -19,7 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * What the app's screens work with, made once per process: the machines, the keys, the pinned host keys, the
  * connections over the mobile core, the attached sessions' live state and their shown panes, the panes' chat view
- * and their chats, the programs' clipboard reads, the origins' open asks, the notification choices, the app's
+ * and their chats, the programs' clipboard reads, the origins' open asks and picks, the notification choices, the app's
  * settings, where a notification's tap asked the app to go, whether the device is online, the app's own updates
  * (the GitHub build's; none in Google Play's), the session create under way and the diagnostic log Settings shows.
  * [NgtermApplication] makes the real one; the tests make one over fakes.
@@ -34,6 +35,7 @@ class AppGraph(
     val panes: SessionPanes,
     val chats: PaneChats,
     val asks: Asks,
+    val picks: Picks,
     val notificationPrefs: NotificationPrefs,
     val settings: SettingsStore,
     val opens: OpenRequests,

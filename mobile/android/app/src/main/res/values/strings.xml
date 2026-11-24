@@ -285,6 +285,12 @@
   <string name="ask_answer_hint">Your answer</string>
   <string name="ask_other_choice">Something else</string>
 
+  <!-- an origin's pick, as a sheet over its session (ui/asks/PickSheet.kt) -->
+  <string name="pick_title">Pick one</string>
+  <string name="pick_search_hint">Search</string>
+  <string name="pick_no_matches">No matches</string>
+  <string name="pick_cancel">Cancel</string>
+
   <!-- the notification permission, asked once with a reason (ui/asks/NotificationPermission.kt) -->
   <string name="notifications_ask_title">Get told when an agent needs you</string>
   <string name="notifications_ask_body">While ngterm is in the background, a notification brings you back when an agent asks you something, waits for you or finishes. You can answer a question from the notification itself.</string>

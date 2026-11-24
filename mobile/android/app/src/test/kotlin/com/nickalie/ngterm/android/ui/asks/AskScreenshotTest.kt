@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureScreenRoboImage
+import com.nickalie.ngterm.android.rankPicks
 import com.nickalie.ngterm.android.ui.SampleSessions
 import com.nickalie.ngterm.android.ui.SessionsSample
 import com.nickalie.ngterm.android.ui.Window
@@ -13,6 +14,8 @@ import com.nickalie.ngterm.core.ffi.RemoteAskButton
 import com.nickalie.ngterm.core.ffi.RemoteAskChoice
 import com.nickalie.ngterm.core.ffi.RemoteAskChoices
 import com.nickalie.ngterm.core.ffi.RemoteAskInput
+import com.nickalie.ngterm.core.ffi.RemotePick
+import com.nickalie.ngterm.core.ffi.RemotePickItem
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -194,4 +197,48 @@ class AskFormScreenshotTest {
     @Test
     @Config(qualifiers = "night")
     fun inputDark() = capture("ask_input_dark", InputAsk)
+}
+
+/** A pick with statuses, a subtitle and the origin's selection. */
+val SwitchPick =
+    RemotePick(
+        id = "K1",
+        items =
+            listOf(
+                RemotePickItem("api", "api-server", "~/src/api", "blocked", null, null),
+                RemotePickItem("web", "web-frontend", "~/src/web", "active", null, null),
+                RemotePickItem("docs", "docs-site", null, "completed", null, "checkmark"),
+                RemotePickItem("scratch", "scratch", null, "idle", null, null),
+            ),
+        prompt = "Switch to session",
+        query = null,
+        allowCustom = true,
+        selection = "web",
+    )
+
+/** The pick sheet (src/test/screenshots/asks): its search field, items with status, over a machine's sessions. */
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class PickScreenshotTest {
+    @get:Rule
+    val compose = createComposeRule()
+
+    @OptIn(ExperimentalRoborazziApi::class)
+    private fun capture(name: String) {
+        compose.setContent {
+            NgtermTheme {
+                SessionsSample(SampleSessions)
+                PickSheet(SwitchPick, rows = { query -> rankPicks(SwitchPick.items, query, true) }, onAnswer = {})
+            }
+        }
+        compose.waitForIdle()
+        captureScreenRoboImage("src/test/screenshots/asks/$name.png")
+    }
+
+    @Test
+    fun pickLight() = capture("pick_light")
+
+    @Test
+    @Config(qualifiers = "night")
+    fun pickDark() = capture("pick_dark")
 }

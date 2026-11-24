@@ -20,6 +20,7 @@ import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.PeerCapabilities
 import com.nickalie.ngterm.core.ffi.PeerKind
+import com.nickalie.ngterm.core.ffi.PickReply
 import com.nickalie.ngterm.core.ffi.RemoteSession
 import com.nickalie.ngterm.core.ffi.UploadCancel
 import com.nickalie.ngterm.core.ffi.UploadProgress
@@ -497,6 +498,13 @@ class FakeMobileCore(
         askId: String,
         reply: AskReply,
     ) = record("answerAsk", machineId, sessionId, askId, reply)
+
+    override fun answerPick(
+        machineId: String,
+        sessionId: String,
+        pickId: String,
+        reply: PickReply,
+    ) = record("answerPick", machineId, sessionId, pickId, reply)
 
     override fun answerClipboardRead(
         machineId: String,

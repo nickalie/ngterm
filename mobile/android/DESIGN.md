@@ -774,6 +774,42 @@ The plan, reviewed against the brief:
 - **Not here:** the origin's style (terminal or GUI), button alignment, width and hotkeys are desktop's; the sheet is
   the app's one look, and its buttons stack at every width.
 
+#### An agent picks (`ui/asks/PickSheet.kt`, `data/Picks.kt`)
+
+An origin hands this app a pick bound to an attached session (`ngtermctl pick --session`) while the phone presents
+it, and a headless origin hands over the one it held for the next presenter. It shows as a **sheet over the session**
+while that session is on screen and none of its asks is open (the ask's sheet comes first); out of sight it waits, as
+desktop's picker waits in the window holding the session. It has no notification: a list to search is no notification's
+shape, and the session's own status says it needs you.
+
+```
++--------------------------------------+
+|                ----                  |
+|  Switch to session                   |
+|  [ (o) Search                     ]  |
+|  api-server                      <>  |
+|  ~/src/api                           |
+|  web-frontend                    ●   |   <- the marked row
+|  ~/src/web                           |
+|  docs-site                       ✓   |
+|  scratch                             |
+|               Cancel                 |
++--------------------------------------+
+```
+
+- **Content:** the origin's prompt as the heading (headlineSmall; "Pick one" without one); the search field (the
+  magnifier, "Search", the origin's query in it); the rows, at most 360dp before they scroll, so the field and Cancel
+  stay in view; Cancel, a quiet text button.
+- **A row** is a 56dp target on the sheet's tone: the label (bodyLarge, two lines at most) over its subtitle (bodySmall,
+  `onSurfaceVariant`), and at the end the item's status glyph as the sidebar draws it, in the origin's color and shape,
+  16dp; none for an absent or idle status. TalkBack reads the glyph as its word.
+- **Search** ranks the labels as desktop's picker does (the core's `pick_rows`; a subtitle is never searched). A query
+  that matches nothing offers `Use "…"` in copper when the pick takes a custom answer, otherwise "No matches".
+- **The marked row** (`surfaceContainerHighest`) is what the keyboard's Go answers with: the origin's selection while
+  the text is as it opened, else the first row, as each edit moves it back to the first.
+- **Answers:** a tap answers with the row; Cancel, Back or swiping the sheet away cancel. A pick the origin takes back
+  (answered elsewhere, its `--timeout` ran out, its stream gone) closes its sheet; one answered here goes once.
+
 ### The chat (`ui/chat/`)
 
 A pane running Claude Code or Codex, read as a conversation (The view switch, above). Underneath it is still the

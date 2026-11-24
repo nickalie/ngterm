@@ -33,6 +33,7 @@ import com.nickalie.ngterm.android.data.OpenTarget
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.ui.asks.AskPrompt
 import com.nickalie.ngterm.android.ui.asks.NotificationPermissionPrompt
+import com.nickalie.ngterm.android.ui.asks.PickPrompt
 import com.nickalie.ngterm.android.ui.chat.ChatViewModel
 import com.nickalie.ngterm.android.ui.chat.KeepDrafts
 import com.nickalie.ngterm.android.ui.machines.HostKeySheet
@@ -151,6 +152,7 @@ fun NgtermApp(
             ConnectPrompts(state, onAnswerHostKey = machines::answerHostKey, onCancelSignIn = machines::disconnect)
             ClipboardReadPrompt(graph)
             AskPrompt(graph)
+            PickPrompt(graph)
             NotificationPermissionPrompt(graph)
             UpdatePrompt(graph.updates)
         }

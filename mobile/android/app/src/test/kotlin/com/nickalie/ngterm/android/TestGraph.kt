@@ -17,6 +17,7 @@ import com.nickalie.ngterm.android.data.MemoryClipboard
 import com.nickalie.ngterm.android.data.NotificationPrefs
 import com.nickalie.ngterm.android.data.OpenRequests
 import com.nickalie.ngterm.android.data.PassphraseRule
+import com.nickalie.ngterm.android.data.Picks
 import com.nickalie.ngterm.android.data.SessionChatViews
 import com.nickalie.ngterm.android.data.SettingsStore
 import com.nickalie.ngterm.android.data.StoredMachine
@@ -264,6 +265,7 @@ class TestGraph(
             rankCommands(query, items)
         }
     val asks = Asks(scope, connections)
+    val picks = Picks(scope, connections, ::rankPicks)
 
     // the notification permission counts as asked unless the test is about its question
     val notificationPrefs =
@@ -284,6 +286,7 @@ class TestGraph(
             panes = panes,
             chats = chats,
             asks = asks,
+            picks = picks,
             notificationPrefs = notificationPrefs,
             settings = settings,
             opens = opens,
