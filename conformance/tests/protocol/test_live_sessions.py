@@ -2000,7 +2000,8 @@ def test_a_page_helper_that_stops_reading_loses_its_channel(live, adapter, tmp_p
             closed = wait_frame(presenter.read, "page.close", presenter.send, timeout=30)
             assert closed["page"] == {"page": page_id}
             kinds = _until_ended(helper)
-            assert kinds and set(kinds) <= {"head", "chunk"}, kinds
+            # Windows' pipe disconnect discards what the helper left unread; a socket's close keeps it readable.
+            assert (WINDOWS or kinds) and set(kinds) <= {"head", "chunk"}, kinds
         if adapter.has("pages-survive"):
             parked = [{"pageID": page_id, "parked": True}]
             live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == parked)
