@@ -811,16 +811,25 @@ impl Pane {
         state.prune();
         let input = state.lead.input(id, data);
         self.apply_locked(&mut state, &input.change);
-        let held = input.forward && self.core.hold_input(&state, data);
-        self.release(state);
         if !input.forward {
+            self.release(state);
             return Ok(false);
         }
+        self.send_input(state, data)?;
+        Ok(true)
+    }
+
+    /// Queue a client's `data` for the program after every reply made ready before it: behind the replies that wait
+    /// for a Kitty barrier, else after the helper wrote those ready, through the PTY's admission rules. Lets go of
+    /// the pane's lock.
+    fn send_input(&self, state: MutexGuard<'_, State>, data: &[u8]) -> Result<(), WriteError> {
+        let held = self.core.hold_input(&state, data);
+        self.release(state);
         if !held {
             self.core.await_replies_written();
             self.actor.write_input(data)?;
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Paste on the authoritative VT for a current client epoch; lazy reads return to that source client.
@@ -879,13 +888,11 @@ impl Pane {
         let Some(bytes) = bytes else {
             return Ok(false);
         };
-        if !self.core.hold_input(&state, &bytes) {
-            self.actor.write_input(&bytes)?;
-        }
+        // registered before the program can read the paste and ask through its bridge
         state.register_paste_bridge(id, epoch, paste.bridge.as_ref(), &bytes);
         let grants = state.terminal.clipboard_grants();
         grants.lock().unwrap_or_else(PoisonError::into_inner).pasted(&bytes);
-        self.release(state);
+        self.send_input(state, &bytes)?;
         Ok(true)
     }
 

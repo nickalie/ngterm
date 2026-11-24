@@ -740,17 +740,76 @@ fn a_paste_after_a_key_held_behind_a_kitty_barrier_reaches_the_program_after_the
     })
 }
 
-/// Spawn a program that turns mode 2031 on and sends a Kitty query, have the owner's appearance change queue a scheme
-/// report behind the barrier, let `client` send `sent`, complete the barrier, and check that the program reads the
-/// answer, the report, then `sent`.
+/// A paste too large to hold behind a Kitty barrier ends the barrier and reaches the program after the scheme report
+/// and the key that waited there.
+#[cfg(unix)]
+#[test]
+fn a_paste_past_the_held_limit_reaches_the_program_after_the_report_and_key_that_waited() -> TestResult {
+    use ngterm_session::protocol::{ClipboardPaste, ClipboardRepresentation};
+    use ngterm_session::server::replies::HELD_LIMIT;
+    behind_a_scheme_report(Barrier::EndedByInput, b"KP", HELD_LIMIT, |pane, owner, epoch| {
+        assert!(pane.input(owner, b"K")?);
+        let paste = ClipboardPaste {
+            bridge: None,
+            contents: vec![ClipboardRepresentation {
+                mime: "text/plain".into(),
+                data: vec![b'P'; HELD_LIMIT + 1],
+            }],
+            text_source: true,
+            selection: "c".into(),
+            allow_unsafe: false,
+        };
+        let deadline = Instant::now() + PATIENCE;
+        // the PTY admits input this large only once the report and the key before it went through
+        loop {
+            match pane.clipboard_paste(owner, epoch, &paste) {
+                Err(ngterm_pty::WriteError::Backpressure) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                result => {
+                    assert!(result?);
+                    return Ok(());
+                }
+            }
+        }
+    })
+}
+
+/// How the Kitty barrier of [`behind_a_scheme_report`] ends.
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq)]
+enum Barrier {
+    /// The owner completes it after the client sent its input; the program reads the answer first.
+    Completed,
+    /// The client's input ends it; the program gets no answer.
+    EndedByInput,
+}
+
+/// A key sent while a scheme report waits behind a Kitty barrier, with the barrier completed after it.
 #[cfg(unix)]
 fn behind_a_waiting_scheme_report(sent: &[u8], client: impl FnOnce(&Pane, u64, u64) -> TestResult) -> TestResult {
+    behind_a_scheme_report(Barrier::Completed, sent, 0, client)
+}
+
+/// Spawn a program that turns mode 2031 on and sends a Kitty query, have the owner's appearance change queue a scheme
+/// report behind the barrier, let `client` send its input, end the barrier as `barrier` says, and check that the
+/// program's input is the answer (for a completed barrier), the report, `sent`, then `rest` bytes more.
+#[cfg(unix)]
+fn behind_a_scheme_report(
+    barrier: Barrier,
+    sent: &[u8],
+    rest: usize,
+    client: impl FnOnce(&Pane, u64, u64) -> TestResult,
+) -> TestResult {
     const ANSWER: &[u8] = b"\x1b_Gi=31;OK\x1b\\";
+    let answer = if barrier == Barrier::Completed { ANSWER } else { b"" };
     let dir = tempfile::tempdir()?;
+    // one byte per read, so the count of the rest, until a quiet second, holds every byte past them
     let script = format!(
         "stty raw -echo; printf '\\033[?2031h'; printf '\\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\\033\\\\'; \
-         printf 'armed\\r\\n'; head -c {} | tr '\\033' 'E'; printf '\\r\\nread-all\\r\\n'; sleep 10",
-        ANSWER.len() + LIGHT_REPORT.len() + sent.len()
+         printf 'armed\\r\\n'; dd bs=1 count={} 2>/dev/null | tr '\\033' 'E'; stty min 0 time 10; \
+         printf '\\r\\nrest:%s\\r\\nread-all\\r\\n' \"$(cat | wc -c | tr -d ' ')\"; sleep 10",
+        answer.len() + LIGHT_REPORT.len() + sent.len()
     );
     let mut config = pane_config("kitty-keys", dir.path(), support::spec(&["sh", "-c", &script]));
     config.metadata = metadata();
@@ -758,7 +817,7 @@ fn behind_a_waiting_scheme_report(sent: &[u8], client: impl FnOnce(&Pane, u64, u
     let (pane, creator) = Pane::spawn(config)?;
     let owner = creator.subscription.id();
     let deadline = Instant::now() + PATIENCE;
-    let (barrier, epoch) = loop {
+    let (barrier_id, epoch) = loop {
         assert!(Instant::now() < deadline, "no Kitty barrier");
         if let Ok(ClientEvent::KittyBarrier { id, epoch }) = creator.subscription.recv_timeout(PATIENCE) {
             break (id, epoch);
@@ -773,8 +832,14 @@ fn behind_a_waiting_scheme_report(sent: &[u8], client: impl FnOnce(&Pane, u64, u
         },
     );
     client(&pane, owner, epoch)?;
-    assert!(pane.complete(owner, barrier, epoch, ANSWER));
-    let expected = shown(&[ANSWER, LIGHT_REPORT, sent].concat()).replace('\x1b', "E");
+    assert_eq!(
+        pane.complete(owner, barrier_id, epoch, ANSWER),
+        barrier == Barrier::Completed
+    );
+    let expected = format!(
+        "{}rest:{rest}read-all",
+        shown(&[answer, LIGHT_REPORT, sent].concat()).replace('\x1b', "E")
+    );
     let text: String = server_expects(&pane, "read-all")
         .chars()
         .filter(|ch| *ch != '\n')
