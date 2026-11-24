@@ -303,6 +303,45 @@ fn new_session(fixture: &Fixture, name: &str) -> Result<String, Box<dyn std::err
     Ok(created["result"]["id"].as_str().ok_or("no session id")?.to_owned())
 }
 
+/// The live session namespace of the fixture's server, as the server derives it from its state directory and home.
+fn live_namespace(fixture: &Fixture) -> PathBuf {
+    let state = fixture.root.path().join("state");
+    #[cfg(unix)]
+    let directory = ngterm_core::live::socket_directory(&state);
+    #[cfg(windows)]
+    let directory = ngterm_core::live::windows_socket_directory(
+        &ngterm_core::paths::MapEnv::new().with("USERPROFILE", fixture.root.path().join("home")),
+        &ngterm_core::live::state_dir_hash(&state),
+    );
+    PathBuf::from(directory)
+}
+
+/// Holds the server's live session endpoint with a listener that never answers, so each later live pane waits in its
+/// attach and keeps its session; with the inert session host, an attach fails, and its session closes, at once.
+struct LiveHold {
+    listener: Option<ngterm_session::endpoint::Listener>,
+    #[cfg(unix)]
+    namespace: PathBuf,
+}
+
+fn hold_live_attaches(fixture: &Fixture) -> io::Result<LiveHold> {
+    let namespace = live_namespace(fixture);
+    let listener = ngterm_session::endpoint::Endpoint::new(&namespace).bind()?;
+    Ok(LiveHold {
+        listener: Some(listener),
+        #[cfg(unix)]
+        namespace,
+    })
+}
+
+impl Drop for LiveHold {
+    fn drop(&mut self) {
+        drop(self.listener.take());
+        #[cfg(unix)]
+        let _ = std::fs::remove_dir_all(&self.namespace);
+    }
+}
+
 /// The windows the state directory holds, as saved.
 fn saved_windows(fixture: &Fixture) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     let mut windows = Vec::new();
@@ -326,6 +365,7 @@ fn a_server_answers_its_private_socket_and_saves_on_termination() {
     BufReader::new(stream).read_line(&mut line).unwrap();
     let response: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(response["ok"], true, "{response}");
+    let hold = hold_live_attaches(&fixture).unwrap();
     let probe = new_session(&fixture, "quit-save-probe").unwrap();
     let closed = control(
         &fixture,
@@ -340,10 +380,13 @@ fn a_server_answers_its_private_socket_and_saves_on_termination() {
     // after a debounce, which the signal beats, so only the quit save writes it
     let first = new_session(&fixture, "selection-probe-first").unwrap();
     new_session(&fixture, "selection-probe-second").unwrap();
+    // longer than an unheld attach takes to fail, so the select shows that the hold keeps `first`
+    std::thread::sleep(Duration::from_millis(200));
     let selected = control(&fixture, &serde_json::json!({"cmd":"session.select", "target":first})).unwrap();
     assert_eq!(selected["ok"], true, "{selected}");
     child.terminate().unwrap();
     assert!(wait_exit(&mut child).unwrap());
+    drop(hold);
     assert!(fixture.log().contains("quit: the state is saved"));
     assert!(fixture.root.path().join("state/windows.json").is_file());
     let windows = saved_windows(&fixture).unwrap();
