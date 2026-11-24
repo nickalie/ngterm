@@ -252,6 +252,19 @@ impl Chat {
         self.stdin = None;
     }
 
+    /// Every line the process printed, once it exited: the reader may still hold some when the exit is seen, so this
+    /// waits for its end of stdout.
+    fn printed(&self) -> TestResult<Vec<String>> {
+        let mut lines = Vec::new();
+        loop {
+            match self.lines.recv_timeout(WAIT) {
+                Ok(line) => lines.push(line),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(lines),
+                Err(mpsc::RecvTimeoutError::Timeout) => return Err("stdout never ended".into()),
+            }
+        }
+    }
+
     /// The process's exit, once it comes within `limit`.
     fn exit_within(&mut self, limit: Duration) -> TestResult<ExitStatus> {
         let start = Instant::now();
@@ -366,9 +379,9 @@ fn before_prints_one_older_page_and_exits() -> TestResult {
     )?;
     assert!(chat.exit_within(WAIT)?.success(), "a page exits with stdin still open");
     let page: Vec<Value> = chat
-        .lines
-        .try_iter()
-        .map(|line| serde_json::from_str(&line))
+        .printed()?
+        .iter()
+        .map(|line| serde_json::from_str(line))
         .collect::<Result<_, _>>()?;
     assert!(page.len() >= 5, "{page:#?}");
     let older = lines_in(&golden(MAIN)?, 0, NEXT_PROMPT);
@@ -380,7 +393,7 @@ fn before_prints_one_older_page_and_exits() -> TestResult {
 
     let mut chat = Chat::spawn(dir.path(), &socket, &["--target", "S", "--before", "0"])?;
     assert!(chat.exit_within(WAIT)?.success());
-    assert_eq!(chat.lines.try_iter().count(), 0, "nothing before the start");
+    assert_eq!(chat.printed()?.len(), 0, "nothing before the start");
     Ok(())
 }
 
@@ -517,7 +530,7 @@ fn a_cursor_of_another_conversation_answers_reset() -> TestResult {
         &["--target", "S", "--before", &before, "--conversation", OTHER],
     )?;
     assert!(chat.exit_within(WAIT)?.success());
-    let page: Vec<String> = chat.lines.try_iter().collect();
+    let page = chat.printed()?;
     assert_eq!(page.len(), 1, "{page:?}");
     assert_eq!(
         serde_json::from_str::<Value>(&page[0])?,
@@ -529,7 +542,7 @@ fn a_cursor_of_another_conversation_answers_reset() -> TestResult {
         &["--target", "S", "--before", &before, "--conversation", MAIN],
     )?;
     assert!(chat.exit_within(WAIT)?.success());
-    assert!(chat.lines.try_iter().count() >= 5, "the record's conversation pages");
+    assert!(chat.printed()?.len() >= 5, "the record's conversation pages");
     Ok(())
 }
 
