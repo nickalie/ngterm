@@ -87,7 +87,8 @@ pub(crate) struct Served {
     table_path: Option<PathBuf>,
     /// The last write of the table failed: no entry is handed out as a receipt until one lands.
     pub(crate) unsaved: bool,
-    /// The ids of the commands that run now: kept out of [`Self::table`], so no write vouches for one before it lands.
+    /// The ids of the commands that have not answered yet, running or abandoned: kept out of [`Self::table`], so no
+    /// write vouches for one before it lands.
     pub(crate) running: receipts::RunningOperations,
 }
 

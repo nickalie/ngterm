@@ -1009,7 +1009,8 @@ window snapshot, so one write lands both; here a receipt is written only after t
 failed window write keeps it unsaved, as a failed receipt write does. Upstream answers a repeat or a `catalog.op` of
 an id whose command still runs with the in-flight `applied` marker; here the id has no receipt until its command
 answers, so both get "operation ID is still running" instead. A command that is dropped before it answers (a
-panicked handler, a step that was never resumed) leaves its id `unknown`.
+panicked handler, a step that was never resumed) leaves its id `unknown`, written before the next window write;
+the quit save does the same for a command that still waits.
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)

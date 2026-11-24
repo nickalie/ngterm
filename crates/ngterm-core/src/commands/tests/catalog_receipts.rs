@@ -590,6 +590,10 @@ fn a_dropped_operation_answers_unknown() {
     assert!(matches!(dispatched, Dispatched::Pending { .. }));
     drop(dispatched);
     let _ = f.core.commit();
+    assert_eq!(
+        on_disk(dir.path()).receipt("dropped").map(|r| r.outcome.clone()),
+        Some(outcome::UNKNOWN.to_owned())
+    );
 
     let repeat = f.core.dispatch(&swap);
     assert_eq!(
@@ -609,6 +613,64 @@ fn a_dropped_operation_answers_unknown() {
         on_disk(dir.path()).receipt("dropped").map(|r| r.outcome.clone()),
         Some(outcome::UNKNOWN.to_owned())
     );
+}
+
+/// A restart after a dropped command answers `unknown` without a lookup in between, since the next write recorded it.
+#[test]
+fn a_dropped_operation_stays_unknown_across_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut f = Fixture::new(0);
+    f.core.serve_catalog(CATALOG, Some(dir.path()));
+    let (session, _, _) = split_session(&mut f);
+    let epoch = epoch(&f);
+    let swap = swap_request(session, "dropped", epoch);
+    drop(f.core.begin(&swap));
+    let _ = f.core.commit();
+    drop(f);
+
+    let mut restarted = Fixture::new(0);
+    restarted.core.serve_catalog(CATALOG, Some(dir.path()));
+    let answer = lookup(&mut restarted, "dropped", None);
+    assert_eq!(
+        receipt_of(&answer).map(|r| r.outcome),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+}
+
+/// The quit save records a command that still waits as `unknown`: its step never runs after the quit, but its change
+/// may already be in the windows that save writes.
+#[test]
+fn the_quit_save_leaves_a_waiting_operation_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut f = Fixture::new(0);
+    f.core.serve_catalog(CATALOG, Some(dir.path()));
+    let (session, _, _) = split_session(&mut f);
+    let epoch = epoch(&f);
+    let swap = swap_request(session, "waiting", epoch);
+    let dispatched = f.core.begin(&swap);
+    assert!(matches!(dispatched, Dispatched::Pending { .. }));
+    assert!(f.core.save_all());
+    drop(dispatched);
+    drop(f);
+
+    let mut restarted = Fixture::new(0);
+    restarted.core.serve_catalog(CATALOG, Some(dir.path()));
+    let answer = lookup(&mut restarted, "waiting", None);
+    assert_eq!(
+        receipt_of(&answer).map(|r| r.outcome),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+}
+
+fn swap_request(session: Uuid, op_id: &str, epoch: String) -> Request {
+    Request {
+        cmd: Command::Session(SessionCmd::Swap),
+        target: Some(wire(session)),
+        args: Some(args(|a| {
+            a.op_id = Some(op_id.to_owned());
+            a.epoch = Some(epoch);
+        })),
+    }
 }
 
 /// A core over a library bootstrapped from `dir` that serves its catalog there too, as `ngterm-headless` does; the

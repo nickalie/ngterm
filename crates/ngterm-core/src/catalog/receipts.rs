@@ -107,6 +107,20 @@ impl RunningOperations {
     fn finish(&self, op_id: &str) {
         self.lock().remove(op_id);
     }
+
+    /// Removes and returns the abandoned ids, and the active ones too when `all`.
+    fn take_settled(&self, all: bool) -> Vec<String> {
+        let mut operations = self.lock();
+        let ids: Vec<String> = operations
+            .iter()
+            .filter(|(_, run)| all || **run == Run::Abandoned)
+            .map(|(op_id, _)| op_id.clone())
+            .collect();
+        for op_id in &ids {
+            operations.remove(op_id);
+        }
+        ids
+    }
 }
 
 /// Where an operation that runs now leaves the catalog's revisions; dropped before it settles, it marks the operation
@@ -170,22 +184,30 @@ impl Core {
         served.save()
     }
 
-    /// Whether the id's command runs now. An abandoned one is recorded `unknown` here, since its command may have
-    /// changed the model before it stopped, and is then answered from the table.
-    fn operation_running(&mut self, op_id: &str) -> bool {
-        let Some(served) = self.catalog.served.as_ref() else {
-            return false;
+    /// Records `unknown` for each abandoned operation, and for each running one when `quitting`, and writes the table:
+    /// its command may have changed the model, so no later window write may leave the id to be fenced.
+    pub(crate) fn settle_dropped_operations(&mut self, quitting: bool) {
+        let Some(served) = self.catalog.served.as_mut() else {
+            return;
         };
-        match served.running.state(op_id) {
-            Some(Run::Active) => true,
-            Some(Run::Abandoned) => {
-                served.running.finish(op_id);
-                let unknown = operations::receipt(op_id, served.hub.epoch(), outcome::UNKNOWN);
-                self.save_receipt(unknown);
-                false
-            }
-            None => false,
+        let dropped = served.running.take_settled(quitting);
+        if dropped.is_empty() {
+            return;
         }
+        let position = CatalogPosition::new(served.hub.epoch(), served.hub.rev());
+        for op_id in dropped {
+            let unknown = operations::receipt(&op_id, served.hub.epoch(), outcome::UNKNOWN);
+            served.table.record(unknown, &position);
+        }
+        served.save();
+    }
+
+    /// Whether the id's command runs now.
+    fn operation_running(&self, op_id: &str) -> bool {
+        self.catalog
+            .served
+            .as_ref()
+            .is_some_and(|served| served.running.state(op_id) == Some(Run::Active))
     }
 
     /// Whether the disk holds what memory does, retrying a write that failed: an entry only memory holds is never
@@ -240,6 +262,7 @@ impl Core {
         if !CatalogReceipt::is_valid_op_id(op_id) {
             return Dispatched::Done(Response::failure("invalid operation id"));
         }
+        self.settle_dropped_operations(false);
         if self.operation_running(op_id) {
             return Dispatched::Done(still_running(op_id));
         }
@@ -281,6 +304,7 @@ impl Core {
     /// `catalog.op`: the table's receipt of `op_id`, or a fence recorded for it, `unknown` when a drop may have taken
     /// its entry since `sent`.
     pub(crate) fn catalog_operation(&mut self, op_id: &str, sent: Option<&CatalogPosition>) -> Response {
+        self.settle_dropped_operations(false);
         if self.operation_running(op_id) {
             return still_running(op_id);
         }

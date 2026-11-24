@@ -632,6 +632,8 @@ impl Core {
     /// immediate snapshot saves and a changed index, sequences the events into the ring, and hands back the timers
     /// the caller arms on the main loop. Without persistence the effects are drained and the saves dropped.
     pub fn commit(&mut self) -> CommitTimers {
+        // before any window write: a dropped operation's change must not reach the disk with its id left to be fenced
+        self.settle_dropped_operations(false);
         self.prune_zoom();
         self.prune_spawn_queue();
         self.drop_stranded_pane_overlays();
@@ -750,6 +752,7 @@ impl Core {
         self.cancel_all_modals();
         self.library.finalize_all_pending_closes();
         self.library.is_terminating = true;
+        self.settle_dropped_operations(true);
         let _ = self.commit();
         self.persistence
             .as_mut()
