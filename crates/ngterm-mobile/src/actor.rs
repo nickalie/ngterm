@@ -75,7 +75,7 @@ use crate::chat::input::{Action, AgentInputOutcome, InputTiming};
 use crate::chat::{AgentCommand, ChatEvent, ChatKey, Chats, UploadCancel};
 use crate::note;
 use crate::pane::{self, ClipboardReply, ClipboardWriteStatus, GoneCheck, Note, PaneRef, Panes, Target};
-use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations, Reporter};
+use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, PickReply, Presentations, Reporter};
 use crate::reconnect::Retry;
 use crate::sessions::{self, RemoteSession};
 use crate::transport::{Connection, Learned, Transport, TransportError};
@@ -134,6 +134,12 @@ pub(crate) enum Command {
         session_id: String,
         ask_id: String,
         reply: AskReply,
+    },
+    AnswerPick {
+        machine_id: String,
+        session_id: String,
+        pick_id: String,
+        reply: PickReply,
     },
     ShowPane {
         machine_id: String,
@@ -513,6 +519,17 @@ async fn run<T: Transport>(
                     .presentations
                     .borrow_mut()
                     .answer_ask(&machine_id, &session_id, &ask_id, reply);
+            }
+            Command::AnswerPick {
+                machine_id,
+                session_id,
+                pick_id,
+                reply,
+            } => {
+                state
+                    .presentations
+                    .borrow_mut()
+                    .answer_pick(&machine_id, &session_id, &pick_id, reply);
             }
             Command::Typed { pane, key } => {
                 state.presentations.borrow_mut().typed(&pane, key);

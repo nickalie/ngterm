@@ -22,9 +22,14 @@
 //!     desktop beside the phone rather than to it;
 //!   - an ask for an attached session is always accepted (the app shows it as a dialog when the session is on screen,
 //!     otherwise as a notification) and its answer echoes the request's `owner`, kept here;
+//!   - the hello lists the pick kinds, so a pick bound to an attached session (`pick --session`) is handed to the phone
+//!     that presents it, accepted as an ask is (the app shows it as a picker while the session is on screen) and
+//!     answered with its `owner`; and the held kinds, so a headless origin hands the phone what it held for the next
+//!     presenter (its ask and pick) as one pending batch, which the client applies together or not at all. An ask or a
+//!     pick the origin ends (answered elsewhere, or its `--timeout` ran out) is dismissed;
 //!   - an overlay is refused with `overlay.rejected`, and a page with `page.rejected` ([`PAGES_UNSUPPORTED`]);
 //!   - when the stream leaves `connected`, what it showed goes with it: context, status and HUD clear, and the asks
-//!     still open are dismissed (the origin takes them back), as desktop's row does;
+//!     and picks still open are dismissed (the origin takes them back), as desktop's row does;
 //!   - each key the user typed into a shown pane goes to an origin that speaks `pane.input`, which clears the session's
 //!     unseen badge by its own Badge reset rule (`Presentations::typed`), as for each key typed there: the origin can
 //!     raise the badge with no frame to the viewer (a terminal's own notification), so no key is held back.
@@ -41,6 +46,7 @@
 //! [`STALE_AFTER`]: ngterm_core::remote::client::STALE_AFTER
 //! [`PAGES_UNSUPPORTED`]: ngterm_core::remote::client::PAGES_UNSUPPORTED
 
+mod picker;
 mod records;
 #[cfg(test)]
 mod tests;
@@ -55,7 +61,7 @@ use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::client::{ClientEffect, PAGES_UNSUPPORTED, PresentationClient};
 use ngterm_core::remote::frames::{
     Body, MAX_FRAME_BYTES, PresentationAgent, PresentationAskAnswer, PresentationOverlayChange, PresentationPageChange,
-    PresentationPane, PresentationRespawns,
+    PresentationPane, PresentationPickAnswer, PresentationRespawns,
 };
 use ngterm_core::remote::origin::OriginForm;
 use ngterm_core::remote::peer::RemotePeer;
@@ -66,9 +72,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+pub use self::picker::{PickRow, pick_rows};
 pub use self::records::{
-    AskReply, PresentationRole, RemoteAsk, RemoteAskButton, RemoteAskChoice, RemoteAskChoices, RemoteAskInput,
-    RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,
+    AskReply, PickReply, PresentationRole, RemoteAsk, RemoteAskButton, RemoteAskChoice, RemoteAskChoices,
+    RemoteAskInput, RemoteHud, RemoteLayout, RemoteNotice, RemotePick, RemotePickItem, RemoteStatus, StreamState,
 };
 use crate::api::{MobileError, MobileEvent};
 use crate::pane::PaneRef;
@@ -311,6 +318,8 @@ struct Attached<C> {
     connected: bool,
     /// The asks shown and not yet answered or dismissed, with the `owner` their answer echoes.
     asks: HashMap<String, i64>,
+    /// The picks shown and not yet answered or dismissed, with the `owner` their answer echoes.
+    picks: HashMap<String, i64>,
     /// The respawn counts reported and not yet handed to the panes, each with whether a snapshot carried it.
     respawns: Vec<(PresentationRespawns, bool)>,
 }
@@ -368,6 +377,8 @@ impl<C: Connection> Presentations<C> {
         let mut client = PresentationClient::new(session, self.last_client, vec![tail], version);
         client.set_shows_agents(true);
         client.set_refuses_overlays(true);
+        client.set_shows_picks(true);
+        client.set_takes_held(true);
         let mut attached = Attached {
             machine_id: machine_id.to_owned(),
             session_id: session_id.to_owned(),
@@ -375,6 +386,7 @@ impl<C: Connection> Presentations<C> {
             links,
             connected: false,
             asks: HashMap::new(),
+            picks: HashMap::new(),
             respawns: Vec::new(),
         };
         let effects = attached.client.start(&attached.links, now);
@@ -498,6 +510,30 @@ impl<C: Connection> Presentations<C> {
         true
     }
 
+    /// Sends the user's answer to the pick `pick_id` of `session_id`, echoing the request's owner; false when no such
+    /// pick is open (answered, dismissed, or its stream went).
+    pub(crate) fn answer_pick(&mut self, machine_id: &str, session_id: &str, pick_id: &str, reply: PickReply) -> bool {
+        let Some(index) = self.find(machine_id, session_id) else {
+            return false;
+        };
+        let attached = &mut self.attached[index];
+        let Some(owner) = attached.picks.remove(pick_id) else {
+            return false;
+        };
+        let (item, query) = match reply {
+            PickReply::Picked { item } => (Some(item), None),
+            PickReply::Custom { query } => (None, Some(query)),
+            PickReply::Cancelled => (None, None),
+        };
+        attached.client.answer(Body::PickResolve(PresentationPickAnswer {
+            id: pick_id.to_owned(),
+            owner,
+            item,
+            query,
+        }));
+        true
+    }
+
     /// Tells the origin of `pane`'s session of a key the user typed there, for its Badge reset rule; whether it went.
     pub(crate) fn typed(&mut self, pane: &PaneRef, key: StatusKeystroke) -> bool {
         let Some(index) = self.find(&pane.machine_id, &pane.session_id) else {
@@ -591,24 +627,10 @@ impl<C> Attached<C> {
                 session_id,
                 name: sound.name,
             },
-            ClientEffect::AskRequest(ask) => {
-                self.asks.insert(ask.id.clone(), ask.owner);
-                MobileEvent::Ask {
-                    machine_id,
-                    session_id,
-                    ask: ask.into(),
-                }
-            }
-            ClientEffect::AskDismiss(reference) => {
-                if self.asks.remove(&reference.id).is_none() {
-                    return;
-                }
-                MobileEvent::AskDismiss {
-                    machine_id,
-                    session_id,
-                    ask_id: reference.id,
-                }
-            }
+            effect @ (ClientEffect::AskRequest(_)
+            | ClientEffect::AskDismiss(_)
+            | ClientEffect::PickRequest(_)
+            | ClientEffect::PickDismiss(_)) => return events.extend(self.interaction(effect)),
             ClientEffect::Respawns(respawns, seed) => return self.respawns.push((respawns, seed)),
             ClientEffect::Agent(agent) => {
                 let Some(event) = self.agent(agent) else {
@@ -619,6 +641,50 @@ impl<C> Attached<C> {
             other => return self.refuse(other),
         };
         events.push(event);
+    }
+
+    /// An ask or a pick the origin handed over or ended, as its event; the end of one not shown makes none.
+    fn interaction(&mut self, effect: ClientEffect) -> Option<MobileEvent> {
+        let (machine_id, session_id) = (self.machine_id.clone(), self.session_id.clone());
+        Some(match effect {
+            ClientEffect::AskRequest(ask) => {
+                self.asks.insert(ask.id.clone(), ask.owner);
+                MobileEvent::Ask {
+                    machine_id,
+                    session_id,
+                    ask: ask.into(),
+                }
+            }
+            ClientEffect::AskDismiss(reference) => {
+                self.asks.remove(&reference.id)?;
+                MobileEvent::AskDismiss {
+                    machine_id,
+                    session_id,
+                    ask_id: reference.id,
+                }
+            }
+            ClientEffect::PickRequest(pick) => {
+                self.picks.insert(pick.id.clone(), pick.owner);
+                MobileEvent::Pick {
+                    machine_id,
+                    session_id,
+                    pick: pick.into(),
+                }
+            }
+            ClientEffect::PickDismiss(reference) => {
+                // one under an earlier presenter generation names another hand-over
+                if self.picks.get(&reference.id) != Some(&reference.owner) {
+                    return None;
+                }
+                self.picks.remove(&reference.id);
+                MobileEvent::PickDismiss {
+                    machine_id,
+                    session_id,
+                    pick_id: reference.id,
+                }
+            }
+            _ => return None,
+        })
     }
 
     /// What a pane runs, as its event; the scratch pane keeps no agent record.
@@ -650,7 +716,8 @@ impl<C> Attached<C> {
         }
     }
 
-    /// The stream's new state; leaving `connected` clears what the stream showed and dismisses its open asks.
+    /// The stream's new state; leaving `connected` clears what the stream showed and dismisses its open asks and
+    /// picks.
     fn set_connection(&mut self, connection: RemoteConnection, events: &mut Vec<MobileEvent>) {
         let connected = connection == RemoteConnection::Connected;
         let left = self.connected && !connected;
@@ -670,6 +737,13 @@ impl<C> Attached<C> {
             machine_id: machine_id.clone(),
             session_id: session_id.clone(),
             ask_id,
+        }));
+        let mut picks: Vec<String> = self.picks.drain().map(|(id, _)| id).collect();
+        picks.sort();
+        events.extend(picks.into_iter().map(|pick_id| MobileEvent::PickDismiss {
+            machine_id: machine_id.clone(),
+            session_id: session_id.clone(),
+            pick_id,
         }));
         events.push(MobileEvent::SessionContext {
             machine_id: machine_id.clone(),

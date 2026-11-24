@@ -17,7 +17,9 @@ use crate::api::{EventSink, MachineState, MobileEvent};
 use crate::chat::{ChatBody, ChatEvent, ChatState};
 use crate::note;
 use crate::pane::{ClipboardPart, PaneClipboard, PaneEnd, PaneRef, PaneRole};
-use crate::presentation::{PresentationRole, RemoteAsk, RemoteLayout, RemoteNotice, StreamState};
+use crate::presentation::{
+    PresentationRole, RemoteAsk, RemoteLayout, RemoteNotice, RemotePick, RemotePickItem, StreamState,
+};
 use crate::sessions::RemoteSession;
 
 /// What a test puts wherever private text could be: typed text, output, a body, a key, a failure's wording. No line
@@ -492,6 +494,30 @@ fn session_events() -> Vec<MobileEvent> {
             session_id: session_id(),
             ask_id: private(),
         },
+        MobileEvent::Pick {
+            machine_id: machine_id(),
+            session_id: session_id(),
+            pick: RemotePick {
+                id: private(),
+                items: vec![RemotePickItem {
+                    id: private(),
+                    label: private(),
+                    subtitle: Some(private()),
+                    status: Some("blocked".to_owned()),
+                    status_color: None,
+                    status_shape: None,
+                }],
+                prompt: Some(private()),
+                query: Some(private()),
+                allow_custom: true,
+                selection: Some(private()),
+            },
+        },
+        MobileEvent::PickDismiss {
+            machine_id: machine_id(),
+            session_id: session_id(),
+            pick_id: private(),
+        },
         MobileEvent::SessionConnection {
             machine_id: machine_id(),
             session_id: session_id(),
@@ -657,6 +683,8 @@ fn every_event_reaches_the_app_and_the_log_keeps_its_kind_without_its_payload() 
         "I stream: presentation role role=presenter session=S1",
         "I stream: ask opened session=S1",
         "I stream: ask dismissed session=S1",
+        "I stream: pick opened session=S1",
+        "I stream: pick dismissed session=S1",
         "I pane: attached session=S1 pane=P1",
         "I pane: role role=none covered=false session=S1 pane=P1",
         "W pane: ended end=gone session=S1 pane=P1",
@@ -668,7 +696,7 @@ fn every_event_reaches_the_app_and_the_log_keeps_its_kind_without_its_payload() 
     }
     assert_eq!(
         lines(&text).len(),
-        26,
+        28,
         "a title, a name and a context write nothing:\n{text}"
     );
     captured.assert_clean();

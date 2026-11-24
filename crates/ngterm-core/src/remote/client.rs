@@ -220,14 +220,14 @@ impl PresentationClient {
     }
 
     /// Whether this viewer shows the session-bound picks an origin hands over, which the next hello says
-    /// ([`PICK_KINDS`]); off by default, so a viewer that draws none (the mobile apps) is never handed one.
+    /// ([`PICK_KINDS`]); off by default, so a viewer that draws none is never handed one.
     pub fn set_shows_picks(&mut self, shows_picks: bool) {
         self.pick_kinds = if shows_picks { &PICK_KINDS } else { &[] };
     }
 
     /// Whether this viewer takes what a headless origin held for its next presenter, which the next hello says
     /// ([`HELD_KINDS`]): the pending batch, and the offer token it passes to an overlay job's helper. Off by default, so
-    /// a viewer that does neither (the mobile apps) sees only what opens while it presents.
+    /// a viewer that does neither sees only what opens while it presents.
     pub fn set_takes_held(&mut self, takes_held: bool) {
         self.held_kinds = if takes_held { &HELD_KINDS } else { &[] };
     }

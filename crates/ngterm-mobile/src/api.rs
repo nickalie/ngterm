@@ -26,7 +26,8 @@ use crate::chat::{AgentCommand, ChatEvent, ChatState, UploadCancel};
 use crate::keys::{self, ExportProtection, KeyError, KeyPair};
 use crate::pane::{ClipboardPart, ClipboardReply, ClipboardWriteStatus, PaneClipboard, PaneEnd, PaneRef, PaneRole};
 use crate::presentation::{
-    AskReply, PresentationRole, RemoteAsk, RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,
+    AskReply, PickReply, PresentationRole, RemoteAsk, RemoteHud, RemoteLayout, RemoteNotice, RemotePick, RemoteStatus,
+    StreamState,
 };
 use crate::sessions::RemoteSession;
 use crate::transport::Transport;
@@ -182,6 +183,20 @@ pub enum MobileEvent {
         machine_id: String,
         session_id: String,
         ask_id: String,
+    },
+    /// A pick an attached session's origin bound to it and handed over: a picker over the session while it is on
+    /// screen. Answer it with [`MobileCore::answer_pick`].
+    Pick {
+        machine_id: String,
+        session_id: String,
+        pick: RemotePick,
+    },
+    /// A pick ended without this app's answer (answered elsewhere, its timeout ran out on the origin, or its stream
+    /// went): take it down.
+    PickDismiss {
+        machine_id: String,
+        session_id: String,
+        pick_id: String,
     },
     /// A shown pane has a fresh terminal (its first attach, or another after a lost link, a respawn or a takeover):
     /// draw it from scratch.
@@ -619,6 +634,27 @@ impl MobileCore {
             machine_id,
             session_id,
             ask_id,
+            reply,
+        })
+    }
+
+    /// The user's answer to the pick `pick_id` of an attached session (a [`MobileEvent::Pick`]). An answer to a pick
+    /// no longer open (dismissed, or its stream went) is dropped: the origin took the pick back.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn answer_pick(
+        &self,
+        machine_id: String,
+        session_id: String,
+        pick_id: String,
+        reply: PickReply,
+    ) -> Result<(), MobileError> {
+        self.actor.post(Command::AnswerPick {
+            machine_id,
+            session_id,
+            pick_id,
             reply,
         })
     }

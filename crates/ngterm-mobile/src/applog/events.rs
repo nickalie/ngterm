@@ -102,6 +102,8 @@ fn log(event: &MobileEvent) {
         | MobileEvent::Notify { .. }
         | MobileEvent::Ask { .. }
         | MobileEvent::AskDismiss { .. }
+        | MobileEvent::Pick { .. }
+        | MobileEvent::PickDismiss { .. }
         | MobileEvent::PaneAgent { .. } => session(event),
         MobileEvent::PaneAttached { .. }
         | MobileEvent::PaneLead { .. }
@@ -218,6 +220,10 @@ fn session(event: &MobileEvent) {
         MobileEvent::Ask { session_id, .. } => note!(INFO, tag::STREAM, "ask opened", session = session_id.as_str()),
         MobileEvent::AskDismiss { session_id, .. } => {
             note!(INFO, tag::STREAM, "ask dismissed", session = session_id.as_str());
+        }
+        MobileEvent::Pick { session_id, .. } => note!(INFO, tag::STREAM, "pick opened", session = session_id.as_str()),
+        MobileEvent::PickDismiss { session_id, .. } => {
+            note!(INFO, tag::STREAM, "pick dismissed", session = session_id.as_str());
         }
         MobileEvent::PaneAgent {
             session_id,

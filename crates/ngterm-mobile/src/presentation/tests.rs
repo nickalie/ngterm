@@ -17,7 +17,9 @@ use ngterm_core::remote::frames::{
     PresentationSound, PresentationStatus,
 };
 use ngterm_core::remote::frames::{PresentationInput, PresentationPane};
-use ngterm_core::remote::hub::{AGENT_KIND, NO_OVERLAYS_KIND, PANE_INPUT_KIND, STATUS_CHECKMARK_KIND};
+use ngterm_core::remote::hub::{
+    AGENT_KIND, HELD_KINDS, NO_OVERLAYS_KIND, PANE_INPUT_KIND, PICK_KINDS, STATUS_CHECKMARK_KIND,
+};
 use ngterm_core::remote::ssh::present_tail;
 use ngterm_proto::request::AskButton;
 use uuid::Uuid;
@@ -25,6 +27,8 @@ use uuid::Uuid;
 use super::*;
 use crate::transport::fake::{FakeConnection, FakeTransport};
 use crate::transport::{ChannelEnd, ChannelInput, ChannelPeer, Transport};
+
+mod picks;
 
 const MACHINE: &str = "m1";
 const SESSION: &str = "6F9619FF-8B86-D011-B42D-00C04FC964FF";
@@ -317,7 +321,7 @@ fn ask(id: &str, owner: i64) -> PresentationAsk {
 }
 
 #[test]
-fn attaching_opens_the_stream_with_a_hello_listing_no_page_kinds_and_the_agent_kind() {
+fn attaching_opens_the_stream_with_a_hello_listing_no_page_kinds_and_the_pick_held_and_agent_kinds() {
     local(async {
         let mut harness = Harness::attached(Some(1)).await;
 
@@ -328,6 +332,8 @@ fn attaching_opens_the_stream_with_a_hello_listing_no_page_kinds_and_the_agent_k
         let received = harness.received().await;
         let mut kinds = viewer_kinds(false);
         assert!(kinds.iter().any(|kind| kind == STATUS_CHECKMARK_KIND));
+        kinds.extend(PICK_KINDS.map(str::to_owned));
+        kinds.extend(HELD_KINDS.map(str::to_owned));
         kinds.extend([AGENT_KIND, NO_OVERLAYS_KIND].map(str::to_owned));
         assert_eq!(
             received.bodies,
@@ -667,6 +673,31 @@ fn an_overlay_is_refused_and_its_closes_change_nothing() {
     });
 }
 
+fn url_page(page: &str) -> PresentationPage {
+    PresentationPage {
+        width: None,
+        height: None,
+        page: page.to_owned(),
+        token: "t".to_owned(),
+        source: PresentationPageSource::Url {
+            address: "https://example.com".to_owned(),
+        },
+        identity: "example.com".to_owned(),
+        chromeless: false,
+        javascript: true,
+        navigation: true,
+        browse: false,
+        persistent: false,
+        background_color: None,
+        pane: None,
+        size_percent: None,
+        follow: false,
+        markdown_links: None,
+        text_log: None,
+        text_seed: None,
+    }
+}
+
 #[test]
 fn a_page_is_refused_as_unsupported_and_its_closes_change_nothing() {
     local(async {
@@ -677,30 +708,7 @@ fn a_page_is_refused_as_unsupported_and_its_closes_change_nothing() {
         harness.received().await;
         harness.take_events();
 
-        harness
-            .deliver(Body::PageRequest(PresentationPage {
-                width: None,
-                height: None,
-                page: "p1".to_owned(),
-                token: "t".to_owned(),
-                source: PresentationPageSource::Url {
-                    address: "https://example.com".to_owned(),
-                },
-                identity: "example.com".to_owned(),
-                chromeless: false,
-                javascript: true,
-                navigation: true,
-                browse: false,
-                persistent: false,
-                background_color: None,
-                pane: None,
-                size_percent: None,
-                follow: false,
-                markdown_links: None,
-                text_log: None,
-                text_seed: None,
-            }))
-            .await;
+        harness.deliver(Body::PageRequest(url_page("p1"))).await;
         harness
             .deliver(Body::PageClose(PresentationPageChange::page("p1")))
             .await;

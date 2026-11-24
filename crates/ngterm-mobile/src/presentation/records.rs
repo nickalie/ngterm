@@ -7,8 +7,9 @@ use ngterm_core::model::{AskAlignment, AskChoiceForm, AskInputForm, AskInputMode
 use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::frames::{
     PresentationAsk, PresentationHud, PresentationLayout, PresentationMode, PresentationNotify, PresentationPane,
-    PresentationStatus,
+    PresentationPick, PresentationStatus,
 };
+use ngterm_proto::PickItem;
 
 /// The state of an attached session's presentation stream.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
@@ -299,6 +300,73 @@ pub struct AskReply {
     pub text: Option<String>,
     /// A choice list's selected ids.
     pub selected: Option<Vec<String>>,
+}
+
+/// A pick the origin bound to an attached session and handed over: a picker over the session while it is on screen.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RemotePick {
+    /// What [`crate::MobileCore::answer_pick`] names it by.
+    pub id: String,
+    pub items: Vec<RemotePickItem>,
+    /// The picker's title.
+    pub prompt: Option<String>,
+    /// The search field's initial text.
+    pub query: Option<String>,
+    /// Whether the search text can be the answer, when no item fits it.
+    pub allow_custom: bool,
+    /// The id of the item selected at open.
+    pub selection: Option<String>,
+}
+
+impl From<PresentationPick> for RemotePick {
+    fn from(pick: PresentationPick) -> Self {
+        Self {
+            id: pick.id,
+            items: pick.items.into_iter().map(RemotePickItem::from).collect(),
+            prompt: pick.prompt,
+            query: pick.query,
+            allow_custom: pick.allow_custom == Some(true),
+            selection: pick.selection,
+        }
+    }
+}
+
+/// One item of a pick.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RemotePickItem {
+    pub id: String,
+    pub label: String,
+    pub subtitle: Option<String>,
+    /// The item's status glyph, as a session status's wire name (`blocked`, …); `None` or `idle` draws none.
+    pub status: Option<String>,
+    /// The glyph's `#rrggbb` tint.
+    pub status_color: Option<String>,
+    /// The glyph's shape (`circle`, `square`, …).
+    pub status_shape: Option<String>,
+}
+
+impl From<PickItem> for RemotePickItem {
+    fn from(item: PickItem) -> Self {
+        Self {
+            id: item.id,
+            label: item.label,
+            subtitle: item.subtitle,
+            status: item.status,
+            status_color: item.status_color,
+            status_shape: item.status_shape,
+        }
+    }
+}
+
+/// The user's answer to a pick.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum PickReply {
+    /// The item `item` (its id) was picked.
+    Picked { item: String },
+    /// The search text `query` is the answer, for a pick that allows one.
+    Custom { query: String },
+    /// The picker was closed with no answer.
+    Cancelled,
 }
 
 /// A pane as the origin names it: its identity, or `scratch`.

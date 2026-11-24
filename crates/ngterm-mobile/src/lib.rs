@@ -78,8 +78,9 @@ pub use pane::{
 };
 pub use peer::{PeerCapabilities, PeerKind, peer_capabilities};
 pub use presentation::{
-    AskReply, PresentationRole, RemoteAsk, RemoteAskButton, RemoteAskChoice, RemoteAskChoices, RemoteAskInput,
-    RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,
+    AskReply, PickReply, PickRow, PresentationRole, RemoteAsk, RemoteAskButton, RemoteAskChoice, RemoteAskChoices,
+    RemoteAskInput, RemoteHud, RemoteLayout, RemoteNotice, RemotePick, RemotePickItem, RemoteStatus, StreamState,
+    pick_rows,
 };
 pub use release::{ReleaseError, release_checksum};
 pub use sessions::RemoteSession;
