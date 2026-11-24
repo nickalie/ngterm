@@ -524,11 +524,11 @@ def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wai
     assert_ok(live.request("session.close", holding))
 
 
-@LIVE_IN_ANY_SHELL
+@LIVE
 @pytest.mark.covers("session.new", "session.text")
 def test_a_device_attributes_query_at_a_new_live_sessions_start_gets_one_answer(live):
     """A DA query a new Live session's program writes at once, while its pane still attaches, gets one answer, not a
-    second one that a shell would show at its prompt (upstream zmx patch 0006-single-da-answer, #972)."""
+    second one that a shell would show at its prompt (upstream zmx patch 0006-single-da-answer, c9abe6ff)."""
     script = (
         "stty raw -echo min 0 time 5; printf '\\033[c'; sleep 2; "
         "r=$(dd bs=4096 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
