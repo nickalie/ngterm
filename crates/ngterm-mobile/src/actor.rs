@@ -50,7 +50,7 @@ mod reconnect_tests;
 mod tests;
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle, ThreadId};
@@ -307,6 +307,8 @@ struct State<T: Transport> {
     listings: RefCell<HashMap<String, Kept>>,
     /// The last ticket handed out ([`State::ticket`]).
     tickets: Cell<u64>,
+    /// The tickets of the listings in flight ([`State::begin_listing`]).
+    open_listings: Rc<RefCell<BTreeSet<u64>>>,
     /// The attached sessions' presentation streams.
     presentations: RefCell<Presentations<T::Connection>>,
     /// The shown panes.
@@ -325,9 +327,21 @@ struct Kept {
     tree: Option<ControlRemoteTree>,
     /// The ticket of the listing kept. A listing that began before it is stale.
     as_of: u64,
-    /// The sessions ended since that listing began, with their tickets: a listing that began before an end and is
-    /// kept loses the session again.
+    /// The sessions ended since that listing or one still in flight began, with their tickets: a listing that began
+    /// before an end loses the session again.
     ended: Vec<(u64, String)>,
+}
+
+/// A listing in flight, from [`State::begin_listing`] until it drops.
+struct Listing {
+    began: u64,
+    open: Rc<RefCell<BTreeSet<u64>>>,
+}
+
+impl Drop for Listing {
+    fn drop(&mut self) {
+        self.open.borrow_mut().remove(&self.began);
+    }
 }
 
 /// A machine [`suspend`] set aside.
@@ -380,6 +394,7 @@ impl<T: Transport> State<T> {
             generation: Cell::new(0),
             listings: RefCell::new(HashMap::new()),
             tickets: Cell::new(0),
+            open_listings: Rc::default(),
             presentations: RefCell::new(Presentations::default()),
             panes: RefCell::new(Panes::new(notes)),
             chats: RefCell::new(Chats::default()),
@@ -437,6 +452,16 @@ impl<T: Transport> State<T> {
         let ticket = self.tickets.get() + 1;
         self.tickets.set(ticket);
         ticket
+    }
+
+    /// A listing begins: its ticket, held as in flight until the [`Listing`] drops.
+    fn begin_listing(&self) -> Listing {
+        let began = self.ticket();
+        self.open_listings.borrow_mut().insert(began);
+        Listing {
+            began,
+            open: Rc::clone(&self.open_listings),
+        }
     }
 
     /// Whether `connection` is still `machine_id`'s: a result read on a connection since closed or replaced changes
@@ -1030,7 +1055,12 @@ fn listed<T: Transport>(
         if kept.as_of > began {
             return sessions::listed_sessions(&tree);
         }
-        kept.ended.retain(|(ticket, _)| *ticket > began);
+        let oldest = state
+            .open_listings
+            .borrow()
+            .first()
+            .map_or(began, |open| began.min(*open));
+        kept.ended.retain(|(ticket, _)| *ticket > oldest);
         kept.tree = Some(tree.clone());
         kept.as_of = began;
     }
@@ -1048,9 +1078,9 @@ async fn list_sessions<T: Transport>(
     link: OnMachine<T::Connection>,
     machine_id: String,
 ) -> Result<Vec<RemoteSession>, MobileError> {
-    let began = state.ticket();
+    let listing = state.begin_listing();
     let tree = sessions::list(&*link.connection, &link.host).await.map_err(remote)?;
-    Ok(listed(&state, &link, machine_id, tree, began))
+    Ok(listed(&state, &link, machine_id, tree, listing.began))
 }
 
 async fn create_session<T: Transport>(
@@ -1059,15 +1089,22 @@ async fn create_session<T: Transport>(
     machine_id: String,
     name: Option<String>,
 ) -> Result<RemoteSession, MobileError> {
-    let began = Cell::new(0);
+    let listing = Cell::new(None);
     let (created, tree) = sessions::create(&*link.connection, &link.host, name.as_deref(), || {
-        began.set(state.ticket());
+        listing.set(Some(state.begin_listing()));
     })
     .await
     .map_err(remote)?;
     let receipt = RemoteSession::listed(&created, tree.endpoint.peer());
     let tree = with_other_app(&state, &machine_id, tree);
-    listed(&state, &link, machine_id, tree, began.get());
+    let listing = listing.take();
+    listed(
+        &state,
+        &link,
+        machine_id,
+        tree,
+        listing.as_ref().map_or(0, |listing| listing.began),
+    );
     Ok(receipt)
 }
 
@@ -1089,16 +1126,23 @@ async fn duplicate_session<T: Transport>(
     machine_id: String,
     source: String,
 ) -> Result<RemoteSession, MobileError> {
-    let began = Cell::new(0);
+    let listing = Cell::new(None);
     let source = (source.as_str(), state.app_of(&machine_id, &source));
     let (created, tree) = sessions::duplicate(&*link.connection, &link.host, source, || {
-        began.set(state.ticket());
+        listing.set(Some(state.begin_listing()));
     })
     .await
     .map_err(remote)?;
     let receipt = RemoteSession::listed(&created, tree.endpoint.peer());
     let tree = with_other_app(&state, &machine_id, tree);
-    listed(&state, &link, machine_id, tree, began.get());
+    let listing = listing.take();
+    listed(
+        &state,
+        &link,
+        machine_id,
+        tree,
+        listing.as_ref().map_or(0, |listing| listing.began),
+    );
     Ok(receipt)
 }
 
@@ -1370,14 +1414,14 @@ fn check_gone<T: Transport>(state: &Rc<State<T>>, check: GoneCheck) {
     };
     let state = Rc::clone(state);
     tokio::task::spawn_local(async move {
-        let began = state.ticket();
+        let listing = state.begin_listing();
         let gone = match sessions::list(&*link.connection, &link.host).await {
             Ok(tree) => {
                 let tree = with_skipped_app(&state, &check.machine_id, tree);
                 let gone = !tree
                     .apps()
                     .any(|app| app.sessions.iter().any(|listed| listed.id == check.session_id));
-                listed(&state, &link, check.machine_id.clone(), tree, began);
+                listed(&state, &link, check.machine_id.clone(), tree, listing.began);
                 gone
             }
             Err(_) => false,

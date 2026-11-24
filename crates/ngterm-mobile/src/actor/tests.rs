@@ -762,6 +762,49 @@ fn a_listing_that_began_before_an_end_is_kept_without_the_ended_session_and_an_o
     );
 }
 
+#[test]
+fn a_listing_that_began_before_an_end_answers_without_the_ended_session_after_a_newer_listing_was_kept() {
+    let transport = FakeTransport::new();
+    let close = ngterm_core::remote::ssh::control_tail(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        &ngterm_core::remote::origin_replies::end_session_arguments(PARENT),
+    );
+    transport.script(
+        &close,
+        crate::transport::fake::Script::ok(r#"{"ok": true, "result": {}}"#),
+    );
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+    block_on(core.connect(machine("m1", "box"))).expect("connected");
+    let first = core.list_sessions("m1".to_owned());
+    let mut first = std::pin::pin!(first);
+    assert!(block_on(poll_once(first.as_mut())).is_none());
+    let deadline = std::time::Instant::now() + WAIT;
+    let opened = loop {
+        if let Some(opened) = transport.take_opened().pop() {
+            break opened;
+        }
+        assert!(std::time::Instant::now() < deadline, "the listing never ran");
+        thread::yield_now();
+    };
+    let tree = ngterm_core::remote::ssh::tree_tail(ngterm_core::remote::origin::OriginShell::Posix);
+    transport.script(&tree, listing(&[(PARENT, None), (OTHER, None)]));
+    assert_eq!(block_on(core.end_session("m1".to_owned(), PARENT.to_owned())), Ok(()));
+    transport.script(&tree, listing(&[(OTHER, None)]));
+    block_on(core.list_sessions("m1".to_owned())).expect("listed after the end");
+    let (_, sessions) = next_tree(&events);
+    assert_eq!(ids(&sessions), [OTHER]);
+
+    let old = listing(&[(PARENT, None), (OTHER, None)]);
+    block_on(opened.peer.data(old.stdout));
+    block_on(opened.peer.end(old.end));
+    assert_eq!(
+        ids(&block_on(first).expect("listed")),
+        [OTHER],
+        "the end applies to the older listing too"
+    );
+}
+
 /// A listing of `sessions` as the far side answers it.
 fn tree_of(sessions: &[(&str, Option<&str>)]) -> ngterm_proto::ControlRemoteTree {
     let script = listing(sessions);
