@@ -149,6 +149,8 @@ const _: () = assert!(KILL_LIMIT.as_millis() <= TERMINATION_LIMIT.as_millis());
 const HELPER_IDLE: Duration = Duration::from_secs(60);
 /// How often a client's input waiting for the replies before it looks whether a handoff froze the helper.
 const REPLIES_WRITTEN_POLL: Duration = Duration::from_millis(20);
+/// How long input refused behind the replies written just before it waits for the program to read them.
+const REPLIES_DRAIN_WAIT: Duration = Duration::from_secs(2);
 
 /// The pane ids of this process, for the PTY threads' names and to tell a session from a later one of its name.
 static NEXT_PANE: AtomicU64 = AtomicU64::new(1);
@@ -409,9 +411,11 @@ impl Core {
     /// Wait until the helper wrote the replies made ready so far (the batch it is writing, and the next one when
     /// replies wait), so a client's input queued next reaches the program after them, as a terminal writes its reports
     /// and its user's keys into one stream. Not while a handoff holds the helper, nor once the program ended.
-    fn await_replies_written(&self) {
+    /// Returns whether there were replies to wait for.
+    fn await_replies_written(&self) -> bool {
         let mut state = self.lock();
         let target = state.hold.batches_written + u64::from(state.hold.helper_busy) + u64::from(self.outlet.ready());
+        let waited = target > state.hold.batches_written;
         while state.hold.batches_written < target && !state.hold.frozen && state.exit.is_none() {
             self.timer.notify_all();
             state = self
@@ -419,6 +423,7 @@ impl Core {
                 .wait_timeout(state, REPLIES_WRITTEN_POLL)
                 .map_or_else(|poisoned| poisoned.into_inner().0, |(guard, _)| guard);
         }
+        waited
     }
 
     /// Whether the PTY's reads, paused for output held behind a waiting read, are to go on now (the pause is
@@ -826,10 +831,24 @@ impl Pane {
         let held = self.core.hold_input(&state, data);
         self.release(state);
         if !held {
-            self.core.await_replies_written();
-            self.actor.write_input(data)?;
+            let after_replies = self.core.await_replies_written();
+            self.write_after(data, after_replies)?;
         }
         Ok(())
+    }
+
+    /// Queue `data` through the PTY's admission rules; while the replies written just before it fill the input
+    /// queue, wait up to [`REPLIES_DRAIN_WAIT`] for the program to read them.
+    fn write_after(&self, data: &[u8], after_replies: bool) -> Result<(), WriteError> {
+        let deadline = Instant::now() + REPLIES_DRAIN_WAIT;
+        loop {
+            match self.actor.write_input(data) {
+                Err(WriteError::Backpressure) if after_replies && Instant::now() < deadline => {
+                    std::thread::sleep(REPLIES_WRITTEN_POLL);
+                }
+                result => return result,
+            }
+        }
     }
 
     /// Paste on the authoritative VT for a current client epoch; lazy reads return to that source client.
@@ -892,7 +911,10 @@ impl Pane {
         state.register_paste_bridge(id, epoch, paste.bridge.as_ref(), &bytes);
         let grants = state.terminal.clipboard_grants();
         grants.lock().unwrap_or_else(PoisonError::into_inner).pasted(&bytes);
-        self.send_input(state, &bytes)?;
+        if let Err(err) = self.send_input(state, &bytes) {
+            self.core.lock().revoke_paste(&bytes);
+            return Err(err);
+        }
         Ok(true)
     }
 

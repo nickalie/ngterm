@@ -36,18 +36,9 @@ impl State {
         bridge: Option<&ClipboardPasteBridge>,
         bytes: &[u8],
     ) {
-        let Some(body) = bytes.strip_prefix(b"\x1b]") else {
+        let Some(token) = paste_token(bytes) else {
             return;
         };
-        let Some(end) = body.windows(2).position(|pair| pair == b"\x1b\\") else {
-            return;
-        };
-        let Some(packet) = crate::attach_tty::clipboard::Packet::parse(&body[..end]) else {
-            return;
-        };
-        if packet.token.is_empty() {
-            return;
-        }
         if self.replies.paste_bridges.len() >= 32 {
             let evicted = self.replies.paste_bridges.remove(0);
             // Consuming another one-time grant can swap the Rust grant table's order.
@@ -55,7 +46,7 @@ impl State {
             lock(&self.terminal.clipboard_grants()).consume(&evicted.token, vt::ClipboardDirection::Read);
         }
         self.replies.paste_bridges.push(PasteBridge {
-            token: packet.token,
+            token,
             id: bridge.map(|bridge| bridge.id.clone()),
             available: bridge.map_or_else(Vec::new, |bridge| bridge.available.iter().take(16).cloned().collect()),
             client,
@@ -64,6 +55,15 @@ impl State {
             deadline: Instant::now() + DELEGATION_WAIT,
             consumed: false,
         });
+    }
+
+    /// Undo [`State::register_paste_bridge`] and the read grant of the paste `bytes`, which the program never got.
+    pub(in crate::server) fn revoke_paste(&mut self, bytes: &[u8]) {
+        let Some(token) = paste_token(bytes) else {
+            return;
+        };
+        self.replies.paste_bridges.retain(|bridge| bridge.token != token);
+        lock(&self.terminal.clipboard_grants()).consume(&token, vt::ClipboardDirection::Read);
     }
 
     pub(super) fn bridge_read(&mut self, details: &vt::ClipboardReadDetails) -> Read {
@@ -106,4 +106,11 @@ impl State {
             id: id.clone(),
         }
     }
+}
+
+fn paste_token(bytes: &[u8]) -> Option<Vec<u8>> {
+    let body = bytes.strip_prefix(b"\x1b]")?;
+    let end = body.windows(2).position(|pair| pair == b"\x1b\\")?;
+    let packet = crate::attach_tty::clipboard::Packet::parse(&body[..end])?;
+    (!packet.token.is_empty()).then_some(packet.token)
 }

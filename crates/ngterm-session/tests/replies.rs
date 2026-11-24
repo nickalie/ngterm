@@ -759,20 +759,43 @@ fn a_paste_past_the_held_limit_reaches_the_program_after_the_report_and_key_that
             selection: "c".into(),
             allow_unsafe: false,
         };
-        let deadline = Instant::now() + PATIENCE;
-        // the PTY admits input this large only once the report and the key before it went through
-        loop {
-            match pane.clipboard_paste(owner, epoch, &paste) {
-                Err(ngterm_pty::WriteError::Backpressure) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                result => {
-                    assert!(result?);
-                    return Ok(());
-                }
-            }
-        }
+        assert!(pane.clipboard_paste(owner, epoch, &paste)?);
+        Ok(())
     })
+}
+
+/// A lazy paste the PTY refuses leaves no read grant for its token behind.
+#[cfg(unix)]
+#[test]
+fn a_refused_lazy_paste_leaves_no_read_grant() -> TestResult {
+    use ngterm_session::protocol::{ClipboardPaste, ClipboardPasteBridge};
+    let dir = tempfile::tempdir()?;
+    let script = "stty raw -echo; printf '\\033[?5522h'; printf 'armed\\r\\n'; sleep 30";
+    let (pane, creator) = Pane::spawn(pane_config(
+        "refused-paste",
+        dir.path(),
+        support::spec(&["sh", "-c", script]),
+    ))?;
+    let mut owner = Viewer::new(creator, None)?;
+    owner.expect(&pane, "armed");
+    pane.write(&vec![b'x'; 4 << 20])?;
+    let paste = ClipboardPaste {
+        bridge: Some(ClipboardPasteBridge {
+            id: "lazy".into(),
+            available: vec!["text/plain".into()],
+        }),
+        contents: Vec::new(),
+        text_source: false,
+        selection: "c".into(),
+        allow_unsafe: false,
+    };
+    assert!(matches!(
+        pane.clipboard_paste(owner.id(), owner.epoch, &paste),
+        Err(ngterm_pty::WriteError::Backpressure)
+    ));
+    let grants = pane.with_terminal(|terminal| format!("{:?}", terminal.clipboard_grants().lock().unwrap()));
+    assert!(grants.contains("entries: 0"), "{grants}");
+    Ok(())
 }
 
 /// How the Kitty barrier of [`behind_a_scheme_report`] ends.

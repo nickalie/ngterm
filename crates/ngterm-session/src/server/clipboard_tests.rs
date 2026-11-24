@@ -549,6 +549,13 @@ fn next_request_answer(request: DelegatedRequest) -> Answer {
 }
 
 fn lazy_paste(core: &Arc<Core>, owner: &Attached) -> Vec<u8> {
+    let bytes = lazy_paste_bytes(core, owner);
+    let end = bytes.windows(2).position(|part| part == b"\x1b\\").unwrap();
+    crate::attach_tty::clipboard::Packet::parse(&bytes[2..end])
+        .unwrap()
+        .token
+}
+fn lazy_paste_bytes(core: &Arc<Core>, owner: &Attached) -> Vec<u8> {
     use crate::protocol::ClipboardPasteBridge;
     let bridge = ClipboardPasteBridge {
         id: "lazy-source".into(),
@@ -567,10 +574,7 @@ fn lazy_paste(core: &Arc<Core>, owner: &Attached) -> Vec<u8> {
     let bytes = state.paste_bytes(&contents, false, "c", false).unwrap();
     state.register_paste_bridge(owner.subscription.id(), epoch, Some(&bridge), &bytes);
     state.terminal.clipboard_grants().lock().unwrap().pasted(&bytes);
-    let end = bytes.windows(2).position(|part| part == b"\x1b\\").unwrap();
-    crate::attach_tty::clipboard::Packet::parse(&bytes[2..end])
-        .unwrap()
-        .token
+    bytes
 }
 fn token_read(types: &str, token: &[u8]) -> Vec<u8> {
     format!(
@@ -680,6 +684,54 @@ fn evicting_a_lazy_paste_revokes_its_grant_after_an_earlier_token_was_consumed()
     lazy_paste(&core, &owner);
     lazy_paste(&core, &owner);
     core.read(&token_read("application/type12", &tokens[1]));
+    assert!(matches!(
+        delegated(&owner).2,
+        DelegatedRequest::ClipboardReadMime {
+            bridge: None,
+            granted: false,
+            ..
+        }
+    ));
+}
+#[test]
+fn refused_lazy_pastes_leave_the_token_of_an_earlier_paste_readable() {
+    let (core, owner) = core(ReplyMetadata::default());
+    core.read(b"\x1b[?5522h");
+    let tokens: Vec<_> = (0..31).map(|_| lazy_paste(&core, &owner)).collect();
+    for _ in 0..3 {
+        let refused = lazy_paste_bytes(&core, &owner);
+        core.lock().revoke_paste(&refused);
+    }
+    core.read(&token_read("application/type12", &tokens[0]));
+    assert!(matches!(
+        delegated(&owner).2,
+        DelegatedRequest::ClipboardReadMime {
+            bridge: Some(_),
+            granted: true,
+            ..
+        }
+    ));
+}
+#[test]
+fn a_refused_lazy_paste_token_is_not_readable() {
+    let (core, owner) = core(ReplyMetadata::default());
+    core.read(b"\x1b[?5522h");
+    let refused = lazy_paste_bytes(&core, &owner);
+    core.lock().revoke_paste(&refused);
+    let end = refused.windows(2).position(|part| part == b"\x1b\\").unwrap();
+    let token = crate::attach_tty::clipboard::Packet::parse(&refused[2..end])
+        .unwrap()
+        .token;
+    assert!(
+        !core
+            .lock()
+            .terminal
+            .clipboard_grants()
+            .lock()
+            .unwrap()
+            .peek(&token, vt::ClipboardDirection::Read)
+    );
+    core.read(&token_read("application/type12", &token));
     assert!(matches!(
         delegated(&owner).2,
         DelegatedRequest::ClipboardReadMime {
