@@ -1,6 +1,6 @@
 //! The session server of one namespace: `ngterm-session server <namespace directory>`, started on demand by the first
 //! client that finds none ([`spawn::connect_or_start`]), detached from it, and stopped by itself once it holds no
-//! session and no client ([`lifecycle`]).
+//! session and no client, or at once when a client of a later login asks an empty server to retire ([`lifecycle`]).
 //!
 //! herdr: `src/server/headless/bootstrap.rs` (`run_server`: bind, then serve until stopped; a second server under a
 //! taken endpoint gives up), `src/server/client_accept.rs` and `src/api/server.rs` (the accept loop and a thread per
@@ -30,8 +30,10 @@
 //! server serves every role: an attach connection attaches to a session, creating it when asked, and carries its
 //! stream ([`attach`]); an api connection asks what `SessionHost` and `ngtermctl clipboard set` need, request by
 //! request ([`api`]); a control connection holds the server, and asks it to hand its sessions over to a server of
-//! another build ([`handoff`]), which it takes when it advertises [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`]. A
-//! role this server does not know is refused with [`crate::protocol::ErrorCode::UnsupportedRole`].
+//! another build ([`handoff`]), which it takes when it advertises [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`], or
+//! to retire (`retire.request.v1`, [`crate::protocol::Control::RetireRequest`]), which it does only when it holds no
+//! session, disconnecting its clients. A role this server does not know is refused with
+//! [`crate::protocol::ErrorCode::UnsupportedRole`].
 //!
 //! Every api and attach operation runs under the server's operation lock, shared, and only for a connection of the
 //! current generation, the one it was admitted in at its accept (not at its hello, which may come after a handoff
@@ -42,7 +44,8 @@
 //!
 //! [`command`] is what `ngterm-session server …` runs: `server <namespace directory>` serves the namespace;
 //! `server <namespace directory> --handoff-import <channel> <token>` is an update handoff's replacement, which takes the
-//! namespace's sessions and endpoint over from the server that started it ([`run_import`]).
+//! namespace's sessions and endpoint over from the server that started it ([`run_import`]); `server <namespace
+//! directory> --launchd-job <label>` serves the namespace as the launchd job `label` ([`spawn::job`]).
 
 pub mod api;
 mod attach;
@@ -263,7 +266,7 @@ fn serve(endpoint: &Endpoint, accepting: Accepting, shared: &Arc<Shared>) -> Sto
 }
 
 /// What `ngterm-session server <args…>` runs, `args` being what follows `server` (module docs), with its exit status:
-/// [`EXIT_STOPPED`] once it stopped by itself or handed its sessions over, [`EXIT_TAKEN`] when another server holds
+/// [`EXIT_STOPPED`] once it stopped by itself, retired or handed its sessions over, [`EXIT_TAKEN`] when another server holds
 /// the namespace, [`EXIT_USAGE`] for arguments it does not take (after a usage line on standard error), else
 /// [`EXIT_FAILED`]. A server of a launchd job (`server <directory> --launchd-job <label>`, [`spawn::job`]) refuses a
 /// label not of its namespace before it takes the endpoint, and removes its job however serving ends.

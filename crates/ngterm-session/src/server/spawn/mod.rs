@@ -277,25 +277,40 @@ pub enum StartError {
 ///
 /// Every [`StartError`]; a [`StartError::Refused`] carries the server's welcome.
 pub fn connect_or_start(endpoint: &Endpoint, hello: &Hello, options: &StartOptions) -> Result<Connected, StartError> {
+    past_earlier_logins(
+        options.login,
+        || of_any_build(endpoint, hello, options),
+        |pid| match request_retire(endpoint, options, pid) {
+            Ok(()) => tracing::info!(pid, "retired a live session server of an earlier login"),
+            Err(reason) => tracing::warn!(pid, %reason, "a live session server of an earlier login stays"),
+        },
+    )
+}
+
+/// The connection `look` makes once a server [`stays`], having asked each one of an earlier login than `own` to
+/// `retire` on the way; a handoff and the servers started on a pass left behind are the returned call's too.
+fn past_earlier_logins(
+    own: Option<i64>,
+    mut look: impl FnMut() -> Result<Connected, StartError>,
+    mut retire: impl FnMut(u32),
+) -> Result<Connected, StartError> {
     let mut retired = None;
+    let mut spawned = Vec::new();
+    let mut handoff = None;
     loop {
-        let connected = of_any_build(endpoint, hello, options)?;
+        let mut connected = look()?;
         let pid = connected.welcome.pid;
-        if stays(
-            &connected.welcome,
-            connected.started_here().is_some(),
-            retired,
-            options.login,
-        ) {
+        if stays(&connected.welcome, connected.started_here().is_some(), retired, own) {
+            connected.spawned = spawned.into_iter().chain(connected.spawned).collect();
+            connected.handoff = connected.handoff.or(handoff);
             return Ok(connected);
         }
+        spawned.append(&mut connected.spawned);
+        handoff = handoff.or(connected.handoff.take());
         // a retired server takes no connection after its decision, so a later look finds the next server; one that
         // refused is taken as it is
         drop(connected.stream);
-        match request_retire(endpoint, options, pid) {
-            Ok(()) => tracing::info!(pid, "retired a live session server of an earlier login"),
-            Err(reason) => tracing::warn!(pid, %reason, "a live session server of an earlier login stays"),
-        }
+        retire(pid);
         retired = Some(pid);
     }
 }

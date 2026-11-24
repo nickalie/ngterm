@@ -1,5 +1,5 @@
-//! When the session server stops: never while a session lives, and once it holds no session and no client for a
-//! grace period.
+//! When the session server stops: never while a session lives, once it holds no session and no client for a grace
+//! period, and at once when it holds no session and is asked to retire, clients or not.
 //!
 //! herdr: `src/server/shutdown.rs` at `HERDR_REV` (`build/pins.env`), licensed under the Apache License 2.0, modified.
 //! Kept: one stop decision, made once, with its reason. Changed: herdr's server runs until it is stopped (a signal,

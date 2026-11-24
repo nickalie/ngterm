@@ -521,13 +521,13 @@ fn the_host_lists_reads_types_into_and_kills_a_real_session() -> TestResult {
 }
 
 /// Upstream #972 on macOS: the sessions of a server left from an earlier login are marked, and a client of a later
-/// login retires that server once it holds no session, starting its own (the login is set here, since one test
-/// process has one).
+/// login retires that server once it holds no session, disconnecting its other clients and starting its own (the login
+/// is set here, since one test process has one).
 #[test]
 fn a_server_of_an_earlier_login_marks_its_sessions_and_is_retired_once_it_holds_none() -> TestResult {
     use ngterm_session::endpoint::Endpoint;
-    use ngterm_session::protocol::{Hello, Role};
-    use ngterm_session::server::spawn::{StartOptions, connect_or_start};
+    use ngterm_session::protocol::{Hello, Role, read_frame};
+    use ngterm_session::server::spawn::{StartOptions, connect_existing, connect_or_start};
 
     let (earlier, later) = (Some(100_001), Some(100_002));
     let server = Server::start_in(earlier)?;
@@ -561,7 +561,17 @@ fn a_server_of_an_earlier_login_marks_its_sessions_and_is_retired_once_it_holds_
     drop(held);
 
     assert_eq!(host(server.directory())?.kill(NAME, true), KillOutcome::Killed);
+    let other = connect_existing(&endpoint, &hello, PATIENCE)?.ok_or("no server")?;
+    assert_eq!(other.welcome.pid, std::process::id());
+    let (read, closed) = std::sync::mpsc::channel();
+    let mut stream = other.stream;
+    thread::spawn(move || read.send(read_frame(&mut stream).is_err()));
     let fresh = connect_or_start(&endpoint, &hello, &options)?;
+    assert_eq!(
+        closed.recv_timeout(PATIENCE),
+        Ok(true),
+        "the retired server disconnects a client it still had"
+    );
     assert_ne!(
         fresh.welcome.pid,
         std::process::id(),

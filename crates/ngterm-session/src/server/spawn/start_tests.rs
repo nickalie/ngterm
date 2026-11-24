@@ -226,3 +226,45 @@ fn only_a_server_of_an_earlier_login_found_here_is_asked_to_retire() {
     assert!(stays(&welcome, false, None, None), "of an unknown login");
     assert!(stays(&welcome, true, None, Some(100_002)), "started by this call");
 }
+
+#[test]
+fn a_handoff_and_the_servers_started_on_a_retired_pass_are_the_returned_calls() {
+    let namespace = Namespace::new();
+    namespace.endpoint.prepare_directory().unwrap();
+    let _listener = namespace.endpoint.bind().unwrap();
+    let started = |pid| Started {
+        pid,
+        path: SpawnPath::Detached,
+    };
+    let committed = HandoffAttempt::Committed { from: "a".to_owned() };
+    let mut passes = vec![
+        (9, Some(100_002), vec![started(9)], None),
+        (7, Some(100_001), vec![started(5)], Some(committed.clone())),
+    ];
+    let mut retired = Vec::new();
+    let connected = past_earlier_logins(
+        Some(100_002),
+        || {
+            let (pid, login, spawned, handoff) = passes.pop().unwrap();
+            Ok(Connected {
+                stream: namespace.endpoint.connect().unwrap(),
+                welcome: Welcome {
+                    build: "b".to_owned(),
+                    capabilities: Vec::new(),
+                    pid,
+                    error: None,
+                    login,
+                    job: None,
+                },
+                spawned,
+                handoff,
+            })
+        },
+        |pid| retired.push(pid),
+    )
+    .unwrap();
+    assert_eq!(retired, [7]);
+    assert_eq!(connected.welcome.pid, 9);
+    assert_eq!(connected.handoff, Some(committed));
+    assert_eq!(connected.spawned, [started(5), started(9)]);
+}
