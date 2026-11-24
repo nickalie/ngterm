@@ -25,6 +25,7 @@ from agterm_conformance import transport
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from agterm_conformance.live_client import PipedProcess
     from agterm_conformance.pty_process import PtyProcess
 
 # How long the Rust build's session server outlives its last client and session (`IDLE_GRACE`,
@@ -64,7 +65,7 @@ def live_socket_directory(
     return f"/tmp/{name}-live-{digest}"
 
 
-def _live_leading_client(instance: Any, endpoint: Mapping[str, Any], daemon: str) -> PtyProcess:
+def _live_leading_client(instance: Any, endpoint: Mapping[str, Any], daemon: str) -> PtyProcess | PipedProcess:
     # Late: live_client imports the adapter base, which imports this module.
     from agterm_conformance import live_client
 
@@ -97,7 +98,7 @@ class Vocabulary:
     # `app_dir_name`; `environ` is the instance's launch environment, where a namespace depends on it (Windows).
     socket_directory: Callable[..., str] = live_socket_directory
     # `leading_client(instance, endpoint, daemon)`: a second client of a daemon that claims its lead.
-    leading_client: Callable[[Any, Mapping[str, Any], str], PtyProcess] = _live_leading_client
+    leading_client: Callable[[Any, Mapping[str, Any], str], PtyProcess | PipedProcess] = _live_leading_client
     # The executable of the one server per namespace that hosts every live session (`<server> server <directory>`),
     # or None where every session is a daemon of its own; with one, every process carrying the directory variable is
     # the namespace's too, and the leftover check gives the server `server_idle` seconds more to exit.

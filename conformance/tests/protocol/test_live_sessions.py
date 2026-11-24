@@ -855,7 +855,7 @@ def _take(stream, size, timeout=0.05):
         return b""
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers(
     "session.overlay.job.run",
     "field:tree.session.presenters",
@@ -894,7 +894,7 @@ def test_job_run_serves_an_overlay_a_presenter_shows(live):
     assert_ok(live.request("session.close", sid))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.overlay.open", "session.overlay.resize", "field:tree.session.remoteOverlays")
 def test_points_are_refused_for_an_overlay_a_presenter_shows(live):
     """Historical ratchet ID: an older presenter now gets percent-only origin requests, including point resizes.
@@ -916,7 +916,7 @@ def test_points_are_refused_for_an_overlay_a_presenter_shows(live):
         wait_frame(presenter.read, "overlay.close", presenter.send)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.40.0")
 @pytest.mark.covers("session.overlay.open", "session.overlay.resize", "field:tree.session.remoteOverlays")
 def test_remote_overlay_points_reach_capable_presenters(live):
@@ -946,7 +946,7 @@ def test_remote_overlay_points_reach_capable_presenters(live):
         wait_frame(presenter.read, "overlay.close", presenter.send)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.40.0")
 @pytest.mark.covers("live.present", "session.overlay.open", "session.overlay.resize", streams=("live.present",))
 @pytest.mark.parametrize("source", [{"command": "true"}, {"url": "https://example.com/points"}], ids=["program", "page"])
@@ -966,7 +966,7 @@ def test_older_presenter_gets_percent_without_points(live, source):
         wait_frame(presenter.read, "page.close" if page else "overlay.close", presenter.send)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.40.0")
 @pytest.mark.covers("live.present", "session.overlay.open", "session.overlay.resize", streams=("live.present",))
 def test_remote_page_points_and_resizes_reach_presenter(live):
@@ -1014,7 +1014,7 @@ def _sounds_before_fence(live, sid, stream, fence):
     return [frame.get("sound") for frame in frames if frame.get("kind") == "sound"]
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.status", "live.present", "field:tree.session.presenters", streams=("live.present",))
 def test_status_sound_goes_to_a_following_presenter(live):
     sid = _live_session(live)
@@ -1061,7 +1061,7 @@ def _kinds_before(stream, fence):
     return kinds[:-1]
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.42.0")
 @pytest.mark.covers("session.status", "live.present", "field:tree.session.presenters", streams=("live.present",))
 def test_a_skipped_if_idle_status_sends_the_viewers_nothing(live):
@@ -1333,7 +1333,7 @@ def _outcome(live, page_id):
     return assert_ok(live.request("session.overlay.result", page=page_id))["pageOutcome"]
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.overlay.open")
 def test_a_presenter_without_page_kinds_keeps_the_page_refusal(live, tmp_path):
     page = _page_file(tmp_path)
@@ -1343,7 +1343,7 @@ def test_a_presenter_without_page_kinds_keeps_the_page_refusal(live, tmp_path):
         assert "remoteOverlays" not in node and node["overlay"] is False
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.overlay.open")
 def test_a_loopback_url_bound_for_the_presenter_is_refused(live):
     with _page_presenter(live) as (sid, _, _):
@@ -1354,7 +1354,7 @@ def test_a_loopback_url_bound_for_the_presenter_is_refused(live):
         assert "remoteOverlays" not in find_session(live.tree(), sid)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.overlay.open", "field:tree.session.remoteOverlays", "field:tree.session.htmlOverlays")
 def test_a_page_goes_to_the_presenter_and_its_reports_reach_the_tree(live, tmp_path):
     page = _page_file(tmp_path)
@@ -1404,7 +1404,7 @@ def test_a_page_goes_to_the_presenter_and_its_reports_reach_the_tree(live, tmp_p
         wait_frame(presenter.read, "page.close", presenter.send)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers(
     "session.overlay.reload",
     "session.overlay.navigate",
@@ -1440,7 +1440,7 @@ def test_origin_commands_on_a_remote_page_reach_the_presenter(live):
         assert_ok(live.request("session.overlay.close", sid))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.overlay.close", "session.overlay.result")
 def test_closing_or_rejecting_a_remote_page_ends_it_dismissed(live, tmp_path):
     page = _page_file(tmp_path)
@@ -1502,7 +1502,7 @@ def _until_closed(helper):
             replies.append(frame)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers(
     "session.overlay.page.serve",
     "session.overlay.submit",
@@ -1554,7 +1554,7 @@ def _content_files(tmp_path):
     return folder, picture, readme, source
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.41.0")
 @pytest.mark.covers("session.overlay.open", "field:tree.session.remoteOverlays", "field:tree.session.htmlOverlays")
 def test_content_pages_go_only_to_a_presenter_listing_page_content(live, tmp_path):
@@ -1610,7 +1610,7 @@ def _forward_click(presenter, gen, rev, raw, pane):
     presenter.send({"kind": "link.click", "gen": gen, "rev": rev, "link": {"raw": raw, "pane": pane, "mode": "overlay"}})
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.42.0")
 @pytest.mark.covers("live.present", "field:tree.session.remoteOverlays", streams=("live.present",))
 def test_a_presenters_forwarded_click_opens_its_page_there_or_is_refused(live, tmp_path):
@@ -1642,7 +1642,7 @@ def test_a_presenters_forwarded_click_opens_its_page_there_or_is_refused(live, t
         wait_frame(presenter.read, "page.close", presenter.send)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.42.0")
 @pytest.mark.covers("live.present", "field:tree.session.remoteOverlays", streams=("live.present",))
 def test_a_forwarded_relative_line_or_file_url_click_replaces_the_hidden_clicked_page(live, tmp_path):
@@ -1686,7 +1686,7 @@ def test_a_forwarded_relative_line_or_file_url_click_replaces_the_hidden_clicked
         wait_frame(presenter.read, "page.close", presenter.send)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.41.0")
 @pytest.mark.covers("session.overlay.page.serve", streams=("session.overlay.page.serve",))
 def test_page_serve_serves_a_content_pages_files_under_its_rules(live, tmp_path):
@@ -1856,7 +1856,7 @@ def test_wrap_changes_and_search_on_a_presenters_log_page_answer_its_result_and_
         live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.42.1")
 @pytest.mark.covers("live.present", "field:tree.session.remoteOverlays", streams=("live.present",))
 @pytest.mark.parametrize(
@@ -1887,7 +1887,7 @@ def test_a_forwarded_log_click_opens_a_log_page_only_on_a_presenter_listing_page
 LINKS_PRESENTER_KINDS = [*CONTENT_PRESENTER_KINDS, "page.links"]
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.42.0")
 @pytest.mark.covers("session.overlay.open", "session.overlay.page.serve", streams=("session.overlay.page.serve",))
 def test_a_link_grant_goes_only_to_a_presenter_listing_page_links_and_its_channel_serves_under_it(live, tmp_path):
@@ -1940,7 +1940,7 @@ def test_a_link_grant_goes_only_to_a_presenter_listing_page_links_and_its_channe
             _until_closed(helper)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.41.0")
 @pytest.mark.covers("live.present", "session.overlay.open", "session.overlay.resize", streams=("live.present",))
 def test_a_point_resize_of_an_auto_sized_image_merges_on_the_presenter(live, tmp_path):
@@ -1964,7 +1964,7 @@ def test_a_point_resize_of_an_auto_sized_image_merges_on_the_presenter(live, tmp
         wait_frame(presenter.read, "page.close", presenter.send)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.overlay.page.serve", streams=("session.overlay.page.serve",))
 def test_losing_the_page_helper_takes_only_the_page_off_its_presenter(live, adapter, tmp_path):
     with _page_presenter(live) as (sid, presenter, _):
@@ -1984,7 +1984,7 @@ def test_losing_the_page_helper_takes_only_the_page_off_its_presenter(live, adap
         _presenters(live, sid, {"mirrors": 0, "presenter": True})
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.overlay.page.serve", streams=("session.overlay.page.serve",))
 def test_a_page_helper_that_stops_reading_loses_its_channel(live, adapter, tmp_path):
     """A helper that asks for a file and reads none of it: the origin's file worker waits for room (upstream's
@@ -2028,7 +2028,7 @@ def _parked(live, sid, entry):
     live.wait_tree(parked)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @PAGES_SURVIVE
 @pytest.mark.covers(
     "session.overlay.open",
@@ -2058,7 +2058,7 @@ def test_a_page_whose_presenter_goes_waits_parked_for_the_next_one(live, tmp_pat
         assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "dismissed"}
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @PAGES_SURVIVE
 @pytest.mark.covers("session.overlay.open", "session.overlay.close", "session.overlay.result")
 def test_a_page_closed_while_parked_is_not_handed_on(live, tmp_path):
