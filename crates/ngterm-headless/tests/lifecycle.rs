@@ -316,10 +316,12 @@ fn live_namespace(fixture: &Fixture) -> PathBuf {
     PathBuf::from(directory)
 }
 
-/// Holds the server's live session endpoint with a listener that never answers, so each later live pane waits in its
-/// attach and keeps its session; with the inert session host, an attach fails, and its session closes, at once.
+/// Holds the server's live session endpoint with a listener that accepts and never answers, so each later live pane
+/// waits in its attach and keeps its session; with the inert session host, an attach fails, and its session closes, at
+/// once.
 struct LiveHold {
-    listener: Option<ngterm_session::endpoint::Listener>,
+    attaches: std::sync::mpsc::Receiver<ngterm_session::endpoint::Stream>,
+    held: Vec<ngterm_session::endpoint::Stream>,
     #[cfg(unix)]
     namespace: PathBuf,
 }
@@ -327,16 +329,42 @@ struct LiveHold {
 fn hold_live_attaches(fixture: &Fixture) -> io::Result<LiveHold> {
     let namespace = live_namespace(fixture);
     let listener = ngterm_session::endpoint::Endpoint::new(&namespace).bind()?;
+    let (sender, attaches) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(stream) = listener.accept() {
+            if sender.send(stream).is_err() {
+                return;
+            }
+        }
+    });
     Ok(LiveHold {
-        listener: Some(listener),
+        attaches,
+        held: Vec::new(),
         #[cfg(unix)]
         namespace,
     })
 }
 
+impl LiveHold {
+    /// Waits until `count` attaches came to the hold, so a test knows they wait on it, whatever the runner's speed.
+    fn wait_for(&mut self, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while self.held.len() < count {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let stream = self.attaches.recv_timeout(left);
+            assert!(
+                stream.is_ok(),
+                "{} of {count} attaches came to the hold",
+                self.held.len()
+            );
+            self.held.extend(stream);
+        }
+    }
+}
+
 impl Drop for LiveHold {
     fn drop(&mut self) {
-        drop(self.listener.take());
+        self.held.clear();
         #[cfg(unix)]
         let _ = std::fs::remove_dir_all(&self.namespace);
     }
@@ -365,7 +393,7 @@ fn a_server_answers_its_private_socket_and_saves_on_termination() {
     BufReader::new(stream).read_line(&mut line).unwrap();
     let response: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(response["ok"], true, "{response}");
-    let hold = hold_live_attaches(&fixture).unwrap();
+    let mut hold = hold_live_attaches(&fixture).unwrap();
     let probe = new_session(&fixture, "quit-save-probe").unwrap();
     let closed = control(
         &fixture,
@@ -380,6 +408,7 @@ fn a_server_answers_its_private_socket_and_saves_on_termination() {
     // after a debounce, which the signal beats, so only the quit save writes it
     let first = new_session(&fixture, "selection-probe-first").unwrap();
     new_session(&fixture, "selection-probe-second").unwrap();
+    hold.wait_for(2);
     // longer than an unheld attach takes to fail, so the select shows that the hold keeps `first`
     std::thread::sleep(Duration::from_millis(200));
     let selected = control(&fixture, &serde_json::json!({"cmd":"session.select", "target":first})).unwrap();
