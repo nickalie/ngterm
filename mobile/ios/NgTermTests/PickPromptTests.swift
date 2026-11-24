@@ -37,8 +37,11 @@ internal struct PickPromptTests {
         try await AppWindow.until { graph.picks.find(key, pickId: Self.pick.id) != nil }
 
         graph.asks.answer(key, askId: FakeSessionWorld.deployAsk.id, reply: AskDraft.escaped)
-        try await AppWindow.until("the ask's sheet goes") { host.presentedViewController == nil }
-        try await AppWindow.until("the pick shows next") { host.presentedViewController != nil }
+        // the sheet goes from the ask to the pick, with no moment of none between them: one is still up once the ask
+        // went, and it goes only when the pick does
+        try await AppWindow.until { graph.asks.find(key, askId: FakeSessionWorld.deployAsk.id) == nil }
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(host.presentedViewController != nil, "the pick shows once the ask went")
         #expect(graph.picks.find(key, pickId: Self.pick.id) != nil)
 
         core.emit(.pickDismiss(machineId: key.machineId, sessionId: key.sessionId, pickId: Self.pick.id))

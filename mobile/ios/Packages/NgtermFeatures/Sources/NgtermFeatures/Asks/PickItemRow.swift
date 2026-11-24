@@ -2,9 +2,11 @@ import NgtermCore
 import NgtermDesign
 import SwiftUI
 
-/// One row of a pick (mobile/android's `PickRowView`): an item's label over its subtitle with its status glyph at the
-/// end, as the sidebar draws it (none for an absent or idle status), or the custom answer in the tint. The marked row,
-/// the one Return answers with, sits on a deeper ground.
+/// One row of a pick (mobile/android's `PickRowView`).
+///
+/// An item's label over its subtitle with its status glyph at the end, as the sidebar draws it (none for an absent or
+/// idle status), or the custom answer in the tint. The marked row, the one Return answers with, sits on a deeper
+/// ground.
 internal struct PickItemRow: View {
     private static let idle = "idle"
 
@@ -36,8 +38,7 @@ internal struct PickItemRow: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
-    private var content: some View {
+    @ViewBuilder private var content: some View {
         switch row {
         case .custom(let label, _):
             Text(verbatim: label)

@@ -6,8 +6,13 @@ internal enum TestPicks {
         RemotePickItem(id: id, label: id, subtitle: nil, status: status, statusColor: nil, statusShape: nil)
     }
 
+    /// ``pick(allowCustom:)`` with no custom answer.
+    internal static func pick() -> RemotePick {
+        pick(allowCustom: false)
+    }
+
     /// A pick `K1`, "Switch to": `api` (blocked, with a subtitle), `web` (idle) and `docs` (no status).
-    internal static func pick(allowCustom: Bool = false, selection: String? = nil) -> RemotePick {
+    internal static func pick(allowCustom: Bool) -> RemotePick {
         RemotePick(
             id: "K1",
             items: [
@@ -25,7 +30,7 @@ internal enum TestPicks {
             prompt: "Switch to",
             query: nil,
             allowCustom: allowCustom,
-            selection: selection
+            selection: nil
         )
     }
 }

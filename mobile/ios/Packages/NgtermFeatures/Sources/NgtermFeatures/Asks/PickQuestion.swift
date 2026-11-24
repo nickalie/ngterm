@@ -81,11 +81,11 @@ public struct PickQuestion: View {
     public init(pick: RemotePick, onAnswer: @escaping @MainActor (PickReply) -> Void) {
         self.pick = pick
         self.onAnswer = onAnswer
-        let query = pick.query ?? ""
-        _query = State(initialValue: query)
+        let opening = pick.query ?? ""
+        _query = State(initialValue: opening)
         _marked = State(
             initialValue: PickChoice.initialRow(
-                Picks.rows(of: pick, query: query),
+                Picks.rows(of: pick, query: opening),
                 items: pick.items,
                 selection: pick.selection
             )
