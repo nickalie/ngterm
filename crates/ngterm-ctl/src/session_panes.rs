@@ -58,6 +58,9 @@ pub struct SplitVisibility {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for SplitVisibility {
@@ -66,6 +69,7 @@ impl RequestCommand for SplitVisibility {
     }
 
     fn validate(&self) -> Result<(), String> {
+        self.operation.validate()?;
         match self.axis.as_deref() {
             Some(axis) if SplitAxis::from_wire(axis).is_none() => {
                 Err("--axis must be vertical or horizontal".to_owned())
@@ -75,6 +79,13 @@ impl RequestCommand for SplitVisibility {
     }
 
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl SplitVisibility {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         let args = Args {
             mode: Some(self.mode.clone()),
             axis: self.axis.clone(),
@@ -98,6 +109,9 @@ pub struct SplitClose {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for SplitClose {
@@ -105,7 +119,18 @@ impl RequestCommand for SplitClose {
         &self.options.basic
     }
 
+    fn validate(&self) -> Result<(), String> {
+        self.operation.validate()
+    }
+
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl SplitClose {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         session_request(
             SessionCmd::SplitClose,
             Some(self.target.target.clone()),
@@ -124,6 +149,9 @@ pub struct Swap {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for Swap {
@@ -131,7 +159,18 @@ impl RequestCommand for Swap {
         &self.options.basic
     }
 
+    fn validate(&self) -> Result<(), String> {
+        self.operation.validate()
+    }
+
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl Swap {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         session_request(SessionCmd::Swap, Some(self.target.target.clone()), None, &self.options)
     }
 }
@@ -205,11 +244,20 @@ pub struct Scratch {
     )]
     follow: bool,
 
+    #[arg(
+        long = "expect-scratch",
+        help = "The scratch identity, or none, the target session must still have; needs --op-id."
+    )]
+    expected: Option<String>,
+
     #[command(flatten)]
     target: TargetOptions,
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for Scratch {
@@ -217,11 +265,33 @@ impl RequestCommand for Scratch {
         &self.options.basic
     }
 
+    fn validate(&self) -> Result<(), String> {
+        self.operation.validate()?;
+        let Some(expected) = &self.expected else {
+            return Ok(());
+        };
+        if !self.operation.is_set() {
+            return Err("--expect-scratch needs --op-id".to_owned());
+        }
+        if !expected.eq_ignore_ascii_case("none") && uuid::Uuid::parse_str(expected).is_err() {
+            return Err("--expect-scratch takes a scratch identity or none".to_owned());
+        }
+        Ok(())
+    }
+
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl Scratch {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         let args = Args {
             mode: Some(self.mode.clone()),
             command: self.command.clone(),
             follow: self.follow.then_some(true),
+            scratch: self.expected.clone(),
             ..Args::default()
         };
         session_request(
@@ -630,5 +700,81 @@ mod tests {
         ] {
             assert!(!parsed(argv).command().echoes_result_id(), "{argv:?}");
         }
+    }
+
+    const PANE: &str = "6F9619FF-8B86-D011-B42D-00C04FC964FF";
+
+    /// Upstream's `aStructuralCommandCarriesTheExpectedPanes`, `expectedPanesAreIdentitiesSentWithAnOperation` and
+    /// `withoutAnOperationIdTheRequestIsUnchanged`.
+    #[test]
+    fn a_structural_command_carries_its_operation_and_the_expected_panes() {
+        let panes = format!("{PANE},{PANE}");
+        let argv = [
+            "swap",
+            "--target",
+            "s1",
+            "--op-id",
+            "op-1",
+            "--epoch",
+            "e1",
+            "--expect-panes",
+            &panes,
+        ];
+        assert_eq!(
+            request(&argv),
+            json!({"cmd": "session.swap", "target": "s1",
+                   "args": {"opID": "op-1", "epoch": "e1", "panes": [PANE, PANE]}})
+        );
+        assert_eq!(
+            request(&["swap", "--target", "s1"]),
+            json!({"cmd": "session.swap", "target": "s1"})
+        );
+        for bad in [
+            &["--expect-panes", "not-a-uuid", "--op-id", "op-1", "--epoch", "e1"][..],
+            &["--expect-panes", PANE],
+        ] {
+            let argv = [&["swap", "--target", "s1"][..], bad].concat();
+            assert!(outcome(&argv).is_err(), "{argv:?}");
+        }
+        for (argv, cmd) in [
+            (&["split", "visibility"][..], "session.split"),
+            (&["split", "close"], "session.split.close"),
+            (&["scratch"], "session.scratch"),
+        ] {
+            let argv = [argv, &["--op-id", "op-1", "--epoch", "e1"]].concat();
+            let sent = request(&argv);
+            assert_eq!(
+                (sent["cmd"].clone(), sent["args"]["opID"].clone()),
+                (json!(cmd), json!("op-1")),
+                "{argv:?}"
+            );
+        }
+    }
+
+    /// Upstream's `Session.Scratch.validate`: `--expect-scratch` is a scratch identity or `none`, sent with an
+    /// operation.
+    #[test]
+    fn a_scratch_operation_carries_the_scratch_it_expects() {
+        let sent = request(&[
+            "scratch",
+            "on",
+            "--expect-scratch",
+            "none",
+            "--op-id",
+            "op-1",
+            "--epoch",
+            "e1",
+        ]);
+        assert_eq!(sent["args"]["scratch"], json!("none"));
+        let sent = request(&["scratch", "--expect-scratch", PANE, "--op-id", "op-1", "--epoch", "e1"]);
+        assert_eq!(sent["args"]["scratch"], json!(PANE));
+        assert_eq!(
+            outcome(&["scratch", "--expect-scratch", "none"]),
+            Err("--expect-scratch needs --op-id".to_owned())
+        );
+        assert_eq!(
+            outcome(&["scratch", "--expect-scratch", "x", "--op-id", "op-1", "--epoch", "e1"]),
+            Err("--expect-scratch takes a scratch identity or none".to_owned())
+        );
     }
 }

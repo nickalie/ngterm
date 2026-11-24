@@ -92,6 +92,9 @@ pub struct New {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for New {
@@ -104,10 +107,18 @@ impl RequestCommand for New {
     }
 
     fn validate(&self) -> Result<(), String> {
+        self.operation.validate()?;
         self.tint.validate()
     }
 
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl New {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         let mut args = Args {
             name: self.name.clone(),
             collapsed: self.collapsed.then_some(true),
@@ -131,6 +142,9 @@ pub struct Rename {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for Rename {
@@ -138,7 +152,18 @@ impl RequestCommand for Rename {
         &self.options.basic
     }
 
+    fn validate(&self) -> Result<(), String> {
+        self.operation.validate()
+    }
+
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl Rename {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         let args = Args {
             name: Some(self.name.clone()),
             ..Args::default()
@@ -173,12 +198,41 @@ macro_rules! targeted_command {
     };
 }
 
-targeted_command!(
-    /// `ngtermctl workspace delete`: the last workspace is refused by the app.
-    Delete,
-    WorkspaceCmd::Delete,
-    "Delete a workspace."
-);
+/// `ngtermctl workspace delete`: the last workspace is refused by the app.
+#[derive(Debug, clap::Args)]
+#[command(about = "Delete a workspace.")]
+pub struct Delete {
+    #[command(flatten)]
+    target: TargetOptions,
+
+    #[command(flatten)]
+    options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
+}
+
+impl RequestCommand for Delete {
+    fn options(&self) -> &BasicOptions {
+        &self.options.basic
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        self.operation.validate()
+    }
+
+    fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl Delete {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
+        workspace_request(WorkspaceCmd::Delete, Some(&self.target), None, &self.options)
+    }
+}
+
 targeted_command!(
     /// `ngtermctl workspace select`.
     Select,
@@ -236,6 +290,9 @@ pub struct Move {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for Move {
@@ -243,7 +300,18 @@ impl RequestCommand for Move {
         &self.options.basic
     }
 
+    fn validate(&self) -> Result<(), String> {
+        self.operation.validate()
+    }
+
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl Move {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         let args = Args {
             to: Some(self.to.clone()),
             ..Args::default()
@@ -551,6 +619,34 @@ mod tests {
                 "{argv:?}"
             );
             assert!(options.json, "{argv:?}");
+        }
+    }
+
+    /// Upstream's `everyStructuralCommandTakesAnOperationId` (its workspace leaves) and
+    /// `anOperationIdAndEpochGoTogetherAndTheIdIsPlain`.
+    #[test]
+    fn every_structural_workspace_command_takes_an_operation_id() {
+        for (argv, cmd) in [
+            (&["new"][..], "workspace.new"),
+            (&["rename", "x"], "workspace.rename"),
+            (&["delete", "--target", "w1"], "workspace.delete"),
+            (&["move", "--to", "up"], "workspace.move"),
+        ] {
+            let argv = [argv, &["--op-id", "op-1", "--epoch", "e1"]].concat();
+            let sent = request(&argv);
+            assert_eq!(sent["cmd"], json!(cmd), "{argv:?}");
+            assert_eq!(
+                (sent["args"]["opID"].clone(), sent["args"]["epoch"].clone()),
+                (json!("op-1"), json!("e1"))
+            );
+        }
+        for bad in [
+            &["--op-id", "op-1"][..],
+            &["--epoch", "e1"],
+            &["--op-id", "a b", "--epoch", "e1"],
+        ] {
+            let argv = [&["delete", "--target", "w1"][..], bad].concat();
+            assert!(outcome(&argv).is_err(), "{argv:?}");
         }
     }
 }

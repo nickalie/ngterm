@@ -68,6 +68,38 @@ def test_catalog_op_is_the_servers_alone(cli):
     _refused(cli("catalog", "op", "a.b_c:d-1", "--epoch", "E", "--rev", "3"), _server_only(cli, "catalog.op"))
 
 
+RECEIPTS = "operation receipts are served only by ngterm-headless"
+OPERATION = ["--op-id", "op-1", "--epoch", "E"]
+
+
+@pytest.mark.covers("cli:session new", "cli:session rename", "cli:session swap", "cli:session split close",
+                    "cli:workspace new", "cli:workspace delete")
+@pytest.mark.parametrize(
+    "words",
+    [
+        pytest.param(["session", "new"], id="session-new"),
+        pytest.param(["session", "rename", "x"], id="session-rename"),
+        pytest.param(["session", "swap"], id="session-swap"),
+        pytest.param(["session", "split", "close"], id="session-split-close"),
+        pytest.param(["workspace", "new"], id="workspace-new"),
+        pytest.param(["workspace", "delete", "--target", UNKNOWN], id="workspace-delete"),
+    ],
+)
+def test_a_structural_subcommand_sends_its_operation_id_which_an_app_refuses(cli, words):
+    """Upstream's `OperationOptions` on every structural leaf: the id and its epoch go together, and an app with windows
+    keeps no receipts, so it refuses the command before it runs."""
+    _usage(cli(*words, "--op-id", "op-1"), "--op-id and --epoch go together")
+    _refused(cli(*words, *OPERATION), cli.vocabulary.text(RECEIPTS))
+
+
+@pytest.mark.covers("cli:session scratch")
+def test_session_scratch_takes_the_scratch_it_expects_only_with_an_operation(cli):
+    _usage(cli("session", "scratch", "--expect-scratch", "none"), "--expect-scratch needs --op-id")
+    _usage(cli("session", "scratch", "--expect-scratch", "x", *OPERATION),
+           "--expect-scratch takes a scratch identity or none")
+    _refused(cli("session", "scratch", "--expect-scratch", "none", *OPERATION), cli.vocabulary.text(RECEIPTS))
+
+
 # -- window remote
 
 

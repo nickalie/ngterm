@@ -220,6 +220,9 @@ pub struct New {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for New {
@@ -234,6 +237,7 @@ impl RequestCommand for New {
     fn validate(&self) -> Result<(), String> {
         // the option group checks first, as ArgumentParser validates a decoded `@OptionGroup` before its command
         self.tint.validate()?;
+        self.operation.validate()?;
         let placed = self.after.is_some() || self.before.is_some();
         let addressed = self.workspace.is_some() || self.workspace_name.is_some();
         let message = if self.parent.is_some() && (placed || addressed || self.create_workspace) {
@@ -264,6 +268,13 @@ impl RequestCommand for New {
     }
 
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl New {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         if let Some(parent) = &self.parent {
             let mut args = Args {
                 name: self.name.clone(),
@@ -376,6 +387,9 @@ pub struct Close {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for Close {
@@ -383,7 +397,18 @@ impl RequestCommand for Close {
         &self.options.basic
     }
 
+    fn validate(&self) -> Result<(), String> {
+        self.operation.validate()
+    }
+
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl Close {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         let args = Args {
             targets: self.target.batch(),
             undoable: flag(self.undoable),
@@ -462,6 +487,9 @@ pub struct Rename {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for Rename {
@@ -469,7 +497,18 @@ impl RequestCommand for Rename {
         &self.options.basic
     }
 
+    fn validate(&self) -> Result<(), String> {
+        self.operation.validate()
+    }
+
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl Rename {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         let args = Args {
             name: Some(self.name.clone()),
             ..Args::default()
@@ -542,6 +581,9 @@ pub struct Move {
 
     #[command(flatten)]
     options: ClientOptions,
+
+    #[command(flatten)]
+    operation: crate::catalog::OperationOptions,
 }
 
 impl RequestCommand for Move {
@@ -550,6 +592,7 @@ impl RequestCommand for Move {
     }
 
     fn validate(&self) -> Result<(), String> {
+        self.operation.validate()?;
         let message = if self.after.is_some() && self.before.is_some() {
             "use either --after or --before, not both"
         } else if self.after.is_some() || self.before.is_some() {
@@ -574,6 +617,13 @@ impl RequestCommand for Move {
     }
 
     fn make_request(&self) -> Request {
+        self.operation.stamp(self.unstamped())
+    }
+}
+
+impl Move {
+    /// The request before its operation id.
+    fn unstamped(&self) -> Request {
         let mut args = if let Some(after) = &self.after {
             Args {
                 after: Some(after.clone()),

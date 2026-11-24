@@ -12,7 +12,8 @@ use std::process::ExitCode;
 use ngterm_core::theme::DEFAULT_TITLE;
 use ngterm_proto::keymap::{ControlHooks, ControlKeymap};
 use ngterm_proto::{
-    ControlRecentItem, ControlRecentOpen, ControlRestoreStatus, ControlTree, ControlWindowNode, Response,
+    CatalogReceipt, CatalogVersions, ControlRecentItem, ControlRecentOpen, ControlRestoreStatus, ControlTree,
+    ControlWindowNode, Response,
 };
 use serde_json::Value;
 
@@ -33,6 +34,14 @@ use crate::window::format_windows;
 /// listings); each command group adds its branch at its place in that order.
 #[must_use]
 pub fn format_response(response: &Response, echo_id: bool) -> String {
+    if let Some(receipt) = response
+        .result
+        .as_ref()
+        .and_then(|result| result.get("receipt"))
+        .and_then(|receipt| serde_json::from_value::<CatalogReceipt>(receipt.clone()).ok())
+    {
+        return format_with_receipt(response, &receipt, echo_id);
+    }
     if !response.ok {
         return format!("error: {}", response.error.as_deref().unwrap_or("unknown error"));
     }
@@ -41,7 +50,8 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
         return listing;
     }
     if let Some(app) = result.and_then(|result| result.get("app")) {
-        return format_version(app, result.and_then(|result| result.get("installed")));
+        let versions = result.and_then(|result| result.get("versions"));
+        return format_version(app, result.and_then(|result| result.get("installed")), versions);
     }
     if let Some(text) = result.and_then(|result| result.get("text")).and_then(Value::as_str) {
         return text.to_owned();
@@ -222,12 +232,56 @@ fn format_themes(themes: &[String], result: &Value) -> String {
 
 /// The running app, then an `installed:` line only when the build on disk is known and differs from it (upstream's
 /// `formatResponse`).
-fn format_version(app: &Value, installed: Option<&Value>) -> String {
-    match installed {
-        Some(installed) if identity_of(installed) != identity_of(app) => {
-            format!("{}\ninstalled: {}", format_app(app), format_app(installed))
-        }
-        _ => format_app(app),
+fn format_version(app: &Value, installed: Option<&Value>, versions: Option<&Value>) -> String {
+    let mut lines = vec![format_app(app)];
+    if let Some(installed) = installed.filter(|installed| identity_of(installed) != identity_of(app)) {
+        lines.push(format!("installed: {}", format_app(installed)));
+    }
+    if let Some(versions) =
+        versions.and_then(|versions| serde_json::from_value::<CatalogVersions>(versions.clone()).ok())
+    {
+        lines.push(format!(
+            "server: {}, protocol: {}, catalog: {}",
+            versions.server, versions.protocol, versions.catalog
+        ));
+    }
+    lines.join("\n")
+}
+
+/// What the command itself prints, then its receipt; a refused or fenced operation prints the receipt alone, which
+/// carries the error (upstream's `formatResponse(_:receipt:echoID:)`).
+fn format_with_receipt(response: &Response, receipt: &CatalogReceipt, echo_id: bool) -> String {
+    if !response.ok {
+        return format!("error: {}", format_receipt(receipt));
+    }
+    let mut without = response.clone();
+    if let Some(Value::Object(result)) = &mut without.result {
+        result.remove("receipt");
+    }
+    let printed = format_response(&without, echo_id);
+    if printed == "ok" {
+        format_receipt(receipt)
+    } else {
+        format!("{printed}\n{}", format_receipt(receipt))
+    }
+}
+
+/// An operation's outcome and the catalog epoch it belongs to (upstream's `formatReceipt`).
+#[must_use]
+pub fn format_receipt(receipt: &CatalogReceipt) -> String {
+    let head = format!("operation {}:", receipt.op_id);
+    let epoch = &receipt.epoch;
+    match (receipt.outcome.as_str(), receipt.rev) {
+        ("applied", Some(rev)) => format!("{head} applied at rev {rev} in epoch {epoch}"),
+        ("applied", None) => format!("{head} applied in epoch {epoch}"),
+        ("noop", _) => format!("{head} no change in epoch {epoch}"),
+        ("refused", _) => format!(
+            "{head} refused in epoch {epoch}: {}",
+            receipt.error.as_deref().unwrap_or("no reason given")
+        ),
+        ("fenced", _) => format!("{head} fenced in epoch {epoch}, so it will not run"),
+        ("unknown", _) => format!("{head} outcome unknown in epoch {epoch}; it will not run now"),
+        (other, _) => format!("{head} {other} in epoch {epoch}"),
     }
 }
 
@@ -689,6 +743,83 @@ mod tests {
         assert_eq!(
             format_response(&ok(open), false),
             "reopened session api (incomplete: the entry stays in the list)"
+        );
+    }
+
+    fn receipt(outcome: &str, rev: Option<i64>, error: Option<&str>) -> Value {
+        let mut receipt = json!({"opID": "a", "epoch": "e1", "outcome": outcome});
+        if let Some(rev) = rev {
+            receipt["rev"] = json!(rev);
+        }
+        if let Some(error) = error {
+            receipt["error"] = json!(error);
+        }
+        receipt
+    }
+
+    /// Upstream's `formatsTheVersionsAHeadlessServerAdvertises`.
+    #[test]
+    fn version_prints_the_versions_a_headless_server_advertises() {
+        let response = ok(json!({"app": {"version": "1.2.3"},
+                                 "versions": {"server": "1.2.3", "protocol": 1, "catalog": 1}}));
+        assert_eq!(
+            format_response(&response, false),
+            "1.2.3\nserver: 1.2.3, protocol: 1, catalog: 1"
+        );
+    }
+
+    /// Upstream's `formatsAReceiptAlone`.
+    #[test]
+    fn a_receipt_alone_names_its_outcome_and_epoch() {
+        for (receipt, expected) in [
+            (
+                receipt("applied", Some(4), None),
+                "operation a: applied at rev 4 in epoch e1",
+            ),
+            (receipt("applied", None, None), "operation a: applied in epoch e1"),
+            (receipt("noop", None, None), "operation a: no change in epoch e1"),
+            (
+                receipt("refused", None, Some("no such session")),
+                "operation a: refused in epoch e1: no such session",
+            ),
+            (
+                receipt("refused", None, None),
+                "operation a: refused in epoch e1: no reason given",
+            ),
+            (
+                receipt("fenced", None, None),
+                "operation a: fenced in epoch e1, so it will not run",
+            ),
+            (
+                receipt("unknown", None, None),
+                "operation a: outcome unknown in epoch e1; it will not run now",
+            ),
+            (receipt("later", None, None), "operation a: later in epoch e1"),
+        ] {
+            assert_eq!(format_response(&ok(json!({"receipt": receipt})), false), expected);
+        }
+    }
+
+    /// Upstream's `aRefusedOrFencedCommandStillNamesItsReceipt` and `aReceiptFollowsWhatTheCommandPrints`.
+    #[test]
+    fn a_receipt_follows_what_the_command_prints_and_carries_a_refusal() {
+        for (receipt, expected) in [
+            (
+                receipt("refused", None, Some("no such session")),
+                "error: operation a: refused in epoch e1: no such session",
+            ),
+            (
+                receipt("fenced", None, None),
+                "error: operation a: fenced in epoch e1, so it will not run",
+            ),
+        ] {
+            let refused = Response::failure_with_result("ignored", json!({"receipt": receipt}));
+            assert_eq!(format_response(&refused, false), expected);
+        }
+        let applied = ok(json!({"id": "s1", "receipt": receipt("applied", Some(2), None)}));
+        assert_eq!(
+            format_response(&applied, true),
+            "s1\noperation a: applied at rev 2 in epoch e1"
         );
     }
 }
