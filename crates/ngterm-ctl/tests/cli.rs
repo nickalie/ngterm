@@ -1375,8 +1375,9 @@ fn restore_background_and_restart_refuse_bad_forms_before_connecting() -> TestRe
 }
 
 const MOVE_USAGE: &str = "Usage: ngtermctl session move [<workspace>] [--to <to>] [--after <after>] [--before \
-                          <before>] [--target <target> ...] [--socket <socket>] [--json] [--window <window>]\n  See \
-                          'ngtermctl session move --help' for more information.\n";
+                          <before>] [--target <target> ...] [--socket <socket>] [--json] [--window <window>] [--op-id \
+                          <op-id>] [--epoch <epoch>] [--expect-panes <expect-panes>]\n  See 'ngtermctl session move \
+                          --help' for more information.\n";
 const NEW_USAGE: &str = "Usage: ngtermctl session new <options>\n  See 'ngtermctl session new --help' for more \
                          information.\n";
 
@@ -1577,6 +1578,13 @@ OPTIONS:
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'
                           (defaults to the frontmost).
+  --op-id <op-id>         Operation id ngterm-headless keeps a receipt under;
+                          needs --epoch.
+  --epoch <epoch>         The catalog epoch the operation was decided at; needs
+                          --op-id.
+  --expect-panes <expect-panes>
+                          Comma-separated pane identities the target session
+                          must still have; needs --op-id.
   -h, --help              Show help information.
 
 ";
@@ -1605,7 +1613,7 @@ OPTIONS:
 const SESSION_CLOSE_HELP: &str = "\
 OVERVIEW: Close a session.
 
-USAGE: ngtermctl session close [--target <target> ...] [--undoable] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session close [--target <target> ...] [--undoable] [--socket <socket>] [--json] [--window <window>] [--op-id <op-id>] [--epoch <epoch>] [--expect-panes <expect-panes>]
 
 OPTIONS:
   --target <target>       Target session id, prefix, or 'active'. Repeat for a
@@ -1617,6 +1625,13 @@ OPTIONS:
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'
                           (defaults to the frontmost).
+  --op-id <op-id>         Operation id ngterm-headless keeps a receipt under;
+                          needs --epoch.
+  --epoch <epoch>         The catalog epoch the operation was decided at; needs
+                          --op-id.
+  --expect-panes <expect-panes>
+                          Comma-separated pane identities the target session
+                          must still have; needs --op-id.
   -h, --help              Show help information.
 
 ";
@@ -1659,7 +1674,7 @@ OPTIONS:
 const SESSION_RENAME_HELP: &str = "\
 OVERVIEW: Rename a session.
 
-USAGE: ngtermctl session rename <name> [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session rename <name> [--target <target>] [--socket <socket>] [--json] [--window <window>] [--op-id <op-id>] [--epoch <epoch>] [--expect-panes <expect-panes>]
 
 ARGUMENTS:
   <name>                  New session name.
@@ -1671,6 +1686,13 @@ OPTIONS:
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'
                           (defaults to the frontmost).
+  --op-id <op-id>         Operation id ngterm-headless keeps a receipt under;
+                          needs --epoch.
+  --epoch <epoch>         The catalog epoch the operation was decided at; needs
+                          --op-id.
+  --expect-panes <expect-panes>
+                          Comma-separated pane identities the target session
+                          must still have; needs --op-id.
   -h, --help              Show help information.
 
 ";
@@ -1695,7 +1717,7 @@ const SESSION_MOVE_HELP: &str = "\
 OVERVIEW: Move a session: to another workspace, reorder with --to, or place
 relative to an anchor with --after/--before.
 
-USAGE: ngtermctl session move [<workspace>] [--to <to>] [--after <after>] [--before <before>] [--target <target> ...] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session move [<workspace>] [--to <to>] [--after <after>] [--before <before>] [--target <target> ...] [--socket <socket>] [--json] [--window <window>] [--op-id <op-id>] [--epoch <epoch>] [--expect-panes <expect-panes>]
 
 ARGUMENTS:
   <workspace>             Destination workspace id/prefix (relocate). Omit with
@@ -1715,6 +1737,13 @@ OPTIONS:
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'
                           (defaults to the frontmost).
+  --op-id <op-id>         Operation id ngterm-headless keeps a receipt under;
+                          needs --epoch.
+  --epoch <epoch>         The catalog epoch the operation was decided at; needs
+                          --op-id.
+  --expect-panes <expect-panes>
+                          Comma-separated pane identities the target session
+                          must still have; needs --op-id.
   -h, --help              Show help information.
 
 ";
@@ -1862,7 +1891,7 @@ SUBCOMMANDS:
 const WORKSPACE_NEW_HELP: &str = "\
 OVERVIEW: Create a workspace.
 
-USAGE: ngtermctl workspace new [<name>] [--collapsed] [--tint <tint>] [--tint-on <tint-on>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl workspace new [<name>] [--collapsed] [--tint <tint>] [--tint-on <tint-on>] [--socket <socket>] [--json] [--window <window>] [--op-id <op-id>] [--epoch <epoch>] [--expect-panes <expect-panes>]
 
 ARGUMENTS:
   <name>                  Workspace name (defaults to the auto-generated name).
@@ -1877,6 +1906,13 @@ OPTIONS:
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'
                           (defaults to the frontmost).
+  --op-id <op-id>         Operation id ngterm-headless keeps a receipt under;
+                          needs --epoch.
+  --epoch <epoch>         The catalog epoch the operation was decided at; needs
+                          --op-id.
+  --expect-panes <expect-panes>
+                          Comma-separated pane identities the target session
+                          must still have; needs --op-id.
   -h, --help              Show help information.
 
 ";
@@ -2518,8 +2554,9 @@ fn resize_prints_the_applied_ratio_and_json_the_server_line() -> TestResult {
 }
 
 const SPLIT_VISIBILITY_USAGE: &str = "Usage: ngtermctl session split visibility [<mode>] [--axis <axis>] [--target \
-                                      <target>] [--socket <socket>] [--json] [--window <window>]\n  See 'ngtermctl \
-                                      session split visibility --help' for more information.\n";
+                                      <target>] [--socket <socket>] [--json] [--window <window>] [--op-id <op-id>] \
+                                      [--epoch <epoch>] [--expect-panes <expect-panes>]\n  See 'ngtermctl session \
+                                      split visibility --help' for more information.\n";
 const RESIZE_USAGE: &str = "Usage: ngtermctl session resize [--split-ratio <split-ratio>] [--grow-left <grow-left>] \
                             [--grow-right <grow-right>] [--grow-primary <grow-primary>] [--grow-split <grow-split>] \
                             [--grow-top <grow-top>] [--grow-bottom <grow-bottom>] [--target <target>] [--socket \
@@ -2578,7 +2615,8 @@ fn pane_command_refusals_are_usage_errors_before_connecting() -> TestResult {
         );
     }
     let close_usage = "Usage: ngtermctl session split close [--target <target>] [--socket <socket>] [--json] \
-                       [--window <window>]\n  See 'ngtermctl session split close --help' for more information.\n";
+                       [--window <window>] [--op-id <op-id>] [--epoch <epoch>] [--expect-panes <expect-panes>]\n  See 'ngtermctl \
+                       session split close --help' for more information.\n";
     assert_eq!(
         outcome(&run_on(dir.path(), &socket, &["session", "split", "close", "extra"])?),
         (
@@ -2609,7 +2647,7 @@ SUBCOMMANDS:
 const SESSION_SPLIT_VISIBILITY_HELP: &str = "\
 OVERVIEW: Show or hide a session split (on|off|toggle).
 
-USAGE: ngtermctl session split visibility [<mode>] [--axis <axis>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session split visibility [<mode>] [--axis <axis>] [--target <target>] [--socket <socket>] [--json] [--window <window>] [--op-id <op-id>] [--epoch <epoch>] [--expect-panes <expect-panes>]
 
 ARGUMENTS:
   <mode>                  Mode: on (show), off (hide), or toggle (default).
@@ -2624,6 +2662,13 @@ OPTIONS:
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'
                           (defaults to the frontmost).
+  --op-id <op-id>         Operation id ngterm-headless keeps a receipt under;
+                          needs --epoch.
+  --epoch <epoch>         The catalog epoch the operation was decided at; needs
+                          --op-id.
+  --expect-panes <expect-panes>
+                          Comma-separated pane identities the target session
+                          must still have; needs --op-id.
   -h, --help              Show help information.
 
 ";

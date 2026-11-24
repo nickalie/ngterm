@@ -384,21 +384,34 @@ fn pinned(panes: &[Uuid]) -> Args {
     args(|a| a.panes = Some(panes.iter().map(|pane| wire(*pane).to_lowercase()).collect()))
 }
 
-/// Upstream's `aPanePinnedCommandRunsOnTheSameShapedSession`.
+/// Upstream's `aPanePinnedCommandRunsOnTheSameShapedSession`: a swap, which waits on its terminals, settles its
+/// receipt once it answers.
 #[test]
 fn a_pane_pinned_command_runs_on_the_same_shaped_session() {
+    use ngterm_host::fakes::FakeSurface;
     let mut f = served(0);
     let (session, primary, split) = split_session(&mut f);
-    // a swap needs a realized pane, which the fakes have not: a split close pins the same way
+    let panes = f.store_mut().and_then(|store| store.session_mut(session)).unwrap();
+    let _ = panes
+        .surface
+        .replace(Box::new(FakeSurface::new("left").with_realized(true)));
+    let _ = panes
+        .split_surface
+        .replace(Box::new(FakeSurface::new("right").with_realized(true)));
     let reply = serve(
         &mut f,
-        Command::Session(SessionCmd::SplitClose),
+        Command::Session(SessionCmd::Swap),
         Some(&wire(session)),
         pinned(&[primary, split]),
-        "close",
+        "swap",
     );
     assert!(reply.ok, "{reply:?}");
-    assert_eq!(receipt_of(&reply).map(|r| r.outcome), Some(outcome::APPLIED.to_owned()));
+    let receipt = receipt_of(&reply).unwrap();
+    assert_eq!(
+        (receipt.outcome.as_str(), receipt.rev),
+        (outcome::APPLIED, Some(rev(&f)))
+    );
+    assert_eq!(f.store().session(session).unwrap().pane_identity, split);
 }
 
 /// Upstream's `aStalePanePinIsRefusedWhateverFormTheTargetTakes` and `aPanePinnedCommandIsRefusedOnceThePanesChanged`.

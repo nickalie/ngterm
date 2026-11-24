@@ -21,6 +21,8 @@ use crate::catalog::frames::{self, CatalogChange, CatalogFrame, CatalogSession, 
 pub(super) struct Wire {
     lines: RefCell<Vec<Vec<u8>>>,
     shut: Cell<bool>,
+    /// The connection's queue is full: it takes no more lines.
+    full: Cell<bool>,
 }
 
 impl Wire {
@@ -60,6 +62,9 @@ struct Channel(Rc<Wire>);
 
 impl LineChannel for Channel {
     fn send(&self, line: Vec<u8>) -> bool {
+        if self.0.full.get() {
+            return false;
+        }
         self.0.lines.borrow_mut().push(line);
         true
     }
@@ -393,4 +398,18 @@ fn an_app_with_windows_publishes_no_catalog() {
 
 fn wire_id(id: Uuid) -> String {
     crate::pane_env::uuid_string(id)
+}
+
+/// Upstream's `aStalledSubscriberIsDroppedAndTheOthersKeepTheirDeltas`, over the core: a stream whose queue is full is
+/// closed, and the others keep their deltas.
+#[test]
+fn a_stalled_stream_is_closed_and_the_others_keep_their_deltas() {
+    let mut fixture = served(0);
+    let stalled = subscribed(&mut fixture, false);
+    let healthy = subscribed(&mut fixture, false);
+    stalled.full.set(true);
+    committed(&mut fixture, Command::Session(SessionCmd::New), None, Args::default());
+    assert!(stalled.shut.get());
+    assert!(!healthy.shut.get());
+    assert_eq!(healthy.deltas().len(), 1);
 }
