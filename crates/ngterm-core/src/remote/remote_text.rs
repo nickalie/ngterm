@@ -13,6 +13,7 @@
 //! search query or the wrap emits `tree.changed`, the counts alone never do.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use uuid::Uuid;
 
@@ -24,7 +25,6 @@ use super::hub::{PAGE_TEXT_KIND, Surface};
 use super::page::VIEWER_GONE;
 use crate::Core;
 use crate::commands::ToggleMode;
-use crate::commands::surface::POLL_INTERVAL;
 use crate::html::text_page::{self, TextSearch};
 use crate::html::{HtmlOverlay, HtmlSource, ReplicaContent};
 use crate::model::OverlayPane;
@@ -148,14 +148,15 @@ pub(crate) enum RemoteTextOutcome {
     Failed(&'static str),
 }
 
-/// One text action waiting for its result: the page's id on the wire, the command's number, and the generation of
-/// the presenter it went to.
+/// One text action waiting for its result: the page's id on the wire, the command's number, the generation of the
+/// presenter it went to, and when it stops waiting.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct RemoteTextWait {
     job: String,
     seq: i64,
     session: Uuid,
     owner: i64,
+    deadline: Instant,
 }
 
 /// What a polled wait found.
@@ -280,6 +281,7 @@ impl Core {
             seq,
             session,
             owner,
+            deadline: (self.remote.clock)() + PresentationPageResult::DEADLINE,
         };
         let command = action.command(wait.job.clone(), seq);
         if !self
@@ -293,9 +295,9 @@ impl Core {
         RemoteTextOutcome::Waiting(wait)
     }
 
-    /// What `wait` found after `attempt` polls: the presenter's answer, the page gone (ended, parked or handed to
-    /// another presenter), the deadline passed, or nothing yet. Every answer but the last drops the wait.
-    pub(crate) fn remote_text_poll(&mut self, wait: &RemoteTextWait, attempt: u32) -> RemoteTextPoll {
+    /// What `wait` found: the presenter's answer, the page gone (ended, parked or handed to another presenter), its
+    /// wall-time deadline passed, or nothing yet. Every answer but the last drops the wait.
+    pub(crate) fn remote_text_poll(&mut self, wait: &RemoteTextWait) -> RemoteTextPoll {
         let key = (wait.job.clone(), wait.seq);
         if let Some(Some(result)) = self.remote.text_waits.0.get(&key) {
             let answer = if result.ok {
@@ -308,7 +310,7 @@ impl Core {
         }
         let failure = if !self.text_wait_held(wait) {
             VIEWER_GONE
-        } else if POLL_INTERVAL * attempt >= PresentationPageResult::DEADLINE {
+        } else if (self.remote.clock)() >= wait.deadline {
             PRESENTER_SILENT
         } else {
             return RemoteTextPoll::Pending;

@@ -4,6 +4,10 @@
 //! presenter keeps the local refusals; the presenter's reports mirror the text state; a page handed on carries its
 //! seed.
 
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use ngterm_proto::command::{Command, SessionCmd};
 use ngterm_proto::{Args, Request, Response};
 use serde_json::{Value, json};
@@ -13,6 +17,7 @@ use super::remote_page::Origin;
 use super::{args, failure, wire};
 use crate::Core;
 use crate::dispatch::Dispatched;
+use crate::remote::frames::PresentationPageResult;
 use crate::remote::hub::{PAGE_TEXT_KIND, SUPPORTED_KINDS};
 
 const VIEWER_GONE: &str = "the viewer showing this overlay is gone";
@@ -194,9 +199,54 @@ fn search_wrap_and_changes_carry_their_fields_and_answer_with_the_presenter() {
 fn a_presenter_that_never_answers_is_reported_silent() {
     let files = Files::new();
     let (mut origin, _) = log_origin(&files, "app.log", &SUPPORTED_KINDS);
+    let elapsed = Rc::new(Cell::new(Duration::ZERO));
+    let start = Instant::now();
+    let reading = Rc::clone(&elapsed);
+    origin.fixture().core.remote.clock = Box::new(move || {
+        reading.set(reading.get() + Duration::from_secs(1));
+        start + reading.get()
+    });
     let response = origin.overlay(SessionCmd::OverlayFollow, |a| a.mode = Some("on".to_owned()));
     assert_eq!(response, failure(SILENT));
     assert!(origin.fixture().core.remote.text_waits_empty(), "the wait is dropped");
+}
+
+/// Upstream sleeps the deadline in wall time: a silent presenter is answered when 5 s have passed, however many
+/// main-loop hops that took.
+#[test]
+fn a_silent_presenter_is_answered_at_the_wall_time_deadline_whatever_the_hops() {
+    let files = Files::new();
+    let (mut origin, _) = log_origin(&files, "app.log", &SUPPORTED_KINDS);
+    let start = Instant::now();
+    let elapsed = Rc::new(Cell::new(Duration::ZERO));
+    let reading = Rc::clone(&elapsed);
+    origin.fixture().core.remote.clock = Box::new(move || start + reading.get());
+    let mut dispatched = begin(&mut origin, SessionCmd::OverlaySearch, |a| {
+        a.text = Some("main".to_owned());
+    });
+    elapsed.set(Duration::from_millis(4900));
+    for _ in 0..40 {
+        dispatched = step(&mut origin.fixture().core, dispatched);
+        assert!(
+            matches!(dispatched, Dispatched::Pending { .. }),
+            "fast hops wait out the deadline"
+        );
+    }
+    elapsed.set(Duration::from_secs(5));
+    let response = answered(step(&mut origin.fixture().core, dispatched));
+    assert_eq!(response, failure(SILENT));
+    assert!(origin.fixture().core.remote.text_waits_empty(), "the wait is dropped");
+
+    let mut slow = begin(&mut origin, SessionCmd::OverlaySearch, |a| {
+        a.text = Some("main".to_owned());
+    });
+    elapsed.set(Duration::from_secs(5) + PresentationPageResult::DEADLINE);
+    slow = step(&mut origin.fixture().core, slow);
+    assert_eq!(
+        answered(slow),
+        failure(SILENT),
+        "one slow hop past the deadline answers"
+    );
 }
 
 /// Upstream's `testARemoteTextActionSettlesWhenThePageEnds` and `aTextActionOnAPageHeldForNoMacAnswersViewerGone`.

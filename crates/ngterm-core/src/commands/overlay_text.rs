@@ -109,22 +109,22 @@ fn text_action(
     match core.remote_text_action(session, pane, action) {
         RemoteTextOutcome::Local => local(core),
         RemoteTextOutcome::Failed(error) => Dispatched::done(Err(ControlError::rejected(error))),
-        RemoteTextOutcome::Waiting(wait) => remote_wait(session, wait, 0),
+        RemoteTextOutcome::Waiting(wait) => remote_wait(session, wait),
     }
 }
 
 /// Polls for the presenter's answer to `wait` a main-loop hop at a time, answering with its text or its error.
-fn remote_wait(session: Uuid, wait: RemoteTextWait, attempt: u32) -> Dispatched {
+fn remote_wait(session: Uuid, wait: RemoteTextWait) -> Dispatched {
     Dispatched::Pending {
         after: POLL_INTERVAL,
-        resume: Box::new(move |core: &mut Core| match core.remote_text_poll(&wait, attempt) {
+        resume: Box::new(move |core: &mut Core| match core.remote_text_poll(&wait) {
             RemoteTextPoll::Answered(Ok(text)) => Dispatched::done(Ok(ControlResult {
                 text,
                 ..with_id(session)
             })),
             RemoteTextPoll::Answered(Err(error)) => Dispatched::done(Err(ControlError::rejected(error))),
             RemoteTextPoll::Failed(error) => Dispatched::done(Err(ControlError::rejected(error))),
-            RemoteTextPoll::Pending => remote_wait(session, wait, attempt + 1),
+            RemoteTextPoll::Pending => remote_wait(session, wait),
         }),
     }
 }
