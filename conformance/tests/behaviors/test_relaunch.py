@@ -407,6 +407,8 @@ def test_live_session_survives_the_relaunch(launch):
     # The same shell, not a new one: its leader pid and its screen came through the quit.
     assert row["leaderPID"] == before["leaderPID"]
     ctl.wait_text(sid, rf"(?m)^{marker}$", all=True)
+    # the relaunched app is of the server's own login, so its pane is not on an earlier helper (#972)
+    assert_absent(find_session(ctl.tree(), sid), "liveHostStale")
 
 
 @LIVE_IN_ANY_SHELL

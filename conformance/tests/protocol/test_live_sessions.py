@@ -325,6 +325,8 @@ def test_live_panes_run_in_claimed_daemons(live):
     node = find_session(live.tree(), sid)
     assert [surface[live.vocabulary.backed_key] for surface in node["surfaces"]] == [True, True]
     assert node["liveAttribution"] in ATTRIBUTIONS and node["splitLiveAttribution"] in ATTRIBUTIONS
+    # one build in one login: no pane is on a server of an earlier helper or login (#972)
+    assert_absent(node, "liveHostStale", "splitLiveHostStale")
     # One reply with both clients attached: upstream's count drops to 0 for a moment while a pane's client attaches.
     attached = live.wait_response(
         live.vocabulary.command("live.list"),
@@ -520,6 +522,26 @@ def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wai
     assert holding in session_ids(live.tree())
     live.wait_text(holding, r"(?m)^held-output$")
     assert_ok(live.request("session.close", holding))
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.covers("session.new", "session.text")
+def test_a_device_attributes_query_at_a_new_live_sessions_start_gets_one_answer(live):
+    """A DA query a new Live session's program writes at once, while its pane still attaches, gets one answer, not a
+    second one that a shell would show at its prompt (upstream zmx patch 0006-single-da-answer, #972)."""
+    script = (
+        "stty raw -echo min 0 time 5; printf '\\033[c'; sleep 2; "
+        "r=$(dd bs=4096 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
+        "stty sane; printf 'DAREPLY:%s:END\\n' \"$r\"; sleep 600"
+    )
+    sid = assert_ok(live.request("session.new", command=f"sh -c {shlex.quote(script)}"))["id"]
+    try:
+        live.wait_mounted(sid, "left")
+        reply = bytes.fromhex(live.wait_text(sid, r"DAREPLY:([0-9a-f]*):END").group(1))
+        assert reply.count(b"\x1b[?") == 1, f"one answer: {reply!r}"
+        assert reply.startswith(b"\x1b[?") and reply.endswith(b"c"), reply
+    finally:
+        assert_ok(live.request("session.close", sid))
 
 
 @LIVE
