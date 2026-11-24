@@ -662,6 +662,60 @@ fn the_quit_save_leaves_a_waiting_operation_unknown() {
     );
 }
 
+/// A debounced window save that lands after a dropped command, with no commit in between, writes its `unknown` first:
+/// the window it writes may hold that command's change.
+#[test]
+fn a_debounced_save_after_a_dropped_operation_writes_it_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, _) = persistent_served(dir.path());
+    let window = core.library().active_window_id().unwrap();
+    let session = core.library().store(window).unwrap().sessions().next().unwrap().id();
+    let _ = core.dispatch(&Request {
+        cmd: Command::Session(SessionCmd::Split),
+        target: Some(wire(session)),
+        args: Some(mode("on")),
+    });
+    let _ = core.commit();
+    core.library_mut().store_mut(window).unwrap().schedule_save();
+    let saves = core.commit().debounced;
+    assert_eq!(saves.len(), 1);
+    let epoch = core.remote.respawns.epoch().to_owned();
+    let dispatched = core.begin(&swap_request(session, "dropped", epoch));
+    assert!(matches!(dispatched, Dispatched::Pending { .. }));
+    drop(dispatched);
+    for save in saves {
+        core.fire_debounced(save);
+    }
+    assert_eq!(
+        on_disk(dir.path()).receipt("dropped").map(|r| r.outcome.clone()),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+}
+
+/// Another command's receipt, written with the windows, records a command dropped while it ran as `unknown` too.
+#[test]
+fn a_receipt_written_after_a_dropped_operation_writes_it_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut f = Fixture::new(1);
+    f.core.serve_catalog(CATALOG, Some(dir.path()));
+    let (first, _, _) = split_session(&mut f);
+    let second = f.sessions[1];
+    let _ = f.send(Command::Session(SessionCmd::Split), Some(&wire(second)), mode("on"));
+    let epoch = epoch(&f);
+    let kept = f.core.begin(&swap_request(first, "kept", epoch.clone()));
+    let dropped = f.core.begin(&swap_request(second, "dropped", epoch));
+    assert!(matches!(kept, Dispatched::Pending { .. }));
+    assert!(matches!(dropped, Dispatched::Pending { .. }));
+    drop(dropped);
+    let _ = kept.finish_now(&mut f.core);
+    let table = on_disk(dir.path());
+    assert!(table.receipt("kept").is_some());
+    assert_eq!(
+        table.receipt("dropped").map(|r| r.outcome.clone()),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+}
+
 fn swap_request(session: Uuid, op_id: &str, epoch: String) -> Request {
     Request {
         cmd: Command::Session(SessionCmd::Swap),

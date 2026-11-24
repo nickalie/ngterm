@@ -463,6 +463,7 @@ impl Core {
     /// id and while terminating. Commit afterwards.
     pub fn close_window(&mut self, id: Uuid) {
         self.captures_on_window_close(id);
+        self.settle_dropped_operations();
         match self.persistence.as_mut() {
             Some(persistence) => persistence.close_window(&mut self.library, id),
             None => self.library.close_window(id),
@@ -476,6 +477,7 @@ impl Core {
     /// Writes open window `id`'s snapshot now (upstream's `saveChecked`); whether it landed. True when the model is
     /// kept in memory only, with nothing to write.
     pub(crate) fn save_window_checked(&mut self, id: Uuid) -> bool {
+        self.settle_dropped_operations();
         match self.persistence.as_mut() {
             Some(persistence) => persistence.save_window(&self.library, id),
             None => true,
@@ -633,7 +635,7 @@ impl Core {
     /// the caller arms on the main loop. Without persistence the effects are drained and the saves dropped.
     pub fn commit(&mut self) -> CommitTimers {
         // before any window write: a dropped operation's change must not reach the disk with its id left to be fenced
-        self.settle_dropped_operations(false);
+        self.settle_dropped_operations();
         self.prune_zoom();
         self.prune_spawn_queue();
         self.drop_stranded_pane_overlays();
@@ -734,6 +736,7 @@ impl Core {
 
     /// A debounced save's quiet window elapsed: write it unless a later save superseded it.
     pub fn fire_debounced(&mut self, save: DebouncedSave) {
+        self.settle_dropped_operations();
         if let Some(persistence) = self.persistence.as_mut() {
             persistence.fire_debounced(&self.library, save);
         }
@@ -752,7 +755,7 @@ impl Core {
         self.cancel_all_modals();
         self.library.finalize_all_pending_closes();
         self.library.is_terminating = true;
-        self.settle_dropped_operations(true);
+        self.settle_all_operations();
         let _ = self.commit();
         self.persistence
             .as_mut()

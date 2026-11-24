@@ -108,8 +108,8 @@ impl RunningOperations {
         self.lock().remove(op_id);
     }
 
-    /// Removes and returns the abandoned ids, and the active ones too when `all`.
-    fn take_settled(&self, all: bool) -> Vec<String> {
+    /// Removes and returns the ids to record as `unknown`: the abandoned ones, and the active ones too when `all`.
+    fn take_unsettled(&self, all: bool) -> Vec<String> {
         let mut operations = self.lock();
         let ids: Vec<String> = operations
             .iter()
@@ -170,6 +170,7 @@ impl Core {
     /// Writes the open windows, then the table: upstream saves both in one store write, so an entry never reaches the
     /// disk before the model change it vouches for. Whether both landed.
     fn save_operations(&mut self) -> bool {
+        self.settle_dropped_operations();
         let windows = self
             .persistence
             .as_mut()
@@ -184,13 +185,23 @@ impl Core {
         served.save()
     }
 
-    /// Records `unknown` for each abandoned operation, and for each running one when `quitting`, and writes the table:
-    /// its command may have changed the model, so no later window write may leave the id to be fenced.
-    pub(crate) fn settle_dropped_operations(&mut self, quitting: bool) {
+    /// Records `unknown` for each abandoned operation and writes the table: its command may have changed the model, so
+    /// no later window write may leave the id to be fenced. Call it before each window write.
+    pub(crate) fn settle_dropped_operations(&mut self) {
+        self.settle_operations(false);
+    }
+
+    /// As [`Core::settle_dropped_operations`], and also records `unknown` for each operation that still runs: on quit
+    /// its step never runs again, but its change may already be in the windows.
+    pub(crate) fn settle_all_operations(&mut self) {
+        self.settle_operations(true);
+    }
+
+    fn settle_operations(&mut self, all: bool) {
         let Some(served) = self.catalog.served.as_mut() else {
             return;
         };
-        let dropped = served.running.take_settled(quitting);
+        let dropped = served.running.take_unsettled(all);
         if dropped.is_empty() {
             return;
         }
@@ -262,7 +273,7 @@ impl Core {
         if !CatalogReceipt::is_valid_op_id(op_id) {
             return Dispatched::Done(Response::failure("invalid operation id"));
         }
-        self.settle_dropped_operations(false);
+        self.settle_dropped_operations();
         if self.operation_running(op_id) {
             return Dispatched::Done(still_running(op_id));
         }
@@ -304,7 +315,7 @@ impl Core {
     /// `catalog.op`: the table's receipt of `op_id`, or a fence recorded for it, `unknown` when a drop may have taken
     /// its entry since `sent`.
     pub(crate) fn catalog_operation(&mut self, op_id: &str, sent: Option<&CatalogPosition>) -> Response {
-        self.settle_dropped_operations(false);
+        self.settle_dropped_operations();
         if self.operation_running(op_id) {
             return still_running(op_id);
         }
