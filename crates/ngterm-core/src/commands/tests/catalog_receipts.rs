@@ -533,8 +533,9 @@ fn a_receipt_that_cannot_be_saved_is_not_handed_out() {
     );
 }
 
-/// A stop while a served command waits on its terminals leaves no `applied` entry behind: the restart fences the id
-/// rather than vouch for a swap that never ran.
+/// A stop while a served command waits on its terminals leaves no `applied` entry behind, even when another request
+/// writes the table meanwhile: the id answers as not yet saved, and the restart fences it rather than vouch for a swap
+/// that never ran.
 #[test]
 fn a_stop_while_an_operation_waits_leaves_no_applied_receipt() {
     let dir = tempfile::tempdir().unwrap();
@@ -553,6 +554,12 @@ fn a_stop_while_an_operation_waits_leaves_no_applied_receipt() {
     let dispatched = f.core.begin(&swap);
     assert!(matches!(dispatched, Dispatched::Pending { .. }));
     let _ = f.core.commit();
+    let not_saved = Response::failure("the receipt for operation waiting could not be saved; ask catalog.op for it");
+    assert_eq!(lookup(&mut f, "waiting", None), not_saved);
+    assert_eq!(f.core.dispatch(&swap), not_saved);
+    let other = lookup(&mut f, "other", None);
+    assert_eq!(receipt_of(&other).map(|r| r.outcome), Some(outcome::FENCED.to_owned()));
+    assert!(on_disk(dir.path()).receipt("waiting").is_none());
     drop(dispatched);
     drop(f);
 

@@ -117,7 +117,7 @@ impl Core {
     }
 
     /// Whether the disk holds what memory does, retrying a write that failed: an entry only memory holds is never
-    /// handed out as a receipt, since a restart would lose it.
+    /// handed out as a receipt, since a restart would lose it. A running id has no entry until its command lands.
     fn operations_durable(&mut self) -> bool {
         if self.catalog.served.as_ref().is_some_and(|served| served.unsaved) {
             self.save_operations();
@@ -160,7 +160,7 @@ impl Core {
     }
 
     /// A command sent with `op_id` on a served catalog: answered from the table when the id is there, refused for
-    /// another epoch or a changed target, and otherwise run once with its marker in the table while it runs.
+    /// another epoch or a changed target, and otherwise run once; while it runs, its id answers as not yet saved.
     pub(crate) fn begin_operation(&mut self, request: &Request, op_id: &str) -> Dispatched {
         if !RECEIPT_COMMANDS.contains(&request.cmd) {
             return Dispatched::Done(Response::failure(format!("{} takes no operation id", request.cmd)));
@@ -171,6 +171,9 @@ impl Core {
         let Some(served) = self.catalog.served.as_ref() else {
             return Dispatched::Done(Response::failure(crate::dispatch::OPERATION_RECEIPTS_ERROR));
         };
+        if served.running.contains(op_id) {
+            return Dispatched::Done(unsaved(op_id));
+        }
         if let Some(recorded) = served.table.receipt(op_id).cloned() {
             return Dispatched::Done(if self.operations_durable() {
                 reply(&recorded)
@@ -197,8 +200,9 @@ impl Core {
         }
         self.refresh_catalog();
         let before = self.catalog_position().map_or(0, |position| position.rev);
-        // in memory only: a stop before the command lands must not leave an `applied` entry on disk
-        self.record_receipt(operations::receipt(op_id, &epoch, outcome::APPLIED));
+        if let Some(served) = self.catalog.served.as_mut() {
+            served.running.insert(op_id.to_owned());
+        }
         let running = Running {
             op_id: op_id.to_owned(),
             before,
@@ -213,6 +217,9 @@ impl Core {
         let Some(served) = self.catalog.served.as_ref() else {
             return Response::failure(crate::dispatch::OPERATION_RECEIPTS_ERROR);
         };
+        if served.running.contains(op_id) {
+            return unsaved(op_id);
+        }
         if let Some(recorded) = served.table.receipt(op_id).cloned() {
             if !self.operations_durable() {
                 return unsaved(op_id);
@@ -248,6 +255,9 @@ fn finish_operation(core: &mut Core, running: Running, dispatched: Dispatched) -
 
 /// The receipt of a finished command: refused with its error, applied at the revision its changes reached, or noop.
 fn settle_operation(core: &mut Core, running: &Running, response: Response) -> Response {
+    if let Some(served) = core.catalog.served.as_mut() {
+        served.running.remove(&running.op_id);
+    }
     core.refresh_catalog();
     let Some(position) = core.catalog_position() else {
         return response;
