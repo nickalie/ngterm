@@ -146,13 +146,14 @@ impl StartOptions {
 /// ([`super::handoff::ANSWER_WITHIN`]), and a margin for the request to reach it.
 pub const HANDOFF_TIMEOUT: Duration = super::handoff::ANSWER_WITHIN.saturating_add(Duration::from_secs(30));
 
-/// A handoff a call asked a server of another build for.
+/// A handoff a call asked a server of another build for. The call's connection is to the server it found last: a later
+/// server's when the one asked was of an earlier login and retired after the handoff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandoffAttempt {
-    /// The server of build `from` handed its sessions over: the connection is the replacement's.
+    /// The server of build `from` handed its sessions over to a replacement of the expected build.
     Committed { from: String },
     /// It did not (it takes no handoff requests, the handoff failed before its commit, or its outcome is unknown):
-    /// the connection is the old server's, whose sessions predate the expected build.
+    /// the old server kept its sessions, which predate the expected build.
     Failed { from: String, reason: String },
 }
 

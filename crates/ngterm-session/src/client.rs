@@ -227,7 +227,7 @@ impl Client {
     /// its sessions over to `options.executable` ([`spawn::connect_or_start`]'s handoff), as the app launching a new
     /// build does before its first pane. It never starts a server where none runs. `None` when no server runs, it is
     /// of the expected build, or `options` expects none (an unstaged executable); else how the handoff went
-    /// ([`HandoffAttempt::Failed`] leaves the sessions with the old server, predating the build).
+    /// ([`HandoffAttempt::Failed`]: the old server kept its sessions, predating the build).
     ///
     /// # Errors
     ///

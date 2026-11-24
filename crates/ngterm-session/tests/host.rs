@@ -526,7 +526,7 @@ fn the_host_lists_reads_types_into_and_kills_a_real_session() -> TestResult {
 #[test]
 fn a_server_of_an_earlier_login_marks_its_sessions_and_is_retired_once_it_holds_none() -> TestResult {
     use ngterm_session::endpoint::Endpoint;
-    use ngterm_session::protocol::{Hello, Role, read_frame};
+    use ngterm_session::protocol::{ApiCall, ApiReply, Hello, PROTOCOL_VERSION, Role, read_frame, write_message};
     use ngterm_session::server::spawn::{StartOptions, connect_existing, connect_or_start};
 
     let (earlier, later) = (Some(100_001), Some(100_002));
@@ -565,6 +565,16 @@ fn a_server_of_an_earlier_login_marks_its_sessions_and_is_retired_once_it_holds_
     assert_eq!(other.welcome.pid, std::process::id());
     let (read, closed) = std::sync::mpsc::channel();
     let mut stream = other.stream;
+    // a served call shows the server registered the connection, so its retire disconnects it
+    write_message(
+        &mut stream,
+        &ApiCall {
+            id: 1,
+            request: ApiRequest::List,
+        },
+    )?;
+    let reply = read_frame(&mut stream)?.message::<ApiReply>(PROTOCOL_VERSION)?;
+    assert!(matches!(reply.result, Ok(ApiResponse::Sessions(_))), "{reply:?}");
     thread::spawn(move || read.send(read_frame(&mut stream).is_err()));
     let fresh = connect_or_start(&endpoint, &hello, &options)?;
     assert_eq!(

@@ -231,7 +231,9 @@ fn only_a_server_of_an_earlier_login_found_here_is_asked_to_retire() {
 fn a_handoff_and_the_servers_started_on_a_retired_pass_are_the_returned_calls() {
     let namespace = Namespace::new();
     namespace.endpoint.prepare_directory().unwrap();
-    let _listener = namespace.endpoint.bind().unwrap();
+    let listener = namespace.endpoint.bind().unwrap();
+    // on Windows, a pipe has its next instance only once the listener accepts
+    let mut accepted = Vec::new();
     let started = |pid| Started {
         pid,
         path: SpawnPath::Detached,
@@ -246,8 +248,10 @@ fn a_handoff_and_the_servers_started_on_a_retired_pass_are_the_returned_calls() 
         Some(100_002),
         || {
             let (pid, login, spawned, handoff) = passes.pop().unwrap();
+            let stream = namespace.endpoint.connect().unwrap();
+            accepted.push(listener.accept().unwrap());
             Ok(Connected {
-                stream: namespace.endpoint.connect().unwrap(),
+                stream,
                 welcome: Welcome {
                     build: "b".to_owned(),
                     capabilities: Vec::new(),
