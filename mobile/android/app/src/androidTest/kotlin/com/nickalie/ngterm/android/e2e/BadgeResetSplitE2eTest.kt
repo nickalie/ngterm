@@ -7,11 +7,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.R
-import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.ASK_WAIT_MS
 import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.CONNECT_WAIT_MS
-import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.SETTLE_MS
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -64,16 +61,16 @@ class BadgeResetSplitE2eTest {
             screenshot("split-badge-raised")
 
             showTheSplitPane(splitTab)
-            Thread.sleep(SETTLE_MS)
             compose.onNode(mainTab).performClick()
-            Thread.sleep(SETTLE_MS)
-            assertTrue(terminalText().contains("badge-before=1"))
+            awaitTerminal("badge-before=1")
+            // the main pane's program reads the badge each second: a wrong clear shows within this window
+            Thread.sleep(BADGE_POLL_WINDOW_MS)
             assertFalse("showing the split pane cleared the badge before a key", "badge-after=0" in terminalText())
 
             showTheSplitPane(splitTab)
             screenshot("split-focused")
             shell("input keyevent KEYCODE_ENTER")
-            Thread.sleep(SETTLE_MS)
+            compose.waitForIdle()
             compose.onNode(mainTab).performClick()
             awaitTerminal("badge-after=0")
             screenshot("split-badge-cleared")
@@ -82,14 +79,22 @@ class BadgeResetSplitE2eTest {
     // shows the split's second pane, takes control of it when the machine leads it, and gives it the input focus
     private fun SessionLinkDriver.showTheSplitPane(splitTab: SemanticsMatcher) {
         compose.onNode(splitTab).performClick()
-        compose.waitUntil(CONNECT_WAIT_MS) { "badge-before" !in terminalText() }
         val cover = hasText(text(R.string.session_take_control))
-        val covered = runCatching { compose.waitUntil(ASK_WAIT_MS) { nodes(cover) > 0 } }.isSuccess
-        if (covered) {
+        // a pane that attaches, or a follower under its cover, shows no text: only the cover or its own text decides
+        compose.waitUntil(CONNECT_WAIT_MS) { nodes(cover) > 0 || splitPaneShown() }
+        if (nodes(cover) > 0) {
             compose.onAllNodesWithText(text(R.string.session_take_control))[0].performClick()
-            compose.waitUntil(CONNECT_WAIT_MS) { nodes(cover) == 0 }
+            compose.waitUntil(CONNECT_WAIT_MS) { nodes(cover) == 0 && splitPaneShown() }
         }
         compose.onNode(hasContentDescription(text(R.string.terminal_description))).performClick()
         compose.waitForIdle()
+    }
+
+    private fun SessionLinkDriver.splitPaneShown(): Boolean =
+        terminalText().let { it.isNotBlank() && "badge-before" !in it }
+
+    private companion object {
+        /** Longer than the main pane program's one-second poll of the badge. */
+        const val BADGE_POLL_WINDOW_MS = 3_000L
     }
 }
