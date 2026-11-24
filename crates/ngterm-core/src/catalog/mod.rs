@@ -123,14 +123,6 @@ impl Served {
         self.unsaved = written.is_err();
         !self.unsaved
     }
-
-    /// Whether the table on disk holds what memory does, retrying a write that failed.
-    pub(crate) fn durable(&mut self) -> bool {
-        if self.unsaved {
-            self.save();
-        }
-        !self.unsaved
-    }
 }
 
 /// The table `path` holds; a missing, unreadable or malformed one reads as empty and keeps the catalog.

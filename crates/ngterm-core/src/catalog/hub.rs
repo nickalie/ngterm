@@ -271,14 +271,6 @@ impl CatalogHub {
         }
     }
 
-    /// Closes every subscriber's stream (the quit).
-    pub fn shutdown(&mut self) {
-        let ids: Vec<SubscriberId> = self.subscribers.keys().copied().collect();
-        for id in ids {
-            self.drop_subscriber(id, CloseReason::Unsendable);
-        }
-    }
-
     fn stamped(&self, mut snapshot: CatalogSnapshot) -> CatalogSnapshot {
         self.epoch.clone_into(&mut snapshot.epoch);
         snapshot.rev = self.rev;

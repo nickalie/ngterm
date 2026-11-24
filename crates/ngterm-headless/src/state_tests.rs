@@ -566,13 +566,14 @@ fn presentation_adoption_arms_hello_deadline_and_abandon_releases_the_stream() {
 #[test]
 fn presentation_callbacks_obey_shutdown_and_release_failed_posts() {
     let (mut state, main_loop, _, lines, serial, _dir) = presented();
-    let mut reader = presentation_reader(state.poster.clone(), serial);
+    let mut reader = gated_reader(state.poster.clone(), serial, Core::presentation_line);
     // a bad frame shuts the viewer's channel: the reader's task reaches the core
     reader(b"not a frame".to_vec());
     main_loop.drain(&mut state);
     assert_eq!(lines.shutdowns.get(), 1);
     state.save_on_quit();
     let shutdowns = lines.shutdowns.get();
+    assert_eq!(shutdowns, 2, "the quit save left the presentation stream open");
     reader(b"not a frame".to_vec());
     presentation_closer(state.poster.clone(), serial)();
     main_loop.drain(&mut state);
@@ -1037,15 +1038,25 @@ fn a_catalog_subscription_streams_the_snapshot_then_each_change() {
     worker.join().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn the_quit_closes_the_catalog_streams_and_a_late_close_reaches_nothing() {
+    use std::io::{BufRead as _, BufReader};
     let (mut state, main_loop, _) = fixture();
     state.core.serve_catalog(uuid::Uuid::new_v4(), None);
     let reply = state.handle_request(&request(Command::Catalog(CatalogCmd::Subscribe), None, json!({})));
     assert!(reply.response.ok, "{reply:?}");
+    let (server, client) = ngterm_server::endpoint::pair().unwrap();
+    // well inside the hello deadline, which this test never runs: only the quit can close the stream in time
+    client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let owner = reply.stream.unwrap();
+    let worker = std::thread::spawn(move || owner.adopt(server, Vec::new()));
     state.save_on_quit();
-    // the deadline, the heartbeat and the abandoned stream's close all run after the quit save
-    reply.stream.unwrap().abandon();
+    let mut line = String::new();
+    let read = BufReader::new(client).read_line(&mut line).unwrap();
+    assert_eq!(read, 0, "the stream outlived the quit save: {line:?}");
+    worker.join().unwrap();
+    // the deadline, the heartbeat and the stream's close all run after the quit save
     main_loop.drain(&mut state);
     assert!(
         state.core.catalog_heartbeat(),

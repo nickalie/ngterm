@@ -389,7 +389,7 @@ impl HeadlessState {
         self.arm_presentation_heartbeat();
         let owner = LineStreamOwner::new(
             stream,
-            presentation_reader(self.poster.clone(), serial),
+            gated_reader(self.poster.clone(), serial, Core::presentation_line),
             presentation_closer(self.poster.clone(), serial),
         );
         Reply::streaming(response, Box::new(owner))
@@ -410,27 +410,10 @@ impl HeadlessState {
             },
         );
         self.arm_catalog_heartbeat();
-        let (lines, closes) = (self.poster.clone(), self.poster.clone());
-        let gate = InboundGate::new(ngterm_core::remote::INBOUND_LIMIT);
+        let closes = self.poster.clone();
         let owner = LineStreamOwner::new(
             stream,
-            move |line| {
-                gate.acquire();
-                let released = gate.clone();
-                let task = move |state: &mut Self| {
-                    if !state.quitting() {
-                        state.core.catalog_line(serial, &line);
-                        state.settle();
-                    }
-                    released.release();
-                };
-                let queued = lines
-                    .upgrade()
-                    .is_some_and(|main_loop| main_loop.post(Box::new(task)).is_ok());
-                if !queued {
-                    gate.release();
-                }
-            },
+            gated_reader(self.poster.clone(), serial, Core::catalog_line),
             move || {
                 post(&closes, move |state| {
                     if !state.quitting() {
@@ -702,15 +685,20 @@ fn result_id(response: &Response) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// A presentation stream's line handler: each line a main-loop task, at most `INBOUND_LIMIT` waiting at once.
-fn presentation_reader(poster: Poster, serial: u64) -> impl FnMut(Vec<u8>) + Send + 'static {
+/// A presentation or catalog stream's line handler: each line a main-loop task that hands it to `handle`, at most
+/// `INBOUND_LIMIT` waiting at once.
+fn gated_reader(
+    poster: Poster,
+    serial: u64,
+    handle: fn(&mut Core, u64, &[u8]),
+) -> impl FnMut(Vec<u8>) + Send + 'static {
     let gate = InboundGate::new(ngterm_core::remote::INBOUND_LIMIT);
     move |line| {
         gate.acquire();
         let released = gate.clone();
         let task = move |state: &mut HeadlessState| {
             if !state.quitting() {
-                state.core.presentation_line(serial, &line);
+                handle(&mut state.core, serial, &line);
                 state.settle();
             }
             released.release();

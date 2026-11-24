@@ -2,7 +2,7 @@
 //! that drive a window on the machine showing it (upstream's `HeadlessCommandPolicy`, `CatalogRoot.swift`), a
 //! `--wait` it could never end (`ServerActions+Sessions.swift`), and a GUI ask or a pick with no session to bind it to
 //! (`ServerActions+Ask.swift`, `ServerActions+Pick.swift`). Upstream's strings name `ngterm-headless` here
-//! (conformance/docs/rust-build.md > Renamed strings); "a window on the Mac" reads "a window on the machine".
+//! (conformance/docs/rust-build.md > Other strings of the build's own); "a window on the Mac" reads "a window on the machine".
 
 use ngterm_proto::command::{
     BrowserCmd, ConfigCmd, FontCmd, KeymapCmd, QuickCmd, SessionCmd, SidebarCmd, SurfaceCmd, ThemeCmd, WindowCmd,

@@ -83,8 +83,9 @@ def test_a_stream_that_does_not_open_with_a_hello_is_closed(remote_origin):
     with origin.stream("catalog.subscribe") as stream:
         assert stream.reply.ok, stream.reply.raw
         stream.send({"kind": "ping"})
+        # well inside the server's 10 s hello deadline, so only the refused first frame can close it in time
         with pytest.raises(NoResponse):
-            stream.read(10)
+            stream.read(3)
 
 
 @pytest.mark.covers("catalog.op", "session.new", "field:result.receipt")

@@ -21,10 +21,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: CatalogCmd, request: &Request) -> R
     match cmd {
         CatalogCmd::Subscribe => Ok(Response::success()),
         CatalogCmd::Op => {
-            let refused = operation_refusal(request);
-            if refused != OP_SERVER_ONLY {
-                return Err(ControlError::rejected(refused));
-            }
+            check_op_args(request).map_err(ControlError::rejected)?;
             let op_id = request.target.as_deref().and_then(trimmed_or_none).unwrap_or_default();
             let args = args_of(request);
             let sent = args
@@ -45,21 +42,22 @@ const OP_SERVER_ONLY: &str = "catalog.op is served only by ngterm-headless";
 pub(crate) fn refusal(cmd: CatalogCmd, request: &Request) -> ControlError {
     match cmd {
         CatalogCmd::Subscribe => ControlError::rejected(SUBSCRIBE_SERVER_ONLY),
-        CatalogCmd::Op => ControlError::rejected(operation_refusal(request)),
+        CatalogCmd::Op => ControlError::rejected(check_op_args(request).err().unwrap_or(OP_SERVER_ONLY)),
     }
 }
 
-fn operation_refusal(request: &Request) -> &'static str {
+/// `catalog.op`'s arguments, checked before the host answers or refuses it.
+fn check_op_args(request: &Request) -> Result<(), &'static str> {
     let op_id = request.target.as_deref().and_then(trimmed_or_none);
     if !op_id.is_some_and(|op_id| CatalogReceipt::is_valid_op_id(&op_id)) {
-        return "catalog.op requires an operation id";
+        return Err("catalog.op requires an operation id");
     }
     let args = args_of(request);
     let epoch = args.epoch.as_deref().and_then(trimmed_or_none);
     if epoch.is_some() != args.rev.is_some() {
-        return "catalog.op takes epoch and rev together";
+        return Err("catalog.op takes epoch and rev together");
     }
-    OP_SERVER_ONLY
+    Ok(())
 }
 
 #[cfg(test)]

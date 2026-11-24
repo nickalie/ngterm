@@ -3,7 +3,9 @@
 //! answers the same, a lookup fences an unseen id, and nothing only memory holds is handed out.
 
 use ngterm_proto::command::{CatalogCmd, SessionCmd, WorkspaceCmd};
-use ngterm_proto::{Args, CatalogReceipt, Command, Response};
+use std::path::{Path, PathBuf};
+
+use ngterm_proto::{AppIdentity, Args, CatalogReceipt, Command, Request, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -13,7 +15,9 @@ use super::{Fixture, answered_id, args, wire};
 use crate::catalog::OPERATIONS_FILE_NAME;
 use crate::catalog::fixture::CATALOG;
 use crate::catalog::operations::{CatalogOperationTable, CatalogPosition, outcome, receipt};
-use crate::dispatch::OPERATION_RECEIPTS_ERROR;
+use crate::dispatch::{Dispatched, OPERATION_RECEIPTS_ERROR};
+use crate::persist::{AppSettings, LibraryPersistence};
+use crate::{Core, CoreConfig, CoreState};
 
 fn epoch(fixture: &Fixture) -> String {
     fixture.core.remote.respawns.epoch().to_owned()
@@ -526,6 +530,102 @@ fn a_receipt_that_cannot_be_saved_is_not_handed_out() {
     assert_eq!(
         table.receipt("unseen").map(|r| r.outcome.clone()),
         Some(outcome::FENCED.to_owned())
+    );
+}
+
+/// A stop while a served command waits on its terminals leaves no `applied` entry behind: the restart fences the id
+/// rather than vouch for a swap that never ran.
+#[test]
+fn a_stop_while_an_operation_waits_leaves_no_applied_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut f = Fixture::new(0);
+    f.core.serve_catalog(CATALOG, Some(dir.path()));
+    let (session, _, _) = split_session(&mut f);
+    let epoch = epoch(&f);
+    let swap = Request {
+        cmd: Command::Session(SessionCmd::Swap),
+        target: Some(wire(session)),
+        args: Some(args(|a| {
+            a.op_id = Some("waiting".to_owned());
+            a.epoch = Some(epoch);
+        })),
+    };
+    let dispatched = f.core.begin(&swap);
+    assert!(matches!(dispatched, Dispatched::Pending { .. }));
+    let _ = f.core.commit();
+    drop(dispatched);
+    drop(f);
+
+    let mut restarted = Fixture::new(0);
+    restarted.core.serve_catalog(CATALOG, Some(dir.path()));
+    let answer = lookup(&mut restarted, "waiting", None);
+    assert_eq!(receipt_of(&answer).map(|r| r.outcome), Some(outcome::FENCED.to_owned()));
+}
+
+/// A core over a library bootstrapped from `dir` that serves its catalog there too, as `ngterm-headless` does; the
+/// path of its window's file.
+fn persistent_served(dir: &Path) -> (Core, PathBuf) {
+    let mut persistence = LibraryPersistence::new(dir);
+    let library = persistence.bootstrap("/home/u");
+    let window = library.active_window_id().expect("the seeded window");
+    let file = persistence.window_path(window);
+    let mut core = Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("0.1.0", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library,
+            settings: AppSettings::default(),
+            persistence: Some(persistence),
+        },
+    );
+    let _ = core.commit();
+    core.serve_catalog(CATALOG, Some(dir));
+    (core, file)
+}
+
+/// The receipt vouches for a model change on disk: a window that cannot be written keeps it unsaved, and the retry
+/// writes the window before the receipt.
+#[test]
+fn a_receipt_waits_for_the_window_it_vouches_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, file) = persistent_served(dir.path());
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir_all(file.join("blocker")).unwrap();
+    let epoch = core.remote.respawns.epoch().to_owned();
+    let reply = core.dispatch(&Request {
+        cmd: Command::Workspace(WorkspaceCmd::New),
+        target: None,
+        args: Some(args(|a| {
+            a.name = Some("dev".to_owned());
+            a.op_id = Some("ws".to_owned());
+            a.epoch = Some(epoch);
+        })),
+    });
+    let _ = core.commit();
+    assert_eq!(
+        reply,
+        Response::failure("the receipt for operation ws could not be saved; ask catalog.op for it")
+    );
+    let table = dir.path().join(OPERATIONS_FILE_NAME);
+    assert!(!table.exists() || on_disk(dir.path()).receipt("ws").is_none());
+
+    std::fs::remove_dir_all(&file).unwrap();
+    let lookup = core.dispatch(&Request {
+        cmd: Command::Catalog(CatalogCmd::Op),
+        target: Some("ws".to_owned()),
+        args: Some(Args::default()),
+    });
+    assert_eq!(
+        receipt_of(&lookup).map(|r| r.outcome),
+        Some(outcome::APPLIED.to_owned()),
+        "{lookup:?}"
+    );
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
+    assert_eq!(
+        on_disk(dir.path()).receipt("ws").map(|r| r.outcome.clone()),
+        Some(outcome::APPLIED.to_owned())
     );
 }
 

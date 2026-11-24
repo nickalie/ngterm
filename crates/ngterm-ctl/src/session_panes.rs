@@ -273,7 +273,7 @@ impl RequestCommand for Scratch {
         if !self.operation.is_set() {
             return Err("--expect-scratch needs --op-id".to_owned());
         }
-        if !expected.eq_ignore_ascii_case("none") && uuid::Uuid::parse_str(expected).is_err() {
+        if !expected.eq_ignore_ascii_case("none") && ngterm_core::persist::parse_uuid_string(expected).is_none() {
             return Err("--expect-scratch takes a scratch identity or none".to_owned());
         }
         Ok(())
@@ -774,6 +774,19 @@ mod tests {
         );
         assert_eq!(
             outcome(&["scratch", "--expect-scratch", "x", "--op-id", "op-1", "--epoch", "e1"]),
+            Err("--expect-scratch takes a scratch identity or none".to_owned())
+        );
+        let simple = PANE.replace('-', "");
+        assert_eq!(
+            outcome(&[
+                "scratch",
+                "--expect-scratch",
+                &simple,
+                "--op-id",
+                "op-1",
+                "--epoch",
+                "e1"
+            ]),
             Err("--expect-scratch takes a scratch identity or none".to_owned())
         );
     }

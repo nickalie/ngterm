@@ -1,7 +1,6 @@
 //! Operation receipts on a served catalog (upstream's `ServerActions+Receipts.swift`): a structural command sent with
 //! an `opID` runs at most once, its outcome kept in the operation table and answered to every repeat, and `catalog.op`
-//! reads that table, fencing an id it does not hold. The strings name this build's server
-//! (conformance/docs/rust-build.md > Renamed strings).
+//! reads that table, fencing an id it does not hold.
 
 use ngterm_proto::command::{SessionCmd, WorkspaceCmd};
 use ngterm_proto::{CatalogReceipt, Command, Request, Response};
@@ -79,9 +78,17 @@ impl Core {
         Some(CatalogPosition::new(served.hub.epoch(), served.hub.rev()))
     }
 
-    /// Records `receipt` and writes the table; whether it landed. A failed write keeps it in memory, so this run still
-    /// answers the id the same way, but the caller is told nothing durable was kept.
+    /// Records `receipt` and writes it; whether it landed. A failed write keeps it in memory, so this run still answers
+    /// the id the same way, but the caller is told nothing durable was kept.
     fn save_receipt(&mut self, receipt: CatalogReceipt) -> bool {
+        if !self.record_receipt(receipt) {
+            return false;
+        }
+        self.save_operations()
+    }
+
+    /// Records `receipt` in memory only; false without a served catalog.
+    fn record_receipt(&mut self, receipt: CatalogReceipt) -> bool {
         let Some(position) = self.catalog_position() else {
             return false;
         };
@@ -89,7 +96,33 @@ impl Core {
             return false;
         };
         served.table.record(receipt, &position);
+        true
+    }
+
+    /// Writes the open windows, then the table: upstream saves both in one store write, so an entry never reaches the
+    /// disk before the model change it vouches for. Whether both landed.
+    fn save_operations(&mut self) -> bool {
+        let windows = self
+            .persistence
+            .as_mut()
+            .is_none_or(|persistence| persistence.save_all_checked(&self.library));
+        let Some(served) = self.catalog.served.as_mut() else {
+            return false;
+        };
+        if !windows {
+            served.unsaved = true;
+            return false;
+        }
         served.save()
+    }
+
+    /// Whether the disk holds what memory does, retrying a write that failed: an entry only memory holds is never
+    /// handed out as a receipt, since a restart would lose it.
+    fn operations_durable(&mut self) -> bool {
+        if self.catalog.served.as_ref().is_some_and(|served| served.unsaved) {
+            self.save_operations();
+        }
+        self.catalog.served.as_ref().is_some_and(|served| !served.unsaved)
     }
 
     /// The refusal of an operation decided on what `request`'s target no longer has: a page row a command cannot
@@ -135,11 +168,11 @@ impl Core {
         if !CatalogReceipt::is_valid_op_id(op_id) {
             return Dispatched::Done(Response::failure("invalid operation id"));
         }
-        let Some(served) = self.catalog.served.as_mut() else {
+        let Some(served) = self.catalog.served.as_ref() else {
             return Dispatched::Done(Response::failure(crate::dispatch::OPERATION_RECEIPTS_ERROR));
         };
         if let Some(recorded) = served.table.receipt(op_id).cloned() {
-            return Dispatched::Done(if served.durable() {
+            return Dispatched::Done(if self.operations_durable() {
                 reply(&recorded)
             } else {
                 unsaved(op_id)
@@ -164,7 +197,8 @@ impl Core {
         }
         self.refresh_catalog();
         let before = self.catalog_position().map_or(0, |position| position.rev);
-        self.save_receipt(operations::receipt(op_id, &epoch, outcome::APPLIED));
+        // in memory only: a stop before the command lands must not leave an `applied` entry on disk
+        self.record_receipt(operations::receipt(op_id, &epoch, outcome::APPLIED));
         let running = Running {
             op_id: op_id.to_owned(),
             before,
@@ -176,11 +210,11 @@ impl Core {
     /// `catalog.op`: the table's receipt of `op_id`, or a fence recorded for it, `unknown` when a drop may have taken
     /// its entry since `sent`.
     pub(crate) fn catalog_operation(&mut self, op_id: &str, sent: Option<&CatalogPosition>) -> Response {
-        let Some(served) = self.catalog.served.as_mut() else {
+        let Some(served) = self.catalog.served.as_ref() else {
             return Response::failure(crate::dispatch::OPERATION_RECEIPTS_ERROR);
         };
         if let Some(recorded) = served.table.receipt(op_id).cloned() {
-            if !served.durable() {
+            if !self.operations_durable() {
                 return unsaved(op_id);
             }
             return Response::with_result(receipt_result(&recorded));

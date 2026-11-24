@@ -3,9 +3,9 @@
 //! `ngterm-headless` serves these; an app with windows refuses them.
 
 use ngterm_core::paths::Env;
+use ngterm_core::persist::parse_uuid_string;
 use ngterm_proto::command::CatalogCmd;
 use ngterm_proto::{Args, CatalogReceipt, Command, Request};
-use uuid::Uuid;
 
 use crate::{BasicOptions, Failure, RequestCommand};
 
@@ -52,7 +52,7 @@ impl OperationOptions {
         if self.op_id.is_none() {
             return Err("--expect-panes needs --op-id".to_owned());
         }
-        if panes(expected).iter().any(|pane| Uuid::parse_str(pane).is_err()) {
+        if panes(expected).iter().any(|pane| parse_uuid_string(pane).is_none()) {
             return Err("--expect-panes takes pane identities separated by commas".to_owned());
         }
         Ok(())
@@ -284,7 +284,10 @@ mod tests {
             json!({"cmd": "tree", "args": {"opID": "op-1", "epoch": "E"}})
         );
 
-        let refusals: [(&[&str], &str); 6] = [
+        // upstream's `UUID(uuidString:)` takes only the hyphenated form
+        let simple = PANE.replace('-', "");
+        let braced = format!("{{{PANE}}}");
+        let refusals: [(&[&str], &str); 8] = [
             (&["--op-id", "a"], "--op-id and --epoch go together"),
             (&["--epoch", "E"], "--op-id and --epoch go together"),
             (
@@ -298,6 +301,14 @@ mod tests {
             ),
             (
                 &["--op-id", "a", "--epoch", "E", "--expect-panes", "x,"],
+                "--expect-panes takes pane identities separated by commas",
+            ),
+            (
+                &["--op-id", "a", "--epoch", "E", "--expect-panes", &simple],
+                "--expect-panes takes pane identities separated by commas",
+            ),
+            (
+                &["--op-id", "a", "--epoch", "E", "--expect-panes", &braced],
                 "--expect-panes takes pane identities separated by commas",
             ),
         ];

@@ -1004,7 +1004,9 @@ rejects the host), each in a terminal nobody draws, so every session is attachab
 It also serves its catalog to remote windows: `catalog.subscribe` streams every workspace, session and live pane, and a
 structural command sent with `--op-id` runs once and answers a receipt that `ngtermctl catalog op` reads back. The
 catalog's id (`catalog-id`) and the receipts (`catalog-operations.json`) live in the state dir; a start refuses a
-`catalog-id` that is not a UUID rather than give its viewers another catalog.
+`catalog-id` that is not a UUID rather than give its viewers another catalog. Upstream keeps the receipts in the
+window snapshot, so one write lands both; here a receipt is written only after the windows it vouches for, and a
+failed window write keeps it unsaved, as a failed receipt write does.
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)

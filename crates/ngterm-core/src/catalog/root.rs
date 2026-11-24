@@ -20,6 +20,8 @@ pub const FILE_NAME: &str = "catalog-id";
 pub enum CatalogIdError {
     Unreadable(String),
     Malformed(String),
+    /// The file does not exist and a new one could not be written: the path and the write's error.
+    Unwritable(String, String),
 }
 
 impl fmt::Display for CatalogIdError {
@@ -27,6 +29,7 @@ impl fmt::Display for CatalogIdError {
         match self {
             Self::Unreadable(path) => write!(f, "catalog id cannot be read: {path}"),
             Self::Malformed(path) => write!(f, "catalog id is not a UUID: {path}"),
+            Self::Unwritable(path, error) => write!(f, "catalog id cannot be written: {path}: {error}"),
         }
     }
 }
@@ -49,7 +52,7 @@ pub fn load(directory: &Path) -> Result<Uuid, CatalogIdError> {
             let id = Uuid::new_v4();
             fs::create_dir_all(directory)
                 .and_then(|()| write_atomic(&file, format!("{}\n", uuid_string(id)).as_bytes()))
-                .map_err(|_| CatalogIdError::Unreadable(shown()))?;
+                .map_err(|error| CatalogIdError::Unwritable(shown(), error.to_string()))?;
             Ok(id)
         }
         Err(_) => Err(CatalogIdError::Unreadable(shown())),
@@ -101,5 +104,27 @@ mod tests {
             CatalogIdError::Unreadable("/s/catalog-id".to_owned()).to_string(),
             "catalog id cannot be read: /s/catalog-id"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_id_that_cannot_be_written_is_an_error_with_its_cause() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
+        let loaded = load(dir.path());
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let file = dir.path().join(FILE_NAME).display().to_string();
+        let Err(CatalogIdError::Unwritable(path, cause)) = &loaded else {
+            panic!("{loaded:?}");
+        };
+        assert_eq!(path, &file);
+        assert!(!cause.is_empty());
+        assert_eq!(
+            loaded.as_ref().unwrap_err().to_string(),
+            format!("catalog id cannot be written: {file}: {cause}")
+        );
+        assert!(!dir.path().join(FILE_NAME).exists());
     }
 }

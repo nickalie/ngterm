@@ -362,7 +362,7 @@ fn a_ping_is_answered_with_an_ack() {
 }
 
 #[test]
-fn an_unsubscribed_viewer_gets_nothing_more_and_a_shutdown_closes_the_rest() {
+fn an_unsubscribed_viewer_gets_nothing_more() {
     let (mut hub, _) = hub();
     let (gone, left) = subscribe(&mut hub, &[], None);
     let (_, kept) = subscribe(&mut hub, &[], None);
@@ -371,7 +371,5 @@ fn an_unsubscribed_viewer_gets_nothing_more_and_a_shutdown_closes_the_rest() {
     hub.refresh(snapshot(vec![workspace(Uuid::new_v4(), "w", vec![])]));
     assert_eq!(left.frames.borrow().len(), 2);
     assert_eq!(kept.deltas().len(), 1);
-    hub.shutdown();
-    assert_eq!(*kept.closed.borrow(), [CloseReason::Unsendable]);
-    assert_eq!(hub.subscriber_count(), 0);
+    assert_eq!(hub.subscriber_count(), 1);
 }
