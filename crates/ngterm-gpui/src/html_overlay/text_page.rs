@@ -325,6 +325,15 @@ impl Reads {
         ))
     }
 
+    /// The page's text read on the calling thread, which is the main one (the unit tests, with no app): a replica's
+    /// read would wait for the main loop this thread runs, so it fails as unreadable at once.
+    fn text_in_place(&self, page: Uuid, path: &str) -> Result<String, String> {
+        match self {
+            Self::Local => self.text(page, path),
+            Self::Replica(_) => Err(format!("unreadable text file: {path}")),
+        }
+    }
+
     /// Runs `work` off the main thread: on the background executor for a local file, on a thread of its own for a
     /// replica, whose read waits on the network.
     async fn off_main<T: Send + 'static>(&self, work: impl FnOnce() -> T + Send + 'static, cx: &AsyncApp) -> Option<T> {
@@ -465,7 +474,7 @@ impl TextPage {
         let (id, reads) = (self.id, self.reads.clone());
         let Some(app) = app() else {
             // the unit tests: in place, with no offset to keep
-            let read = read.map(|path| reads.text(id, &path));
+            let read = read.map(|path| reads.text_in_place(id, &path));
             return self.build(load, read, None);
         };
         let top = shown
@@ -789,7 +798,11 @@ impl TextPage {
     /// Runs `read` on the background executor and lands it here; with no app (the unit tests), in place.
     fn run_read(&self, read: LogRead) {
         let Some(app) = app() else {
-            let result = read.run();
+            // the unit tests: in place, where a replica's read would wait for this thread's own main loop
+            let result = match self.reads {
+                Reads::Local => read.run(),
+                Reads::Replica(_) => Err(format!("unreadable text file: {}", self.path)),
+            };
             self.finish(&read, result);
             return;
         };
