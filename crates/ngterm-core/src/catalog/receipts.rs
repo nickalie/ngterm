@@ -149,6 +149,7 @@ impl Core {
     /// Records `receipt` and writes it; whether it landed. A failed write keeps it in memory, so this run still answers
     /// the id the same way, but the caller is told nothing durable was kept.
     fn save_receipt(&mut self, receipt: CatalogReceipt) -> bool {
+        self.settle_dropped_operations();
         if !self.record_receipt(receipt) {
             return false;
         }
@@ -170,7 +171,6 @@ impl Core {
     /// Writes the open windows, then the table: upstream saves both in one store write, so an entry never reaches the
     /// disk before the model change it vouches for. Whether both landed.
     fn save_operations(&mut self) -> bool {
-        self.settle_dropped_operations();
         let windows = self
             .persistence
             .as_mut()
@@ -186,7 +186,9 @@ impl Core {
     }
 
     /// Records `unknown` for each abandoned operation and writes the table: its command may have changed the model, so
-    /// no later window write may leave the id to be fenced. Call it before each window write.
+    /// no later window write may leave the id to be fenced. Call it before each window write and before a receipt goes
+    /// into the table. An unsaved table holds a receipt whose windows did not land, so it keeps the entries in memory
+    /// for the retry that writes the windows first.
     pub(crate) fn settle_dropped_operations(&mut self) {
         self.settle_operations(false);
     }
@@ -210,7 +212,9 @@ impl Core {
             let unknown = operations::receipt(&op_id, served.hub.epoch(), outcome::UNKNOWN);
             served.table.record(unknown, &position);
         }
-        served.save();
+        if !served.unsaved {
+            served.save();
+        }
     }
 
     /// Whether the id's command runs now.

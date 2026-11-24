@@ -794,6 +794,124 @@ fn a_receipt_waits_for_the_window_it_vouches_for() {
     );
 }
 
+/// Splits `session` and commits, so a swap on it waits on its terminals.
+fn split_and_commit(core: &mut Core, session: Uuid) {
+    let _ = core.dispatch(&Request {
+        cmd: Command::Session(SessionCmd::Split),
+        target: Some(wire(session)),
+        args: Some(mode("on")),
+    });
+    let _ = core.commit();
+}
+
+/// A window write that fails from now on: the file is replaced by a directory that is not empty.
+fn block_window(file: &Path) {
+    let _ = std::fs::remove_file(file);
+    std::fs::create_dir_all(file.join("blocker")).unwrap();
+}
+
+fn lookup_core(core: &mut Core, op_id: &str) -> Response {
+    core.dispatch(&Request {
+        cmd: Command::Catalog(CatalogCmd::Op),
+        target: Some(op_id.to_owned()),
+        args: Some(Args::default()),
+    })
+}
+
+/// The `unknown` of a command dropped while another ran reaches the disk before that other command's receipt, which
+/// waits for its windows.
+#[test]
+fn a_dropped_operations_unknown_is_written_before_the_next_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, file) = persistent_served(dir.path());
+    let window = core.library().active_window_id().unwrap();
+    let first = core.library().store(window).unwrap().sessions().next().unwrap().id();
+    let _ = core.dispatch(&Request {
+        cmd: SESSION_NEW,
+        target: None,
+        args: Some(Args::default()),
+    });
+    let _ = core.commit();
+    let second = core
+        .library()
+        .store(window)
+        .unwrap()
+        .sessions()
+        .map(crate::model::Session::id)
+        .find(|id| *id != first)
+        .unwrap();
+    split_and_commit(&mut core, first);
+    split_and_commit(&mut core, second);
+    let epoch = core.remote.respawns.epoch().to_owned();
+    let kept = core.begin(&swap_request(first, "kept", epoch.clone()));
+    let dropped = core.begin(&swap_request(second, "dropped", epoch));
+    assert!(matches!(kept, Dispatched::Pending { .. }));
+    assert!(matches!(dropped, Dispatched::Pending { .. }));
+    block_window(&file);
+    drop(dropped);
+    let reply = kept.finish_now(&mut core);
+    assert_eq!(
+        reply,
+        Response::failure("the receipt for operation kept could not be saved; ask catalog.op for it")
+    );
+    let table = on_disk(dir.path());
+    assert!(table.receipt("kept").is_none());
+    assert_eq!(
+        table.receipt("dropped").map(|r| r.outcome.clone()),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+
+    std::fs::remove_dir_all(&file).unwrap();
+    let answer = lookup_core(&mut core, "kept");
+    assert!(answer.ok && receipt_of(&answer).is_some(), "{answer:?}");
+    assert_eq!(receipt_of(&answer), on_disk(dir.path()).receipt("kept").cloned());
+}
+
+/// A command dropped while the table holds a receipt whose window did not land keeps its `unknown` in memory: a
+/// table write then would put that receipt on the disk before its window.
+#[test]
+fn a_settle_never_writes_a_receipt_whose_window_did_not_land() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, file) = persistent_served(dir.path());
+    let window = core.library().active_window_id().unwrap();
+    let session = core.library().store(window).unwrap().sessions().next().unwrap().id();
+    split_and_commit(&mut core, session);
+    block_window(&file);
+    let epoch = core.remote.respawns.epoch().to_owned();
+    let reply = core.dispatch(&Request {
+        cmd: Command::Workspace(WorkspaceCmd::New),
+        target: None,
+        args: Some(args(|a| {
+            a.name = Some("dev".to_owned());
+            a.op_id = Some("ws".to_owned());
+            a.epoch = Some(epoch.clone());
+        })),
+    });
+    assert_eq!(
+        reply,
+        Response::failure("the receipt for operation ws could not be saved; ask catalog.op for it")
+    );
+    drop(core.begin(&swap_request(session, "dropped", epoch)));
+    let _ = core.commit();
+    let table = dir.path().join(OPERATIONS_FILE_NAME);
+    assert!(!table.exists() || on_disk(dir.path()).receipt("ws").is_none());
+
+    std::fs::remove_dir_all(&file).unwrap();
+    let answer = lookup_core(&mut core, "ws");
+    assert_eq!(
+        receipt_of(&answer).map(|r| r.outcome),
+        Some(outcome::APPLIED.to_owned()),
+        "{answer:?}"
+    );
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
+    let table = on_disk(dir.path());
+    assert!(table.receipt("ws").is_some());
+    assert_eq!(
+        table.receipt("dropped").map(|r| r.outcome.clone()),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+}
+
 /// Upstream's `theTableIsSavedAndRestoredWithTheStore` and the restart's `adopt`: an operation applied in the last run
 /// is answered after a restart at revision 0 of the new epoch, and a malformed table starts empty.
 #[test]
