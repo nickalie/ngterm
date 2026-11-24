@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation as _;
 
 use super::markdown_page::escaped;
 use crate::terminal_text::stripping_escapes;
@@ -27,10 +28,10 @@ pub const MAX_TAIL_BYTES: usize = 2 << 20;
 /// the page searches what the model stores and a page command carrying it stays inside a frame.
 pub const MAX_QUERY: usize = 16_384;
 
-/// `query` cut to [`MAX_QUERY`] characters.
+/// `query` cut to [`MAX_QUERY`] grapheme clusters, as Swift's `String.prefix` counts them.
 #[must_use]
 pub fn cut_query(query: &str) -> String {
-    query.chars().take(MAX_QUERY).collect()
+    query.graphemes(true).take(MAX_QUERY).collect()
 }
 
 /// Lowercased extensions a plain click opens as a log page, following its end.

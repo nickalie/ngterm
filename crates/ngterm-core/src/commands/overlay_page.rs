@@ -165,7 +165,8 @@ impl PageOpening {
 /// a program's slot rules and answers with its id, the one `session.overlay.result --page` reads. A page the
 /// placement rule hands to the presenting machine has its file read here first (an image's probe, a Markdown or text
 /// file's check, through the web views or the headless probe: [`read_for_hand_over`]), so a missing, oversized or binary
-/// file or a log page is refused before any slot is reserved; it is then reserved for that machine. Nothing renders
+/// file is refused before any slot is reserved, and so is a log page unless that machine lists live text pages; it is
+/// then reserved for that machine. Nothing renders
 /// here, so neither the saved store nor `--follow` are this machine's concern.
 pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, opening: PageOpening) -> Outcome {
     open_checked(core, target, window, opening, None, false)
@@ -377,7 +378,7 @@ fn read_for_hand_over(
 
 /// Reads the file of a page the presenting machine is handed, as `session.overlay.open` reads it there before anything
 /// is reserved (upstream's `openSessionOverlay`): an image's probe, which it travels with, or a Markdown or text file's
-/// check, a log's of its last lines (a log page is refused after it, `textLogRefusal`). A file or URL page reads
+/// check, a log's of its last lines (then refused unless the presenter lists live text pages, `textLogRefusal`). A file or URL page reads
 /// nothing.
 ///
 /// # Errors

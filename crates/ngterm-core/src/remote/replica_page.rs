@@ -58,7 +58,7 @@ mod tests;
 pub const ORIGIN_UNREACHABLE: &str = "the origin cannot be reached for this page";
 /// The page was placed and is gone already (upstream's refusal).
 const NOT_SHOWN: &str = "page not shown";
-/// A text action this presenter does not run yet (upstream's interim refusal).
+/// A text action this presenter does not run yet: this build's own interim refusal, kept until it lists `page.text`.
 const TEXT_ACTIONS_UNSUPPORTED: &str = "text page actions are not supported";
 /// A text action whose fields do not make one (upstream's refusal).
 const INVALID_TEXT_ACTION: &str = "invalid text page action";

@@ -1742,7 +1742,7 @@ def test_a_log_page_goes_to_a_presenter_listing_page_text_which_answers_its_text
     run there: the origin answers with the presenter's `page.result`, whose state the tree shows at once, and `presenter
     did not answer` when none comes (#978)."""
     log = tmp_path / "app.log"
-    log.write_text("one\ntwo\n")
+    log.write_bytes(b"one\ntwo\n")
     with _page_presenter(live, CONTENT_PRESENTER_KINDS) as (sid, _, _):
         assert_error(live.request("session.overlay.open", sid, textFile=str(log), followFile=True), LOG_REMOTE)
         assert "remoteOverlays" not in find_session(live.tree(), sid)

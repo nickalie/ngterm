@@ -214,18 +214,44 @@ fn a_page_that_ends_or_parks_while_an_action_waits_answers_the_viewer_is_gone() 
     let (mut origin, page) = log_origin(&files, "app.log", &SUPPORTED_KINDS);
     let waiting = begin(&mut origin, SessionCmd::OverlayWrap, |a| a.mode = Some("on".to_owned()));
     let command = last_command(&origin);
-    origin.lose_presenter();
-    // a result from the presenter that no longer holds the page settles nothing
-    answer(&mut origin, &command, &json!({"ok": true, "text": "wrapped"}));
+    let before = text_node(&mut origin);
+    origin.report(&json!({"kind": "page.detached", "page": {"page": page}}));
+    // a result for a page its presenter detached settles nothing and mirrors nothing
+    answer(
+        &mut origin,
+        &command,
+        &json!({"ok": true, "text": "wrapped", "state": {"following": false, "revision": 0, "wrap": true}}),
+    );
     assert_eq!(
         answered(step(&mut origin.fixture().core, waiting)),
         failure(VIEWER_GONE)
     );
+    assert_eq!(text_node(&mut origin), before);
     assert_eq!(
         origin.overlay(SessionCmd::OverlayFollow, |_| {}),
         failure(VIEWER_GONE),
         "a parked page has no presenter to run on: {page}"
     );
+}
+
+/// Upstream's `withdrawRemotePage` settling the job's waits: a page handed to a new presenter while an action waits
+/// answers at once, as the new presenter never got the command.
+#[test]
+fn a_page_handed_to_another_presenter_while_an_action_waits_answers_the_viewer_is_gone() {
+    let files = Files::new();
+    let (mut origin, _) = log_origin(&files, "app.log", &SUPPORTED_KINDS);
+    let waiting = begin(&mut origin, SessionCmd::OverlayWrap, |a| a.mode = Some("on".to_owned()));
+    origin.lose_presenter();
+    origin.reattach(&SUPPORTED_KINDS);
+    assert!(
+        origin.presenter.last("page.request").is_some(),
+        "the page went to the new presenter"
+    );
+    assert_eq!(
+        answered(step(&mut origin.fixture().core, waiting)),
+        failure(VIEWER_GONE)
+    );
+    assert!(origin.fixture().core.remote.text_waits_empty(), "the wait is dropped");
 }
 
 /// Upstream's capability split: a presenter that does not list `page.text` is sent nothing and the local refusal

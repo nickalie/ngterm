@@ -148,12 +148,14 @@ pub(crate) enum RemoteTextOutcome {
     Failed(&'static str),
 }
 
-/// One text action waiting for its result: the page's id on the wire and the command's number.
+/// One text action waiting for its result: the page's id on the wire, the command's number, and the generation of
+/// the presenter it went to.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct RemoteTextWait {
     job: String,
     seq: i64,
-    page: Uuid,
+    session: Uuid,
+    owner: i64,
 }
 
 /// What a polled wait found.
@@ -263,9 +265,7 @@ impl Core {
             return RemoteTextOutcome::Local;
         }
         let job = slot.job.clone();
-        let Some(shown) = slot.page.as_ref().map(|shown| shown.overlay.id) else {
-            return RemoteTextOutcome::Local;
-        };
+        let owner = slot.owner;
         let Some(seq) = self
             .library_mut()
             .store_for_session_mut(session)
@@ -275,7 +275,12 @@ impl Core {
         };
         // registered before the send, which can drop a stalled presenter and end the page at once
         self.remote.text_waits.0.insert((job.clone(), seq), None);
-        let wait = RemoteTextWait { job, seq, page: shown };
+        let wait = RemoteTextWait {
+            job,
+            seq,
+            session,
+            owner,
+        };
         let command = action.command(wait.job.clone(), seq);
         if !self
             .remote
@@ -301,7 +306,7 @@ impl Core {
             self.remote.text_waits.0.remove(&key);
             return RemoteTextPoll::Answered(answer);
         }
-        let failure = if self.remote_page_place(wait.page).is_none() {
+        let failure = if !self.text_wait_held(wait) {
             VIEWER_GONE
         } else if POLL_INTERVAL * attempt >= PresentationPageResult::DEADLINE {
             PRESENTER_SILENT
@@ -310,6 +315,14 @@ impl Core {
         };
         self.remote.text_waits.0.remove(&key);
         RemoteTextPoll::Failed(failure)
+    }
+
+    /// Whether the page `wait` acts on is still shown by the presenter the action went to; a takeover or reattach hands
+    /// the page to a new generation that never got the command.
+    fn text_wait_held(&self, wait: &RemoteTextWait) -> bool {
+        self.presented_session(wait.session)
+            .and_then(|found| found.remote_overlays().slot_of_job(&wait.job))
+            .is_some_and(|slot| slot.owner == wait.owner && self.page_shown_by_owner(wait.session, slot))
     }
 
     /// Applies the state a presenter's result carries, then hands the result to the action waiting for it (upstream's

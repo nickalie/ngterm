@@ -912,7 +912,7 @@ pub struct PresentationTextState {
     pub changes: Option<TextChanges>,
 }
 
-/// A received query, cut as [`PresentationTextState`]'s builder cuts it (upstream's `init`).
+/// A received query, cut to [`text_page::MAX_QUERY`] as upstream's `init` cuts it.
 fn cut_query<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
     Ok(Option::<String>::deserialize(deserializer)?.map(|query| text_page::cut_query(&query)))
 }

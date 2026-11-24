@@ -440,3 +440,12 @@ fn a_wrapped_page_is_marked_and_an_unwrapped_one_is_not() {
     assert!(html("x", None, None, "", &wrapped_log).contains("data-wrap"));
     assert!(!html("x", None, None, "", &PageState::default()).contains("data-wrap"));
 }
+
+/// Upstream's `String(query.prefix(TextSearch.maxQuery))`: the cut counts grapheme clusters, so a decomposed
+/// character at the limit stays whole.
+#[test]
+fn a_query_is_cut_by_grapheme_clusters() {
+    let query = format!("{}e\u{301}x", "a".repeat(MAX_QUERY - 1));
+    assert_eq!(cut_query(&query), format!("{}e\u{301}", "a".repeat(MAX_QUERY - 1)));
+    assert_eq!(cut_query("short"), "short");
+}

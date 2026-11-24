@@ -1989,7 +1989,7 @@ fn a_content_replicas_read_stops_past_its_cap_and_keeps_the_origins_refusal() {
     );
 }
 
-/// Upstream's interim `refuseUnsupportedReplicaTextActions` (#978): this build lists no live text pages, so a text
+/// This build's own interim refusal until it lists `page.text`: it lists no live text pages, so a text
 /// action an origin sends anyway answers one failed `page.result` by its sequence, an incomplete one as invalid, one
 /// for a page not shown here as such, and leaves `appliedSeq` alone.
 #[test]

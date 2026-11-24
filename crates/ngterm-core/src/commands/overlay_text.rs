@@ -183,8 +183,8 @@ fn start(
     Ok(Started::Step { session, answer })
 }
 
-/// The local text page in the slot `pane` of `session` addresses (upstream's `textSearchPage`): a slot the placement
-/// rule hands to the presenting machine is refused, since presentation state carries no search.
+/// The local text page in the slot `pane` of `session` addresses (upstream's `textSearchPage`): the local fallback, so
+/// a slot the placement rule hands to the presenting machine that the remote path did not take is refused.
 fn text_search_page(core: &Core, session: Uuid, pane: Option<OverlayPane>) -> Result<&HtmlOverlay, TextSearchFailure> {
     if core.page_belongs_remote(session, pane) {
         return Err(TextSearchFailure::Remote);

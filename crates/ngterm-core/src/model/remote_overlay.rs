@@ -469,7 +469,7 @@ impl AppStore {
     }
 
     /// Applies what the presenter reported about page `state.page` (upstream's `receiveRemotePageFrame` state arm):
-    /// the tree changes only when the reported visibility did.
+    /// the tree changes when the reported visibility, a log's following, the search query or the wrap did.
     pub fn apply_remote_page_state(&mut self, session: Uuid, state: &PresentationPageState) {
         let changed = self
             .session_mut(session)
