@@ -68,6 +68,7 @@ COMMAND_MODES = {
     "live.present": "presentation-stream",
     "session.overlay.job.run": "job-stream",
     "session.overlay.page.serve": "page-serve-stream",
+    "catalog.subscribe": "catalog-stream",
 }
 AUTO_BEHAVIORS = {
     # `live tree HOST` runs the hostless form over ssh; the command itself is covered by the hostless form.

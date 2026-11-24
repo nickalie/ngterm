@@ -135,6 +135,11 @@ impl LiveRuntime {
         self.host.as_ref()
     }
 
+    /// How another machine reaches the installed host's daemons; `None` without a host.
+    pub(crate) const fn endpoint(&self) -> Option<&ControlLiveEndpoint> {
+        self.endpoint.as_ref()
+    }
+
     /// The installed host, or the refusal every `live.*` command gives without one.
     fn require_host(&self) -> Result<Arc<dyn SessionHost>, ControlError> {
         self.host.clone().ok_or_else(|| ControlError::rejected(UNAVAILABLE))

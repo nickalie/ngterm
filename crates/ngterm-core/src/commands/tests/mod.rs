@@ -9,6 +9,8 @@ mod attach_remote;
 mod attention_nav;
 mod auto_follow;
 mod background;
+mod catalog_receipts;
+mod catalog_served;
 mod clicked_documents;
 mod clicked_page;
 mod companion_convert;

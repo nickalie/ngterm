@@ -109,6 +109,8 @@ pub enum Answer {
     Close,
     /// No reply: the peer reads on until the client goes.
     Silent,
+    /// The reply cut short: its first half written, then the connection closed.
+    Cut(ApiResponse),
     /// The reply written a byte at a time, `pause` after each.
     Trickle {
         response: ApiResponse,
@@ -142,6 +144,10 @@ pub fn api_peer(answer: impl Fn(&ApiRequest) -> Answer + Send + Sync + 'static) 
                 Answer::Reply(result) => (call.id, result),
                 Answer::WrongId(response) => (call.id + 100, Ok(response)),
                 Answer::Close => return,
+                Answer::Cut(response) => {
+                    let _ = cut(&mut stream, call.id, response);
+                    return;
+                }
                 Answer::Silent => continue,
                 Answer::Trickle { response, pause } => {
                     if trickle(&mut stream, call.id, response, pause).is_err() {
@@ -156,6 +162,20 @@ pub fn api_peer(answer: impl Fn(&ApiRequest) -> Answer + Send + Sync + 'static) 
         }
     })?;
     Ok((peer, log))
+}
+
+/// The first half of the reply `response` to the call `id`.
+fn cut(stream: &mut Stream, id: u64, response: ApiResponse) -> Result<(), FramingError> {
+    let mut frame = Vec::new();
+    write_message(
+        &mut frame,
+        &ApiReply {
+            id,
+            result: Ok(response),
+        },
+    )?;
+    stream.write_all(&frame[..frame.len() / 2])?;
+    Ok(())
 }
 
 /// The reply `response` to the call `id`, written a byte at a time with `pause` after each.

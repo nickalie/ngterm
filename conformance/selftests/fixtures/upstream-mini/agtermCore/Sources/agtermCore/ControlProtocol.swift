@@ -19,6 +19,8 @@ public enum Command: String, Codable, Sendable {
     case sessionOverlayJobRun = "session.overlay.job.run"
     /// A presenter's helper serving a remote page; after an ok reply the connection carries page frames.
     case sessionOverlayPageServe = "session.overlay.page.serve"
+    /// A remote window's helper subscribing to a server's catalog; after an ok reply the connection carries catalog frames.
+    case catalogSubscribe = "catalog.subscribe"
     case version = "version"
     /// UI-TEST-ONLY.
     case debugAppearance = "debug.appearance"

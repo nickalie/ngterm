@@ -99,6 +99,8 @@ pub struct Args {
     pub rev: Option<i64>,
     /// The target session's pane identities when the operation was decided.
     pub panes: Option<Vec<String>>,
+    /// The target session's scratch identity, or `none`, when the operation was decided.
+    pub scratch: Option<String>,
     /// How many seconds an `ask.open` or `pick.open` waits for an answer before its origin cancels it.
     pub timeout: Option<f64>,
     /// The offer token a `session.overlay.job.run` helper claims its job with.

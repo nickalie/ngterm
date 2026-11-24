@@ -1001,6 +1001,10 @@ server reached over ssh) that is `ngterm-headless` (`crates/ngterm-headless`), s
 or Vulkan. It runs every session pane of its state dir in a live session (restore mode `live` whatever the settings
 hold, which keep the user's own mode for an app on the same state dir; it refuses to start where the live probe
 rejects the host), each in a terminal nobody draws, so every session is attachable. `ngtermctl` drives it as it drives the app; the agents' hooks and the skill work in its panes.
+It also serves its catalog to remote windows: `catalog.subscribe` streams every workspace, session and live pane, and a
+structural command sent with `--op-id` runs once and answers a receipt that `ngtermctl catalog op` reads back. The
+catalog's id (`catalog-id`) and the receipts (`catalog-operations.json`) live in the state dir; a start refuses a
+`catalog-id` that is not a UUID rather than give its viewers another catalog.
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)

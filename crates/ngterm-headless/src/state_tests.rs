@@ -975,3 +975,80 @@ fn a_timed_ask_is_cancelled_by_its_expiry_on_the_loop() {
     });
     assert_eq!(read.response.result.unwrap()["ask"], json!({"result": "cancelled"}));
 }
+
+/// Reads the next catalog frame a stream's far end received.
+#[cfg(unix)]
+fn next_frame(reader: &mut impl std::io::BufRead) -> Value {
+    let mut line = String::new();
+    assert!(reader.read_line(&mut line).unwrap() > 0, "the catalog stream closed");
+    serde_json::from_str(&line).unwrap()
+}
+
+/// A remote window's `catalog.subscribe` becomes a stream: its hello is answered with the snapshot, a structural
+/// request publishes its change on it, a stream silent past its hello deadline is closed, and a closed one leaves
+/// the core.
+#[cfg(unix)]
+#[test]
+fn a_catalog_subscription_streams_the_snapshot_then_each_change() {
+    use std::io::{BufReader, Write as _};
+    let (mut state, main_loop, session) = fixture();
+    state.core.serve_catalog(uuid::Uuid::new_v4(), None);
+    let subscribe = request(Command::Catalog(CatalogCmd::Subscribe), None, json!({}));
+    let reply = state.handle_request(&subscribe);
+    assert!(reply.response.ok, "{reply:?}");
+    // the hello deadline and the heartbeat this loop would run at once
+    main_loop.tasks.lock().unwrap().clear();
+    let (server, mut client) = ngterm_server::endpoint::pair().unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let owner = reply.stream.unwrap();
+    let worker = std::thread::spawn(move || owner.adopt(server, Vec::new()));
+    client
+        .write_all(b"{\"kind\":\"hello\",\"hello\":{\"version\":1}}\n")
+        .unwrap();
+    pump(&main_loop, &mut state);
+    let mut reader = BufReader::new(client.try_clone().unwrap());
+    assert_eq!(next_frame(&mut reader)["kind"], "hello");
+    let snapshot = next_frame(&mut reader);
+    assert_eq!(snapshot["kind"], "snapshot");
+    let listed = snapshot["snapshot"]["workspaces"][0]["sessions"][0]["id"].clone();
+    assert_eq!(listed, json!(ngterm_core::pane_env::uuid_string(session)));
+    let created = state.handle_request(&request(Command::Session(SessionCmd::New), None, json!({})));
+    assert!(created.response.ok, "{created:?}");
+    let delta = next_frame(&mut reader);
+    assert_eq!(
+        (delta["kind"].clone(), delta["rev"].clone()),
+        (json!("session.added"), json!(1))
+    );
+    drop(reader);
+    drop(client);
+    worker.join().unwrap();
+    pump(&main_loop, &mut state);
+    assert!(!state.core.catalog_heartbeat(), "a closed stream stayed in the core");
+
+    let reply = state.handle_request(&subscribe);
+    main_loop.drain(&mut state);
+    let (server, client) = ngterm_server::endpoint::pair().unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let owner = reply.stream.unwrap();
+    let worker = std::thread::spawn(move || owner.adopt(server, Vec::new()));
+    let mut line = String::new();
+    let read = std::io::BufRead::read_line(&mut BufReader::new(client), &mut line).unwrap();
+    assert_eq!(read, 0, "the stream outlived its hello deadline: {line:?}");
+    worker.join().unwrap();
+}
+
+#[test]
+fn the_quit_closes_the_catalog_streams_and_a_late_close_reaches_nothing() {
+    let (mut state, main_loop, _) = fixture();
+    state.core.serve_catalog(uuid::Uuid::new_v4(), None);
+    let reply = state.handle_request(&request(Command::Catalog(CatalogCmd::Subscribe), None, json!({})));
+    assert!(reply.response.ok, "{reply:?}");
+    state.save_on_quit();
+    // the deadline, the heartbeat and the abandoned stream's close all run after the quit save
+    reply.stream.unwrap().abandon();
+    main_loop.drain(&mut state);
+    assert!(
+        state.core.catalog_heartbeat(),
+        "a task after the quit save reached the catalog"
+    );
+}

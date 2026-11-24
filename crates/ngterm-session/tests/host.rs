@@ -111,10 +111,20 @@ fn an_empty_namespace_is_an_answer_and_a_failure_is_not() -> TestResult {
         host_error(host(failing.directory())?.list()),
         "live session list failed: the table broke"
     );
-    let broken_answers: [fn() -> Answer; 3] = [
+    // a listing cut short never reads as the sessions it left out being gone (upstream's `dd3ff080`)
+    let cut_listing = || {
+        Answer::Cut(ApiResponse::Sessions(vec![SessionRecord {
+            name: "ngterm-00112233445566778899aabbccddeeff".to_owned(),
+            clients: 1,
+            leader_pid: Some(42),
+            created_at: 0,
+        }]))
+    };
+    let broken_answers: [fn() -> Answer; 4] = [
         || Answer::Reply(Ok(ApiResponse::Done)),
         || Answer::WrongId(ApiResponse::Sessions(Vec::new())),
         || Answer::Close,
+        cut_listing,
     ];
     for answer in broken_answers {
         let (broken, _) = api_peer(move |_| answer())?;

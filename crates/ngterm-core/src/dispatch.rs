@@ -187,6 +187,8 @@ pub struct Core {
     pub(crate) agents: commands::agent::AgentRecords,
     /// The Tint submenu's last Show On pick ([`Core::tint_placement`]).
     pub(crate) tint_placement: crate::model::TintParts,
+    /// The catalog a headless origin serves ([`crate::catalog`]).
+    pub(crate) catalog: crate::catalog::CatalogRuntime,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -284,6 +286,7 @@ impl Core {
             remote: crate::remote::PresentationRuntime::default(),
             agents: commands::agent::AgentRecords::default(),
             tint_placement: crate::model::TintParts::ICON,
+            catalog: crate::catalog::CatalogRuntime::default(),
         };
         core.sync_session_naming();
         core.sync_store_settings();
@@ -663,6 +666,7 @@ impl Core {
         let tree_changed = self.events.record(events);
         self.follow_remote_rows(rows);
         self.run_hooks();
+        self.refresh_catalog();
         CommitTimers {
             debounced,
             pending_closes,
@@ -762,13 +766,21 @@ impl Core {
 
     /// Answers one request, or starts a command that waits on the frontend and hands back its next step.
     pub fn begin(&mut self, request: &Request) -> Dispatched {
-        // a receipt this host never keeps would read as a durable answer
-        if request.args.as_ref().is_some_and(|args| args.op_id.is_some()) {
-            return Dispatched::Done(ControlError::rejected(OPERATION_RECEIPTS_ERROR).into());
-        }
         if let Some(refusal) = commands::headless::window_refusal(self, request) {
             return Dispatched::Done(refusal.into());
         }
+        if let Some(op_id) = request.args.as_ref().and_then(|args| args.op_id.clone()) {
+            // a receipt this host never keeps would read as a durable answer
+            if !self.serves_catalog() {
+                return Dispatched::Done(ControlError::rejected(OPERATION_RECEIPTS_ERROR).into());
+            }
+            return self.begin_operation(request, &op_id);
+        }
+        self.begin_plain(request)
+    }
+
+    /// [`Core::begin`] past the window refusal and the operation receipts.
+    pub(crate) fn begin_plain(&mut self, request: &Request) -> Dispatched {
         // a page companion refuses the terminal commands before any of them runs
         if let Some(refusal) = commands::companion_page::refusal(self, request) {
             return Dispatched::Done(refusal.into());
@@ -800,15 +812,20 @@ impl Core {
             app: self.app.clone(),
             installed: self.installed.as_ref().and_then(InstalledSource::read),
             headless: self.presenter_only().then_some(true),
-            versions: self.presenter_only().then(|| CatalogVersions {
-                server: self.app.version.clone(),
-                protocol: crate::remote::frames::VERSION,
-                catalog: CATALOG_VERSION,
-            }),
+            versions: self.presenter_only().then(|| self.catalog_versions()),
             conformance: ConformanceProfile {
                 parity_level: PARITY_LEVEL.to_owned(),
                 capabilities: self.capabilities.clone(),
             },
+        }
+    }
+
+    /// What a headless server advertises on `version` and in every catalog snapshot.
+    pub(crate) fn catalog_versions(&self) -> CatalogVersions {
+        CatalogVersions {
+            server: self.app.version.clone(),
+            protocol: crate::remote::frames::VERSION,
+            catalog: CATALOG_VERSION,
         }
     }
 
@@ -936,7 +953,7 @@ impl Core {
             }
             Command::Recent(cmd) => result_or_success(commands::recent::dispatch(self, cmd, request)?),
             Command::Agent(cmd) => result_of(&commands::agent::dispatch(self, cmd, request)?),
-            Command::Catalog(cmd) => Err(commands::catalog::refusal(cmd, request)),
+            Command::Catalog(cmd) => commands::catalog::dispatch(self, cmd, request),
             // `browser.clear` and `config.reload` start through `deferred`
             cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_)) => {
                 Err(ControlError::NotSupported(cmd))

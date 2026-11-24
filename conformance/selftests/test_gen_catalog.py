@@ -46,6 +46,7 @@ COMMANDS = [
     "live.present",
     "session.overlay.job.run",
     "session.overlay.page.serve",
+    "catalog.subscribe",
     "version",
     "debug.appearance",
 ]
@@ -119,6 +120,7 @@ def test_stream_commands_carry_their_mode() -> None:
     assert gen.commands["live.present"] == {"mode": "presentation-stream"}
     assert gen.commands["session.overlay.job.run"] == {"mode": "job-stream"}
     assert gen.commands["session.overlay.page.serve"] == {"mode": "page-serve-stream"}
+    assert gen.commands["catalog.subscribe"] == {"mode": "catalog-stream"}
     assert gen.commands["live.tree"] == {}
     assert gen.commands["live.attach"] == {}
 
@@ -562,7 +564,7 @@ def test_reads_the_tag_with_git_archive_without_touching_the_checkout(
     assert list(yaml.safe_load(catalog.read_text())["commands"]) == COMMANDS
     assert (git("rev-parse", "HEAD"), git("status", "--porcelain")) == (head, status)
     out = capsys.readouterr().out
-    assert "commands: 18 upstream, +18 new, -0 removed-upstream" in out
+    assert "commands: 19 upstream, +19 new, -0 removed-upstream" in out
     assert "ids: 8 upstream, +8 new, -0 removed-upstream" in out
     assert "manual: 0 ids at 0 variable sites, -0 removed-upstream" in out
     assert gc.main(["--repo", str(repo), "--tag", "v9.9.9", "--catalog", str(catalog)]) == 1

@@ -1,14 +1,42 @@
-//! `catalog.*` as an app with windows answers it (upstream's `ControlDispatcher` and `ControlActionsDefaults`): only a
-//! headless server owns a catalog, so a remote window must never bind to a live app's windows. `catalog.op` checks
-//! its arguments first, as upstream's dispatcher does. The strings name this build's server
-//! (conformance/docs/rust-build.md > Other strings of the build's own).
+//! `catalog.*` (upstream's `ControlDispatcher`): a served catalog ([`crate::catalog`]) answers them, and an app with
+//! windows refuses them as upstream's `ControlActionsDefaults` does, since only a headless server owns a catalog and a
+//! remote window must never bind to a live app's windows. `catalog.op` checks its arguments first either way. The
+//! strings name this build's server (conformance/docs/rust-build.md > Other strings of the build's own).
 
 use ngterm_proto::command::CatalogCmd;
-use ngterm_proto::{CatalogReceipt, Request};
+use ngterm_proto::{CatalogReceipt, Request, Response};
 
 use super::args_of;
+use crate::Core;
+use crate::catalog::operations::CatalogPosition;
 use crate::error::ControlError;
 use crate::model::naming::trimmed_or_none;
+
+/// Answers `cmd`: the served catalog's subscription (its stream starts once this reply is out) or operation lookup,
+/// else the refusal.
+pub(crate) fn dispatch(core: &mut Core, cmd: CatalogCmd, request: &Request) -> Result<Response, ControlError> {
+    if !core.serves_catalog() {
+        return Err(refusal(cmd, request));
+    }
+    match cmd {
+        CatalogCmd::Subscribe => Ok(Response::success()),
+        CatalogCmd::Op => {
+            let refused = operation_refusal(request);
+            if refused != OP_SERVER_ONLY {
+                return Err(ControlError::rejected(refused));
+            }
+            let op_id = request.target.as_deref().and_then(trimmed_or_none).unwrap_or_default();
+            let args = args_of(request);
+            let sent = args
+                .epoch
+                .as_deref()
+                .and_then(trimmed_or_none)
+                .zip(args.rev)
+                .map(|(epoch, rev)| CatalogPosition { epoch, rev });
+            Ok(core.catalog_operation(&op_id, sent.as_ref()))
+        }
+    }
+}
 
 const SUBSCRIBE_SERVER_ONLY: &str = "catalog.subscribe is served only by ngterm-headless";
 const OP_SERVER_ONLY: &str = "catalog.op is served only by ngterm-headless";

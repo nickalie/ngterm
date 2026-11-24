@@ -16,6 +16,7 @@ pub mod app_actions;
 pub mod attach_bridge;
 pub mod auto_follow;
 pub mod bounded_file;
+pub mod catalog;
 pub mod chrome;
 pub mod clipboard_policy;
 pub mod clipboard_wire;

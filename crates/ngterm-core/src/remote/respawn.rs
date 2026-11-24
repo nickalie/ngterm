@@ -209,6 +209,11 @@ impl OriginRespawns {
         }
     }
 
+    /// This app run's epoch, which the catalog's revisions run in as well.
+    pub(crate) fn epoch(&self) -> &str {
+        &self.epoch
+    }
+
     pub(crate) fn waiting(&self) -> bool {
         !self.watches.is_empty()
     }

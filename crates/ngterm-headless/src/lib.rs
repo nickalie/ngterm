@@ -22,6 +22,9 @@
 //!   since a server has no Help menu to run them from.
 //! - It answers as upstream's agterm-server: `version` and `live tree` report `headless`, and a command that drives a
 //!   window, a `--wait`, and a GUI ask or a pick with no session to bind it to are refused by name.
+//! - It serves its catalog to remote windows ([`ngterm_core::catalog`]): `catalog.subscribe` streams it, and a
+//!   structural command sent with an operation id answers a receipt. The catalog's id is the state directory's, and a
+//!   start refuses an id file that holds no UUID.
 //! - One instance per state directory, as the app: the state lock refuses a second one, and an app instance on the
 //!   same state directory too.
 //! - It can view as well: `ngtermctl live attach` on it attaches another machine's session as a row of its own, its
@@ -243,6 +246,14 @@ impl ngterm_core::html::PageProbe for PageFiles {
     }
 }
 
+/// What a launch has found out before the core starts.
+struct Launch {
+    /// The control socket's advertised path.
+    socket: String,
+    /// The state directory's catalog id ([`ngterm_core::catalog::root`]).
+    catalog_id: uuid::Uuid,
+}
+
 /// The core over the state the last run left, with what it reaches the host through (the GPUI frontend's
 /// `launch_core` and `install_launch_hosts`, less the window's hosts).
 fn launch_core(
@@ -250,7 +261,7 @@ fn launch_core(
     runtime: &Runtime,
     resources: Option<&Path>,
     poster: &Poster,
-    socket: String,
+    launch: Launch,
 ) -> Core {
     let env = &ProcessEnv;
     let mut core = Core::new(
@@ -261,6 +272,7 @@ fn launch_core(
         load_state(env),
     );
     core.set_presenter_only();
+    core.serve_catalog(launch.catalog_id, Some(&paths::state_dir(env)));
     core.set_page_probe(Box::new(PageFiles));
     core.set_theme_paths(
         resources.map(|dir| dir.join("themes")),
@@ -281,7 +293,7 @@ fn launch_core(
         Box::new(ngterm_app::process_table::ProcTable::new()),
         ngterm_app::restore_launch::shell_basename(env),
     );
-    core.set_process_host(process_host(poster, socket));
+    core.set_process_host(process_host(poster, launch.socket));
     // `session.hud.open` writes its body here; nothing paints it, an attached viewer shows it
     core.set_hud_body_dir(paths::hud_body_dir(env));
     install_live(&mut core, runtime);
@@ -300,8 +312,12 @@ pub fn run(options: &Options) -> i32 {
     let env = &ProcessEnv;
     // captured once: the decision and the wrap read the same shell, which no config reload replaces
     let runtime = Runtime::capture(env);
-    let decision = match live_decision(&runtime, env) {
-        Ok(decision) => decision,
+    let decision = live_decision(&runtime, env);
+    // a new id would make every remote window bound to this server see another catalog
+    let catalog_id =
+        ngterm_core::catalog::root::load(&paths::state_dir(env)).map_err(|error| Refused(error.to_string()));
+    let (decision, catalog_id) = match decision.and_then(|decision| Ok((decision, catalog_id?))) {
+        Ok(started) => started,
         Err(Refused(reason)) => {
             tracing::error!("{reason}");
             eprintln!("ngterm-headless: {reason}");
@@ -317,7 +333,11 @@ pub fn run(options: &Options) -> i32 {
     let mut server = ControlServer::new(paths::app_socket_path(env));
     let socket = server.advertised_path().to_string_lossy().into_owned();
     let resources = resources();
-    let core = launch_core(decision, &runtime, resources.as_deref(), &poster, socket.clone());
+    let launch = Launch {
+        socket: socket.clone(),
+        catalog_id,
+    };
+    let core = launch_core(decision, &runtime, resources.as_deref(), &poster, launch);
     let config = terminal_config(env, resources.as_deref());
     let host = Host::new(&config, runtime.login_shell.clone(), resources, bin_dir());
     let environment = PaneEnvironment {

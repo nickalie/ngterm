@@ -7,8 +7,8 @@
 //! ([`ngterm_core::settles_after`]: `events.read`, `msg.read`): it changes nothing a commit or a terminal reads, so it
 //! skips both the settle and the terminals' sync.
 //!
-//! A viewer's `live.present`, an overlay job's helper and a page channel keep their connection as a stream adopted by
-//! the core, exactly as in the GPUI frontend: the presentation of a session a viewer attached goes out on it, and what
+//! A viewer's `live.present`, a remote window's `catalog.subscribe`, an overlay job's helper and a page channel keep
+//! their connection as a stream adopted by the core, the first and the last two exactly as in the GPUI frontend: the presentation of a session a viewer attached goes out on it, and what
 //! the viewer presents (asks, program overlays, pages) runs on the viewer. What would be drawn here (banners, sounds,
 //! windows, the welcome) has no display: banners are logged, the rest is dropped.
 
@@ -25,7 +25,7 @@ use ngterm_core::persist::{DebouncedSave, arm_debounced_saves};
 use ngterm_core::remote::page_serve::{self, BridgeReply, PageChannel, PageServeStream, PageServeWork};
 use ngterm_core::{CommitTimers, ControlError, Core, Dispatched, NotificationEffect, Resume};
 use ngterm_host::MainLoop;
-use ngterm_proto::command::{LiveCmd, SessionCmd};
+use ngterm_proto::command::{CatalogCmd, LiveCmd, SessionCmd};
 use ngterm_proto::{Command, Request, Response};
 use ngterm_server::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplySender};
 use uuid::Uuid;
@@ -47,6 +47,13 @@ const PRESENTATION_LIMITS: LineStreamLimits = LineStreamLimits {
     max_line_bytes: ngterm_core::remote::frames::MAX_FRAME_BYTES,
     max_pending_lines: ngterm_core::remote::frames::MAX_PENDING_FRAMES,
     write_timeout: ngterm_core::remote::WRITE_TIMEOUT,
+};
+
+/// The bounds of a remote window's catalog stream (upstream's `CatalogStream.limits`).
+const CATALOG_LIMITS: LineStreamLimits = LineStreamLimits {
+    max_line_bytes: ngterm_core::remote::frames::MAX_FRAME_BYTES,
+    max_pending_lines: ngterm_core::remote::frames::MAX_PENDING_FRAMES,
+    write_timeout: ngterm_core::catalog::WRITE_TIMEOUT,
 };
 
 /// The bounds of a page channel (upstream's `pageServeLimits`).
@@ -122,14 +129,21 @@ enum Phase {
     Quitting,
 }
 
+/// The self-rearming timers that are queued now, so none is armed twice.
+#[derive(Debug, Default)]
+struct Armed {
+    presentation: bool,
+    catalog: bool,
+    remote_tick: bool,
+}
+
 /// What the main loop owns.
 pub struct HeadlessState {
     pub core: Core,
     poster: Poster,
     panes: Panes,
     phase: Phase,
-    heartbeat_armed: bool,
-    remote_tick_armed: bool,
+    armed: Armed,
     /// The last task changed nothing the terminals follow ([`ngterm_core::settles_after`]): [`Self::land`] skips them.
     unchanged: bool,
 }
@@ -180,8 +194,7 @@ impl HeadlessState {
             poster,
             panes,
             phase: Phase::Running,
-            heartbeat_armed: false,
-            remote_tick_armed: false,
+            armed: Armed::default(),
             unchanged: false,
         }
     }
@@ -292,6 +305,9 @@ impl HeadlessState {
             Dispatched::Done(response) if request.cmd == Command::Live(LiveCmd::Present) && response.ok => {
                 self.presentation_stream(response)
             }
+            Dispatched::Done(response) if request.cmd == Command::Catalog(CatalogCmd::Subscribe) && response.ok => {
+                self.catalog_stream(response)
+            }
             Dispatched::Done(response)
                 if request.cmd == Command::Session(SessionCmd::OverlayPageServe) && response.ok =>
             {
@@ -377,6 +393,66 @@ impl HeadlessState {
             presentation_closer(self.poster.clone(), serial),
         );
         Reply::streaming(response, Box::new(owner))
+    }
+
+    /// The answer to an accepted `catalog.subscribe`, which keeps the connection (upstream's `adoptCatalogStream`):
+    /// its lines and close reported back as main-loop tasks, closed without a hello in time.
+    fn catalog_stream(&mut self, response: Response) -> Reply {
+        let stream = LineStream::new(CATALOG_LIMITS);
+        let serial = self.core.adopt_catalog_stream(Box::new(StreamLines(stream.clone())));
+        self.after(
+            ngterm_core::catalog::HELLO_DEADLINE,
+            "catalog hello deadline",
+            move |state| {
+                if !state.quitting() {
+                    state.core.catalog_hello_deadline(serial);
+                }
+            },
+        );
+        self.arm_catalog_heartbeat();
+        let (lines, closes) = (self.poster.clone(), self.poster.clone());
+        let gate = InboundGate::new(ngterm_core::remote::INBOUND_LIMIT);
+        let owner = LineStreamOwner::new(
+            stream,
+            move |line| {
+                gate.acquire();
+                let released = gate.clone();
+                let task = move |state: &mut Self| {
+                    if !state.quitting() {
+                        state.core.catalog_line(serial, &line);
+                        state.settle();
+                    }
+                    released.release();
+                };
+                let queued = lines
+                    .upgrade()
+                    .is_some_and(|main_loop| main_loop.post(Box::new(task)).is_ok());
+                if !queued {
+                    gate.release();
+                }
+            },
+            move || {
+                post(&closes, move |state| {
+                    if !state.quitting() {
+                        state.core.catalog_closed(serial);
+                    }
+                });
+            },
+        );
+        Reply::streaming(response, Box::new(owner))
+    }
+
+    /// The catalog heartbeat (upstream's `startCatalogHeartbeat`); it re-arms itself while a stream is up.
+    fn arm_catalog_heartbeat(&mut self) {
+        if self.armed.catalog {
+            return;
+        }
+        self.armed.catalog = self.after(ngterm_core::catalog::HEARTBEAT_INTERVAL, "catalog heartbeat", |state| {
+            state.armed.catalog = false;
+            if !state.quitting() && state.core.catalog_heartbeat() {
+                state.arm_catalog_heartbeat();
+            }
+        });
     }
 
     /// The answer to an admitted page claim, which keeps the connection (upstream's `adoptPageServeStream`).
@@ -512,11 +588,11 @@ impl HeadlessState {
 
     /// The presentation heartbeat (upstream's `startPresentationHeartbeat`); it re-arms itself while a stream is up.
     fn arm_presentation_heartbeat(&mut self) {
-        if self.heartbeat_armed {
+        if self.armed.presentation {
             return;
         }
-        self.heartbeat_armed = self.after(ngterm_core::remote::HEARTBEAT_INTERVAL, "heartbeat", |state| {
-            state.heartbeat_armed = false;
+        self.armed.presentation = self.after(ngterm_core::remote::HEARTBEAT_INTERVAL, "heartbeat", |state| {
+            state.armed.presentation = false;
             if state.quitting() {
                 return;
             }
@@ -530,14 +606,14 @@ impl HeadlessState {
 
     /// The remote tick when the core asks for one (upstream's `startRemoteTick`).
     fn arm_remote_tick(&mut self) {
-        if self.remote_tick_armed {
+        if self.armed.remote_tick {
             return;
         }
         let Some(delay) = self.core.remote_wake() else {
             return;
         };
-        self.remote_tick_armed = self.after(delay, "remote tick", |state| {
-            state.remote_tick_armed = false;
+        self.armed.remote_tick = self.after(delay, "remote tick", |state| {
+            state.armed.remote_tick = false;
             if state.quitting() {
                 return;
             }
@@ -582,6 +658,7 @@ impl HeadlessState {
             tracing::error!("the quit save did not write everything");
         }
         self.core.shutdown_presentation_streams();
+        self.core.shutdown_catalog_streams();
         self.core.shutdown_remote_presentations();
         self.phase = Phase::Quitting;
     }

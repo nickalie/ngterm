@@ -144,7 +144,7 @@ commands:
   live.attach.group: {status: uncovered}
   live.present: {status: uncovered, mode: presentation-stream}
   live.screen: {status: uncovered}
-  catalog.subscribe: {status: uncovered}
+  catalog.subscribe: {status: uncovered, mode: catalog-stream}
   catalog.op: {status: uncovered}
   recent.list: {status: uncovered}
   recent.open: {status: uncovered}
