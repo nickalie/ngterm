@@ -9,10 +9,14 @@
 //!   page's channel ([`super::page_channel`]) to the origin, carried by a helper (`ssh … ngtermctl session overlay
 //!   page-serve TOKEN`) the frontend's [`PageHelperLauncher`] starts. An image, Markdown, text or clicked HTML page
 //!   (#891, #917) is a replica of its kind ([`crate::html::ReplicaContent`]) that the frontend builds from the bytes
-//!   [`Core::replica_read`] fetches over its own channel, each read under its kind's cap; it is never bridged, a text
-//!   page is the static one, and a session-wide picture the origin gave no size is fitted to this machine's screen.
+//!   [`Core::replica_read`] fetches over its own channel, each read under its kind's cap; it is never bridged, and a
+//!   session-wide picture the origin gave no size is fitted to this machine's screen. A text page runs the frontend's
+//!   text page bridge as a local one does, its text read the same way and a log's end through
+//!   [`Core::replica_log_tail`] (#978); one handed on again opens with the following, query and wrap it had.
 //! - The origin's commands act on the page here (hide and show its slot only, reload, history, browser, resize), and
-//!   what the page shows goes back as `page.state` with the last command's sequence number, once per commit at most.
+//!   what the page shows goes back as `page.state` with the last command's sequence number, once per commit at most,
+//!   a text page's text state with it. The origin's text actions (follow, search, wrap, changes) run here as the local
+//!   commands, one after another per page, each answered with a `page.result` and the page's text state.
 //! - Every way a replica leaves its slot closes its channel, and the origin hears of it once. A close of the page (here,
 //!   or the origin's own close echoed back) sends `page.closed`, which ends it there. A departure that leaves the page
 //!   open (an extension beyond upstream, where each of them sends `page.closed` too) tells an origin whose hello answer
@@ -30,10 +34,13 @@
 //! `ngterm-page` (upstream's `HtmlPageSchemeHandler`), the Windows form `WebView2`'s custom scheme registration with a
 //! deferred `WebResourceRequested`; both belong to the web-view ports of those frontends.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
+
+use ngterm_proto::Response;
 
 use uuid::Uuid;
 
@@ -44,7 +51,11 @@ use super::frames::{
 use super::hub::PAGE_DETACHED_KIND;
 use super::page_channel::{ChannelEvent, ChannelFailure, ChannelLink, Permits, Pull, ReplicaChannel, RequestId};
 use super::page_tunnel::{READY_LINE, TunnelPlan, forward_port};
+use super::remote_text::{self, TextPageAction};
 use crate::Core;
+use crate::bounded_file::{FileStamp, TailRead};
+use crate::commands::overlay_text::local_text_action;
+use crate::dispatch::{Dispatched, Resume};
 use crate::html::image_page::{self, ImagePixels};
 use crate::html::{HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlReloadTarget, HtmlSource, ReplicaContent, errors};
 use crate::model::{HtmlPageSlot, OverlayPane};
@@ -58,8 +69,6 @@ mod tests;
 pub const ORIGIN_UNREACHABLE: &str = "the origin cannot be reached for this page";
 /// The page was placed and is gone already (upstream's refusal).
 const NOT_SHOWN: &str = "page not shown";
-/// A text action this presenter does not run yet: this build's own interim refusal, kept until it lists `page.text`.
-const TEXT_ACTIONS_UNSUPPORTED: &str = "text page actions are not supported";
 /// A text action whose fields do not make one (upstream's refusal).
 const INVALID_TEXT_ACTION: &str = "invalid text page action";
 const NO_SESSION: &str = "no such session";
@@ -70,6 +79,10 @@ const NO_HELPER: &str = "no page helper";
 const ROW_LEFT: &str = "the session's row on the presenting machine closed";
 /// The MIME type of an answer that named none.
 const OCTET_STREAM: &str = "application/octet-stream";
+/// A log tail that ended with no head (upstream's refusal of an answer that is not a log's).
+const NOT_A_LOG_ANSWER: &str = "not a log answer";
+/// The most a log tail's answer carries: the tail window and the byte before it.
+const MAX_LOG_TAIL: usize = crate::html::text_page::MAX_TAIL_BYTES + 1;
 
 /// How a page another machine opened is shown here (upstream's `replicaSource`): a file page from its replica scheme,
 /// an image, Markdown, text or document page as a replica of its kind built from its fetched bytes, a URL page
@@ -170,6 +183,38 @@ impl Reply {
 }
 /// Where a replica's bridge request is answered: the result the page's promise resolves with, or its rejection.
 pub type BridgeAnswer = Box<dyn FnOnce(Result<serde_json::Value, String>)>;
+/// Where a log page's tail read is answered: its file's end, `None` while the file keeps the stamp it named, or why
+/// the read failed.
+pub type LogTailAnswer = Box<dyn FnOnce(Result<Option<TailRead>, ChannelFailure>)>;
+
+/// A log tail read in flight: the head once it came, the bytes so far.
+struct LogFetch {
+    head: Option<(FileStamp, u64)>,
+    unchanged: bool,
+    body: Vec<u8>,
+    answer: LogTailAnswer,
+}
+
+impl LogFetch {
+    fn result(self, result: Result<(), ChannelFailure>) -> (LogTailAnswer, Result<Option<TailRead>, ChannelFailure>) {
+        let Self {
+            head,
+            unchanged,
+            body,
+            answer,
+        } = self;
+        let read = result.and_then(|()| match head {
+            _ if unchanged => Ok(None),
+            Some((stamp, offset)) => Ok(Some(TailRead {
+                data: body,
+                offset,
+                stamp,
+            })),
+            None => Err(ChannelFailure::Refused(NOT_A_LOG_ANSWER.to_owned())),
+        });
+        (answer, read)
+    }
+}
 
 /// A read in flight.
 struct Fetch {
@@ -185,6 +230,7 @@ struct PageLink {
     /// The page load the channel's requests are made for.
     revision: u64,
     fetches: HashMap<RequestId, Fetch>,
+    logs: HashMap<RequestId, LogFetch>,
     bridges: HashMap<RequestId, BridgeAnswer>,
 }
 
@@ -238,6 +284,10 @@ struct ReplicaRecord {
     tunnel: Option<Tunnel>,
     /// Why the page is leaving its slot, set before it goes when that is no close of the page; the first reason holds.
     departure: Option<Departure>,
+    /// The origin's text actions waiting for the one that runs, each run after the one before it.
+    text_actions: VecDeque<PresentationPageCommand>,
+    /// Whether an origin text action runs on the page now.
+    text_running: bool,
 }
 
 /// The pages shown here for origins, by local page id, and how their helpers start.
@@ -248,6 +298,8 @@ pub(crate) struct ReplicaPages {
     pending: HashMap<Uuid, PendingTunnel>,
     launcher: Option<Rc<dyn PageHelperLauncher>>,
     launches: u64,
+    /// The steps of origin text actions that wait on the page's renderer, for the frontend's main loop.
+    text_steps: Vec<(Duration, Resume)>,
 }
 
 impl ReplicaPages {
@@ -274,6 +326,7 @@ impl fmt::Debug for ReplicaPages {
 #[derive(Default)]
 struct Settled {
     fetches: Vec<(Reply, Result<PageResource, ChannelFailure>)>,
+    logs: Vec<(LogTailAnswer, Result<Option<TailRead>, ChannelFailure>)>,
     bridges: Vec<(BridgeAnswer, Result<serde_json::Value, String>)>,
     overgrown: Vec<RequestId>,
     closed: bool,
@@ -283,6 +336,9 @@ impl Settled {
     fn run(self) {
         for (reply, result) in self.fetches {
             reply.answer(result);
+        }
+        for (answer, result) in self.logs {
+            answer(result);
         }
         for (answer, result) in self.bridges {
             answer(result);
@@ -298,6 +354,16 @@ impl PageLink {
                 ChannelEvent::Head { id, mime_type } => {
                     if let Some(fetch) = self.fetches.get_mut(&id) {
                         fetch.mime_type = Some(mime_type);
+                    }
+                }
+                ChannelEvent::LogHead { id, stamp, offset } => {
+                    if let Some(log) = self.logs.get_mut(&id) {
+                        log.head = Some((stamp, offset));
+                    }
+                }
+                ChannelEvent::LogUnchanged { id } => {
+                    if let Some(log) = self.logs.get_mut(&id) {
+                        log.unchanged = true;
                     }
                 }
                 ChannelEvent::Data { id } => self.drain(id, settled),
@@ -321,6 +387,11 @@ impl PageLink {
         loop {
             match self.channel.pull(id) {
                 Pull::Chunk(chunk) => {
+                    if self.overgrown_log(id, chunk.as_slice()) {
+                        self.finish(id, Err(ChannelFailure::TooLarge), settled);
+                        settled.overgrown.push(id);
+                        return;
+                    }
                     let Some(fetch) = self.fetches.get_mut(&id) else {
                         continue;
                     };
@@ -340,7 +411,20 @@ impl PageLink {
         }
     }
 
+    /// Takes `chunk` into log tail `id`'s bytes, when `id` is a log tail: whether they now pass what an answer carries.
+    fn overgrown_log(&mut self, id: RequestId, chunk: &[u8]) -> bool {
+        let Some(log) = self.logs.get_mut(&id) else {
+            return false;
+        };
+        log.body.extend_from_slice(chunk);
+        log.body.len() > MAX_LOG_TAIL
+    }
+
     fn finish(&mut self, id: RequestId, result: Result<(), ChannelFailure>, settled: &mut Settled) {
+        if let Some(log) = self.logs.remove(&id) {
+            settled.logs.push(log.result(result));
+            return;
+        }
         let Some(fetch) = self.fetches.remove(&id) else {
             return;
         };
@@ -462,6 +546,8 @@ impl Core {
                 companion,
                 tunnel: None,
                 departure: None,
+                text_actions: VecDeque::new(),
+                text_running: false,
             },
         );
         // the state the page starts in is what the origin assumed: only a change is reported
@@ -514,9 +600,11 @@ impl Core {
             persistent: request.persistent,
             browse: request.browse,
         };
+        let text_log = request.text_log.filter(|_| remote_text::is_text(&source));
         // the origin's grant keeps a Markdown page's navigation; without one it has none
-        let mut overlay = HtmlOverlay::linked(source, flags, request.markdown_links.clone());
+        let mut overlay = HtmlOverlay::linked(source, flags, request.markdown_links.clone()).with_text_log(text_log);
         overlay.replica_of = Some(origin);
+        remote_text::seed(&mut overlay, request.text_seed.as_ref());
         let local = overlay.id;
         store
             .open_html_overlay_sized(
@@ -734,6 +822,7 @@ impl Core {
                         channel: ReplicaChannel::new(link, permits),
                         revision,
                         fetches: HashMap::new(),
+                        logs: HashMap::new(),
                         bridges: HashMap::new(),
                     });
                 }
@@ -845,6 +934,9 @@ impl Core {
             }
             return;
         };
+        if command.action.answers_with_result() {
+            return self.queue_text_action(command, session, local);
+        }
         let refusal = match command.action {
             PresentationPageAction::Hide | PresentationPageAction::Show => {
                 self.set_replica_page_hidden(local, command.action == PresentationPageAction::Hide);
@@ -878,15 +970,7 @@ impl Core {
             PresentationPageAction::Follow
             | PresentationPageAction::Search
             | PresentationPageAction::Wrap
-            | PresentationPageAction::Changes => {
-                // this build lists no live text pages, so an origin that sends a text action anyway is told so
-                let error = if super::remote_text::TextPageAction::of(command).is_some() {
-                    TEXT_ACTIONS_UNSUPPORTED
-                } else {
-                    INVALID_TEXT_ACTION
-                };
-                return self.refuse_text_action(command, session, error);
-            }
+            | PresentationPageAction::Changes => return,
         };
         if let Some(refusal) = refusal {
             tracing::info!(action = ?command.action, %refusal, "an origin request was not applied");
@@ -894,6 +978,76 @@ impl Core {
         if let Some(record) = self.remote.viewer.pages.records.get_mut(&local) {
             record.applied_seq = record.applied_seq.max(command.seq);
         }
+    }
+
+    /// Queues an origin text action on page `local` after the ones before it (upstream's `queueTextAction`); each
+    /// answers with the page's text state once it ran.
+    fn queue_text_action(&mut self, command: &PresentationPageCommand, session: Uuid, local: Uuid) {
+        if TextPageAction::of(command).is_none() {
+            return self.refuse_text_action(command, session, INVALID_TEXT_ACTION);
+        }
+        let Some(record) = self.remote.viewer.pages.records.get_mut(&local) else {
+            return self.refuse_text_action(command, session, NOT_SHOWN);
+        };
+        record.text_actions.push_back(command.clone());
+        if !record.text_running {
+            self.run_text_actions(local);
+        }
+    }
+
+    /// Runs page `local`'s queued text actions until one waits on the page's renderer, whose last step runs the rest.
+    /// An action whose page was closed or replaced meanwhile is refused, never run on its successor.
+    fn run_text_actions(&mut self, local: Uuid) {
+        loop {
+            let Some(record) = self.remote.viewer.pages.records.get_mut(&local) else {
+                return;
+            };
+            let Some(command) = record.text_actions.pop_front() else {
+                record.text_running = false;
+                return;
+            };
+            record.text_running = true;
+            let session = record.session;
+            let shown = self
+                .replica_local(&command.page, session)
+                .filter(|(_, shown)| *shown == local);
+            let (Some((pane, _)), Some(action)) = (shown, TextPageAction::of(&command)) else {
+                self.refuse_text_action(&command, session, NOT_SHOWN);
+                continue;
+            };
+            match local_text_action(self, session, pane, action) {
+                Dispatched::Done(response) => self.answer_text_action(local, session, &command, &response),
+                Dispatched::Pending { after, resume } => {
+                    let step = text_step(local, session, command, after, resume);
+                    self.remote.viewer.pages.text_steps.push(step);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Answers `command` with what running it here answered and the page's text state after it.
+    fn answer_text_action(&self, local: Uuid, session: Uuid, command: &PresentationPageCommand, response: &Response) {
+        let outcome = if response.ok {
+            Ok(response
+                .result
+                .as_ref()
+                .and_then(|result| result.get("text"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned))
+        } else {
+            Err(response.error.clone().unwrap_or_default())
+        };
+        let state = self
+            .replica_page_slot(local)
+            .and_then(|(_, page)| remote_text::text_state(page));
+        let result = PresentationPageResult::new(command, outcome, state);
+        self.answer_origin(session, Body::PageResult(result));
+    }
+
+    /// The steps of origin text actions waiting on a page's renderer, each for the main loop after its delay.
+    pub fn take_replica_text_steps(&mut self) -> Vec<(Duration, Resume)> {
+        std::mem::take(&mut self.remote.viewer.pages.text_steps)
     }
 
     /// Answers a text action with a failed `page.result` by its sequence, leaving `appliedSeq` alone (upstream's
@@ -964,12 +1118,10 @@ impl Core {
             can_go_back: current.is_some_and(|current| current.can_go_back),
             can_go_forward: current.is_some_and(|current| current.can_go_forward),
         };
-        Some(PresentationPageState::new(
-            uuid_string(origin),
-            shown,
-            hidden,
-            applied_seq,
-        ))
+        Some(PresentationPageState {
+            text: remote_text::text_state(page),
+            ..PresentationPageState::new(uuid_string(origin), shown, hidden, applied_seq)
+        })
     }
 
     /// Records why replica `local` is about to leave its slot, unless a reason is recorded already.
@@ -996,6 +1148,9 @@ impl Core {
         }
         if let Some(notice) = self.replica_release_notice(&record) {
             self.answer_origin(record.session, notice);
+        }
+        for command in std::mem::take(&mut record.text_actions) {
+            self.refuse_text_action(&command, record.session, NOT_SHOWN);
         }
         if let Some(tunnel) = &record.tunnel {
             tunnel.stop();
@@ -1151,6 +1306,30 @@ impl Core {
         }
     }
 
+    /// Asks the origin of log replica `id` for its file's end, unless the file still has `stamp` (upstream's
+    /// `logTail`); `answer` runs once, on the main loop. A page with no channel answers [`ChannelFailure::Closed`].
+    pub fn replica_log_tail(&mut self, id: Uuid, stamp: Option<FileStamp>, answer: LogTailAnswer) {
+        let Some(link) = self.page_link(id) else {
+            answer(Err(ChannelFailure::Closed));
+            return;
+        };
+        match link.channel.log_tail(stamp) {
+            Ok((request, events)) => {
+                link.logs.insert(
+                    request,
+                    LogFetch {
+                        head: None,
+                        unchanged: false,
+                        body: Vec::new(),
+                        answer,
+                    },
+                );
+                self.settle_channel(id, events);
+            }
+            Err(failure) => answer(Err(failure)),
+        }
+    }
+
     /// Relays the request replica `id`'s page sent, as the raw JSON it sent, to its origin, which fills the defaults
     /// and acts there (upstream's linked `handleBridgeRequest`); `answer` runs once with the shaped reply.
     pub fn replica_bridge(&mut self, id: Uuid, body: &str, answer: BridgeAnswer) {
@@ -1234,6 +1413,29 @@ impl Core {
             self.library_mut().close_html_overlay(id);
         }
     }
+}
+
+/// One step of origin text action `command` on page `local`, which answers the origin once the action answers here and
+/// then runs the page's next queued action.
+fn text_step(
+    local: Uuid,
+    session: Uuid,
+    command: PresentationPageCommand,
+    after: Duration,
+    resume: Resume,
+) -> (Duration, Resume) {
+    let step: Resume = Box::new(move |core: &mut Core| match resume(core) {
+        Dispatched::Done(response) => {
+            core.answer_text_action(local, session, &command, &response);
+            core.run_text_actions(local);
+            Dispatched::Done(response)
+        }
+        Dispatched::Pending { after, resume } => {
+            let (after, resume) = text_step(local, session, command, after, resume);
+            Dispatched::Pending { after, resume }
+        }
+    });
+    (after, step)
 }
 
 /// Why `navigation` cannot run on `page`, `None` when it can: a file page shown for another machine has no file here

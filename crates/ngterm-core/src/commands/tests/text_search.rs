@@ -233,10 +233,17 @@ fn a_search_addresses_only_a_local_text_page() {
     assert_eq!(page(&f, id, None).text_search, None);
     assert!(f.store_mut().unwrap().close_overlay(id));
 
-    // a text page shown for another machine is static there: no control search reaches it (#891)
-    for content in [
-        crate::html::ReplicaContent::Html,
-        crate::html::ReplicaContent::Text { line: None },
+    // a text page shown for another machine searches as a local one (#978); a replica of another kind does not
+    for (content, expected) in [
+        (crate::html::ReplicaContent::Html, failure("no text page")),
+        (
+            crate::html::ReplicaContent::Text { line: None },
+            Response {
+                ok: true,
+                result: Some(json!({"id": target})),
+                error: None,
+            },
+        ),
     ] {
         let replica = HtmlOverlay {
             replica_of: Some(Uuid::new_v4()),
@@ -252,7 +259,7 @@ fn a_search_addresses_only_a_local_text_page() {
             .unwrap()
             .open_html_overlay(id, None, replica, None, None)
             .unwrap();
-        assert_eq!(search(&mut f, &target, query("a")), failure("no text page"));
+        assert_eq!(search(&mut f, &target, query("a")), expected);
         assert!(f.store_mut().unwrap().close_overlay(id));
     }
 

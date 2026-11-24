@@ -3,9 +3,7 @@
 //! world on `WebView2`), with the page's own JavaScript off, and the stylesheets they wear. A clicked HTML file runs no
 //! renderer: its own markup is the page, behind its policy (`document_page`).
 
-use ngterm_core::html::{
-    HtmlPageKind, HtmlSource, ReplicaContent, document_page, errors, image_page, markdown_page, text_page,
-};
+use ngterm_core::html::{HtmlPageKind, HtmlSource, ReplicaContent, document_page, errors, image_page, markdown_page};
 use ngterm_core::remote::replica_page::ContentFailures;
 
 pub(super) const WORLD: &str = "ngterm-markdown";
@@ -162,31 +160,23 @@ pub(super) type OriginRead<'a> = dyn FnMut(&str, usize, ContentFailures) -> Resu
 /// `replicaContentPage`), on a worker: `read` takes the file's path there, the cap its read is under and how its failures
 /// are worded, and blocks until the origin answered. The bytes are judged again here as a local file's would be, since
 /// a file can change between the origin's check and this read; a Markdown page's pictures are read the same way under
-/// the page's shared budget. A text page is the static one, with no search or log state, as a local page's documents
-/// carry.
+/// the page's shared budget. An HTML page loads through its scheme and a text page through its bridge (`text_page`),
+/// so neither is built here.
 pub(super) fn build_replica(path: &str, content: ReplicaContent, read: &mut OriginRead<'_>) -> Result<String, String> {
-    let Some((limit, failures)) = ngterm_app::documents::replica_read(content, path) else {
+    let readable = !matches!(content, ReplicaContent::Text { .. });
+    let Some((limit, failures)) = ngterm_app::documents::replica_read(content, path).filter(|_| readable) else {
         return Err(errors::REMOTE_FILE.to_owned());
     };
     let bytes = read(path, limit, failures)?;
     match content {
-        ReplicaContent::Html => unreachable!("an HTML replica is refused by replica_read"),
+        ReplicaContent::Html | ReplicaContent::Text { .. } => {
+            unreachable!("an HTML or text replica is refused before its read")
+        }
         ReplicaContent::Image { .. } => {
             let image = ngterm_app::documents::image_from_bytes(bytes, path)?;
             Ok(image_page::html(&image.bytes, &image.mime_type))
         }
         ReplicaContent::Markdown => replica_markdown(bytes, path, read, false),
-        ReplicaContent::Text { line } => {
-            let text = ngterm_app::documents::text_from_bytes(bytes, path)?;
-            let state = text_page::PageState::default();
-            Ok(text_page::html(
-                &text,
-                text_page::language(path),
-                line,
-                &text_style(),
-                &state,
-            ))
-        }
         ReplicaContent::Document => ngterm_app::documents::document_from_bytes(bytes, path, document_page_builder()),
     }
 }
@@ -363,8 +353,9 @@ mod tests {
         assert!(!plain.contains("data-links"), "{plain}");
     }
 
-    /// An image, text or document replica builds the page a local one of its kind shows from the fetched bytes, judged
-    /// here again; a failed read keeps its reason; an HTML replica loads through its scheme, never here.
+    /// An image or document replica builds the page a local one of its kind shows from the fetched bytes, judged here
+    /// again; a failed read keeps its reason; an HTML replica loads through its scheme and a text one through its
+    /// bridge, never here.
     #[test]
     fn a_content_replica_builds_its_kinds_page_from_fetched_bytes() {
         let path = os("/o/a");
@@ -381,24 +372,17 @@ mod tests {
             build(ReplicaContent::Image { width: 1, height: 1 }, b"<svg/>".to_vec()).unwrap_err(),
             format!("not a png, jpg, gif or webp image: {path}")
         );
-        let text = build(ReplicaContent::Text { line: Some(2) }, b"one\ntwo\n".to_vec()).unwrap();
-        assert!(text.contains("two"), "{text}");
-        assert_eq!(
-            build(ReplicaContent::Text { line: None }, vec![0x61, 0x00]).unwrap_err(),
-            format!("not a UTF-8 text file: {path}")
-        );
         let document = build(ReplicaContent::Document, b"<p>review</p>".to_vec()).unwrap();
         assert!(document.contains(document_page::POLICY), "{document}");
         let mut refused =
             |_: &str, _: usize, _: ContentFailures| Err("file is too large for the page: /o/a".to_owned());
         assert_eq!(
-            build_replica(&path, ReplicaContent::Text { line: None }, &mut refused).unwrap_err(),
+            build_replica(&path, ReplicaContent::Document, &mut refused).unwrap_err(),
             "file is too large for the page: /o/a"
         );
-        assert_eq!(
-            build(ReplicaContent::Html, Vec::new()).unwrap_err(),
-            errors::REMOTE_FILE
-        );
+        for content in [ReplicaContent::Html, ReplicaContent::Text { line: None }] {
+            assert_eq!(build(content, Vec::new()).unwrap_err(), errors::REMOTE_FILE);
+        }
         let text_replica = HtmlSource::Replica {
             path: path.clone(),
             content: ReplicaContent::Text { line: None },

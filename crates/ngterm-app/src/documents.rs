@@ -12,8 +12,8 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use image::{ImageDecoder as _, ImageFormat, ImageReader};
-pub use ngterm_core::bounded_file::FileStamp;
 use ngterm_core::bounded_file::{self, Failure, read_tail};
+pub use ngterm_core::bounded_file::{FileStamp, TailRead};
 use ngterm_core::html::image_page::{self, ImageData};
 use ngterm_core::html::markdown_page::{self, Embedded, MarkdownDocument};
 use ngterm_core::html::{ReplicaContent, document_page};
@@ -215,10 +215,17 @@ pub struct LogRead {
 pub fn load_log(path: &Path, tail: usize, unchanged_from: Option<&FileStamp>) -> Result<Option<LogRead>, String> {
     let read = read_tail(path, text_page::MAX_TAIL_BYTES as u64, unchanged_from)
         .map_err(|_| format!("unreadable text file: {}", path.display()))?;
-    Ok(read.map(|read| LogRead {
+    Ok(read.map(|read| log_read(&read, tail)))
+}
+
+/// What a log page shows of `read`, a file's end read here or on the machine that opened the page, as its last `tail`
+/// lines (upstream's `TextProbe.LogRead(_:tail:)`), so a remote log's truncation, rotation and binary end read alike.
+#[must_use]
+pub fn log_read(read: &TailRead, tail: usize) -> LogRead {
+    LogRead {
         snapshot: log_tail::snapshot(&read.data, read.offset, tail),
         stamp: read.stamp,
-    }))
+    }
 }
 
 /// Read the last `tail` lines of a log the way its page will (upstream's `TextProbe.checkLog`), so a binary or

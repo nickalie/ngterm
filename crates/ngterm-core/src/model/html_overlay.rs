@@ -20,7 +20,7 @@ use super::session::Session;
 use super::store::AppStore;
 use super::window_library::WindowLibrary;
 use crate::html::text_page::{self, TextChanges, TextLogReport, TextSearch};
-use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlReloadTarget, HtmlSource, SearchCount, errors};
+use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlPageKind, HtmlReloadTarget, SearchCount, errors};
 use crate::persist::PageSnapshot;
 
 /// Why [`AppStore::open_html_overlay`] refused (upstream's `HtmlOverlayOpenFailure`; its `presenter` case is the
@@ -78,7 +78,7 @@ impl TextLogFollowFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextSearchFailure {
     Page(HtmlOverlayCommandFailure),
-    /// The slot holds a page that is not a local text page, a replica included.
+    /// The slot holds no text page, here or shown here for another machine.
     NotText,
     /// The slot is the presenting machine's, which alone shows the page.
     Remote,
@@ -134,7 +134,7 @@ impl TextChangesFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextWrapFailure {
     Page(HtmlOverlayCommandFailure),
-    /// The slot holds a page that is not a local text page, a replica included.
+    /// The slot holds no text page, here or shown here for another machine.
     NotText,
     /// The slot is the presenting machine's, which alone shows the page.
     Remote,
@@ -414,7 +414,7 @@ impl AppStore {
     ///
     /// # Errors
     ///
-    /// The page lookup's refusal, a replica, or a page that is not a log page; nothing changes.
+    /// The page lookup's refusal, a replica of no text page, or a page that is not a log page; nothing changes.
     pub fn set_text_log_following(
         &mut self,
         id: Uuid,
@@ -422,10 +422,13 @@ impl AppStore {
         following: impl FnOnce(bool) -> bool,
     ) -> Result<bool, TextLogFollowFailure> {
         let shown = self.html_overlay(id, pane).map_err(TextLogFollowFailure::Page)?;
-        if shown.replica_of.is_some() {
-            return Err(TextLogFollowFailure::Replica);
-        }
-        let state = shown.log_state.ok_or(TextLogFollowFailure::NotLog)?;
+        let state = shown.log_state.ok_or({
+            if shown.replica_of.is_none() || shown.source.kind() == HtmlPageKind::Text {
+                TextLogFollowFailure::NotLog
+            } else {
+                TextLogFollowFailure::Replica
+            }
+        })?;
         let (page_id, wanted) = (shown.id, following(state.following));
         if wanted != state.following {
             if let Some(session) = self.session_mut(id) {
@@ -598,7 +601,7 @@ impl WindowLibrary {
         let mut revision = None;
         self.update_html_overlay(id, |page| {
             let current = page.text_search.as_ref().map_or("", |search| search.query.as_str());
-            if !matches!(page.source, HtmlSource::Text { .. }) || current == query {
+            if page.source.kind() != HtmlPageKind::Text || current == query {
                 return;
             }
             page.search_revision += 1;
@@ -632,7 +635,7 @@ impl WindowLibrary {
     /// `setTextChangesReport`). Only a text page takes it; never emitted, like [`WindowLibrary::set_text_search_report`].
     pub fn set_text_changes_report(&mut self, id: Uuid, changes: Option<TextChanges>) {
         self.update_html_overlay(id, |page| {
-            if matches!(page.source, HtmlSource::Text { .. }) {
+            if page.source.kind() == HtmlPageKind::Text {
                 page.text_changes = changes;
             }
         });
@@ -644,7 +647,7 @@ impl WindowLibrary {
     pub fn set_text_wrap(&mut self, id: Uuid, wrapped: bool) -> bool {
         let mut changed = false;
         self.update_html_overlay(id, |page| {
-            if matches!(page.source, HtmlSource::Text { .. }) && page.text_wrap != wrapped {
+            if page.source.kind() == HtmlPageKind::Text && page.text_wrap != wrapped {
                 page.text_wrap = wrapped;
                 changed = true;
             }

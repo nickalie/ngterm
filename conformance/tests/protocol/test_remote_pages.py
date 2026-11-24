@@ -238,3 +238,66 @@ def test_a_top_level_page_session_attaches_alone_and_its_companions_attach_under
             assert_ok(remote_viewer.request("session.close", local))
         for sid in (root, target):
             assert_ok(origin.request("session.close", sid))
+
+
+def _origin_text(origin, sid, expected):
+    """The origin's record of its log page once its `text` holds `expected`, as the presenter's reports mirror it."""
+
+    def mirrored(tree):
+        pages = find_session(tree, sid).get("htmlOverlays") or []
+        return len(pages) == 1 and all(pages[0].get("text", {}).get(key) == value for key, value in expected.items())
+
+    mirrored.__qualname__ = f"the origin's log page in {sid} reads {expected}"
+    (page,) = find_session(origin.wait_tree(mirrored), sid)["htmlOverlays"]
+    return page["text"]
+
+
+@pytest.mark.since("0.42.1")
+@POSIX_SSHD
+@pytest.mark.requires("live-sessions", reason="the origin's session must be Live to attach from another machine")
+@pytest.mark.covers(
+    "session.overlay.open",
+    "session.overlay.follow",
+    "session.overlay.wrap",
+    "session.overlay.search",
+    "field:tree.session.htmlOverlays",
+)
+def test_a_log_page_follows_on_the_presenting_machine_which_runs_the_origins_text_actions(
+    remote_origin, remote_viewer
+):
+    """A log page an origin opens on a session another machine presents follows there over the page's channel, and
+    `session.overlay.follow`, `.wrap` and `.search` on the origin run on that machine: each answers with its reply,
+    and the origin's tree shows the state it left right after (#978)."""
+    origin = Ctl(remote_origin.instance)
+    before = set(session_ids(origin.tree()))
+    sid = _origin_session(origin)
+    assert_ok(origin.request("session.select", sorted(before)[0]))
+    local = _attach(remote_viewer, remote_origin.host, sid)
+    try:
+        origin.wait_tree(lambda tree: _follows(tree, sid))
+        log = origin.instance.root / "remote-app.log"
+        log.write_text("one\ntwo\n")
+        assert_ok(origin.request("session.overlay.open", sid, textFile=str(log), followFile=True, tail=50))
+        _origin_text(origin, sid, {"following": True, "lines": 2})
+        (shown,) = find_session(remote_viewer.tree(), local)["htmlOverlays"]
+        assert_subset(shown, {"replica": True})
+        with log.open("a") as appended:
+            appended.write("three\n")
+        _origin_text(origin, sid, {"lines": 3})
+
+        assert assert_ok(origin.request("session.overlay.follow", sid, mode="off")) == {"id": sid, "text": "paused"}
+        assert find_session(origin.tree(), sid)["htmlOverlays"][0]["text"]["following"] is False
+        assert assert_ok(origin.request("session.overlay.wrap", sid, mode="on")) == {"id": sid, "text": "wrapped"}
+        assert find_session(origin.tree(), sid)["htmlOverlays"][0]["text"]["wrap"] is True
+        assert_ok(origin.request("session.overlay.search", sid, text="two"))
+        assert assert_ok(origin.request("session.overlay.search", sid, to="next")) == {"id": sid, "text": "1 of 1"}
+        assert find_session(origin.tree(), sid)["htmlOverlays"][0]["text"]["search"] == {
+            "query": "two",
+            "matches": 1,
+            "current": 1,
+        }
+        (shown,) = find_session(remote_viewer.tree(), local)["htmlOverlays"]
+        assert_subset(shown["text"], {"following": False, "wrap": True})
+    finally:
+        assert_ok(remote_viewer.request("session.close", local))
+        assert_ok(origin.request("session.close", sid))

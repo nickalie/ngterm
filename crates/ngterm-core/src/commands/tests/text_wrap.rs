@@ -147,7 +147,7 @@ fn a_pane_wrap_reaches_that_panes_page() {
 }
 
 /// Upstream's `wrapRefusesEverythingButATextPage`: an empty slot, a Markdown page, a page shown for another machine
-/// and a program are refused, and a wrap never lands on a page that is not a local text page.
+/// and a program are refused, and a wrap never lands on a page that is not a text page.
 #[test]
 fn a_wrap_addresses_only_a_local_text_page() {
     let mut f = fixture();
@@ -168,26 +168,6 @@ fn a_wrap_addresses_only_a_local_text_page() {
     assert!(!page(&f, id, None).text_wrap);
     assert!(f.store_mut().unwrap().close_overlay(id));
 
-    let replica = HtmlOverlay {
-        replica_of: Some(Uuid::new_v4()),
-        ..HtmlOverlay::new(
-            HtmlSource::Replica {
-                path: "/tmp/a.txt".to_owned(),
-                content: ReplicaContent::Text { line: None },
-            },
-            HtmlPageFlags::default(),
-        )
-    };
-    let replica_id = replica.id;
-    f.store_mut()
-        .unwrap()
-        .open_html_overlay(id, None, replica, None, None)
-        .unwrap();
-    assert_eq!(wrap(&mut f, &target, mode("on")), failure("no text page"));
-    assert!(!f.core.set_text_wrap_from_page(replica_id, true));
-    assert!(!page(&f, id, None).text_wrap);
-    assert!(f.store_mut().unwrap().close_overlay(id));
-
     assert!(f.store_mut().unwrap().open_overlay(
         id,
         OverlayProgram {
@@ -204,6 +184,35 @@ fn a_wrap_addresses_only_a_local_text_page() {
         TextWrapFailure::Remote.message(),
         "remote page: wrap it on the Mac that shows it"
     );
+}
+
+/// Upstream's `setTextWrap` on a replica (#978): a text page shown here for another machine wraps as a local one, from
+/// control and from its own toggle.
+#[test]
+fn a_text_replica_wraps_as_a_local_text_page() {
+    let mut f = fixture();
+    let id = f.sessions[0];
+    let target = wire(id);
+    let replica = HtmlOverlay {
+        replica_of: Some(Uuid::new_v4()),
+        ..HtmlOverlay::new(
+            HtmlSource::Replica {
+                path: "/tmp/a.txt".to_owned(),
+                content: ReplicaContent::Text { line: None },
+            },
+            HtmlPageFlags::default(),
+        )
+    };
+    let replica_id = replica.id;
+    f.store_mut()
+        .unwrap()
+        .open_html_overlay(id, None, replica, None, None)
+        .unwrap();
+    assert_eq!(wrap(&mut f, &target, mode("on")).result.unwrap()["text"], "wrapped");
+    assert!(!f.core.set_text_wrap_from_page(replica_id, true));
+    assert!(f.core.set_text_wrap_from_page(replica_id, false));
+    assert!(!page(&f, id, None).text_wrap);
+    assert!(f.store_mut().unwrap().close_overlay(id));
 }
 
 /// Upstream's `overlayWrapRejectsBadInputBeforeCallingActions`: the mode, then the pane, before the session resolves.

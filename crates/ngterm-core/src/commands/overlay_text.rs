@@ -29,7 +29,7 @@ use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::html::text_page::{self, TextChanges};
-use crate::html::{HtmlOverlay, HtmlSource, SearchCount, SearchStep};
+use crate::html::{HtmlOverlay, HtmlPageKind, HtmlSource, ReplicaContent, SearchCount, SearchStep};
 use crate::model::{OverlayPane, TextChangesFailure, TextSearchFailure, TextWrapFailure};
 use crate::pane_env::uuid_string;
 use crate::remote::remote_text::{RemoteTextOutcome, RemoteTextPoll, RemoteTextWait, SearchRequest, TextPageAction};
@@ -72,19 +72,7 @@ pub(crate) fn begin_search(core: &mut Core, request: &Request) -> Dispatched {
         Ok(addressed) => addressed,
         Err(error) => return Dispatched::done(Err(error)),
     };
-    text_action(
-        core,
-        session,
-        pane,
-        &TextPageAction::Search(search.clone()),
-        move |core| match start(core, session, pane, search) {
-            Ok(Started::Done(result)) => Dispatched::done(Ok(*result)),
-            Ok(Started::Step { session, answer }) => {
-                wait(session, answer, |session, count| Ok(searched(session, count)), 0)
-            }
-            Err(error) => Dispatched::done(Err(error)),
-        },
-    )
+    text_action(core, session, pane, TextPageAction::Search(search))
 }
 
 /// The pane, then the session, a text page command addresses.
@@ -98,18 +86,53 @@ fn addressed(core: &Core, request: &Request) -> Result<(Uuid, Option<OverlayPane
 }
 
 /// Runs `action` on the presenting machine when it shows the page in `pane`'s slot of `session`, waiting for its
-/// answer, else here through `local` (upstream's `textPageAction`).
-fn text_action(
+/// answer, else here (upstream's `textPageAction`).
+fn text_action(core: &mut Core, session: Uuid, pane: Option<OverlayPane>, action: TextPageAction) -> Dispatched {
+    match core.remote_text_action(session, pane, &action) {
+        RemoteTextOutcome::Local => local_text_action(core, session, pane, action),
+        RemoteTextOutcome::Failed(error) => Dispatched::done(Err(ControlError::rejected(error))),
+        RemoteTextOutcome::Waiting(wait) => remote_wait(session, wait),
+    }
+}
+
+/// Runs `action` on the text page in `pane`'s slot of `session` here, as the local command does: the socket's path,
+/// and the presenter's for an origin's action on a page it shows (upstream's `runTextPageAction`).
+pub(crate) fn local_text_action(
     core: &mut Core,
     session: Uuid,
     pane: Option<OverlayPane>,
-    action: &TextPageAction,
-    local: impl FnOnce(&mut Core) -> Dispatched,
+    action: TextPageAction,
 ) -> Dispatched {
-    match core.remote_text_action(session, pane, action) {
-        RemoteTextOutcome::Local => local(core),
-        RemoteTextOutcome::Failed(error) => Dispatched::done(Err(ControlError::rejected(error))),
-        RemoteTextOutcome::Waiting(wait) => remote_wait(session, wait),
+    match action {
+        TextPageAction::Follow(mode) => Dispatched::done(follow(core, session, pane, mode)),
+        TextPageAction::Wrap(mode) => Dispatched::done(wrap(core, session, pane, mode)),
+        TextPageAction::Search(search) => match start(core, session, pane, search) {
+            Ok(Started::Done(result)) => Dispatched::done(Ok(*result)),
+            Ok(Started::Step { page, step, answer }) => wait(
+                core,
+                answer,
+                move |core: &mut Core, count| {
+                    record_search_step(core, page, &step, count);
+                    Ok(searched(session, count))
+                },
+                0,
+            ),
+            Err(error) => Dispatched::done(Err(error)),
+        },
+        TextPageAction::Changes { forward } => match start_changes(core, session, pane, forward) {
+            Ok((stepped_page, answer)) => wait(
+                core,
+                answer,
+                move |core: &mut Core, changes: TextChanges| {
+                    if changes.count > 0 {
+                        core.library_mut().set_text_changes_report(stepped_page, Some(changes));
+                    }
+                    stepped(session, changes)
+                },
+                0,
+            ),
+            Err(error) => Dispatched::done(Err(error)),
+        },
     }
 }
 
@@ -129,6 +152,16 @@ fn remote_wait(session: Uuid, wait: RemoteTextWait) -> Dispatched {
     }
 }
 
+/// The model takes a step's count before the step answers, a move pausing a following log as the page's own does, so
+/// state read right after never lags the page (upstream's `TextPageBridge.step`).
+fn record_search_step(core: &mut Core, page: Uuid, step: &SearchStep, count: SearchCount) {
+    let library = core.library_mut();
+    library.set_text_search_report(page, step.revision, &step.query, count);
+    if count.matches > 0 {
+        library.set_text_log_following(page, false);
+    }
+}
+
 /// A search step's answer: `N of M` for the match it reached.
 fn searched(session: Uuid, count: SearchCount) -> ControlResult {
     ControlResult {
@@ -141,7 +174,8 @@ fn searched(session: Uuid, count: SearchCount) -> ControlResult {
 enum Started {
     Done(Box<ControlResult>),
     Step {
-        session: Uuid,
+        page: Uuid,
+        step: SearchStep,
         answer: Receiver<SearchCount>,
     },
 }
@@ -178,13 +212,14 @@ fn start(
     };
     let answer = core
         .html_host()
-        .and_then(|host| host.step_text_search(id, step))
+        .and_then(|host| host.step_text_search(id, step.clone()))
         .ok_or_else(|| refused(TextSearchFailure::NotLoaded))?;
-    Ok(Started::Step { session, answer })
+    Ok(Started::Step { page: id, step, answer })
 }
 
-/// The local text page in the slot `pane` of `session` addresses (upstream's `textSearchPage`): the local fallback, so
-/// a slot the placement rule hands to the presenting machine that the remote path did not take is refused.
+/// The text page in the slot `pane` of `session` addresses, one of this machine's own or one shown here for another
+/// (upstream's `textSearchPage`): the local fallback, so a slot the placement rule hands to the presenting machine that
+/// the remote path did not take is refused.
 fn text_search_page(core: &Core, session: Uuid, pane: Option<OverlayPane>) -> Result<&HtmlOverlay, TextSearchFailure> {
     if core.page_belongs_remote(session, pane) {
         return Err(TextSearchFailure::Remote);
@@ -196,9 +231,10 @@ fn text_search_page(core: &Core, session: Uuid, pane: Option<OverlayPane>) -> Re
             crate::model::HtmlOverlayCommandFailure::UnknownSession,
         ))?;
     let found = store.html_overlay(session, pane).map_err(TextSearchFailure::Page)?;
-    match found.source {
-        HtmlSource::Text { .. } => Ok(found),
-        _ => Err(TextSearchFailure::NotText),
+    if found.source.kind() == HtmlPageKind::Text {
+        Ok(found)
+    } else {
+        Err(TextSearchFailure::NotText)
     }
 }
 
@@ -208,16 +244,16 @@ fn refused(failure: TextSearchFailure) -> ControlError {
 
 /// Answers the step through `answered` once the page's renderer counted, `page not loaded` when it never does.
 fn wait<T: Send + 'static>(
-    session: Uuid,
+    core: &mut Core,
     answer: Receiver<T>,
-    answered: fn(Uuid, T) -> Result<ControlResult, ControlError>,
+    answered: impl FnOnce(&mut Core, T) -> Result<ControlResult, ControlError> + Send + 'static,
     attempt: u32,
 ) -> Dispatched {
     match answer.try_recv() {
-        Ok(count) => Dispatched::done(answered(session, count)),
+        Ok(count) => Dispatched::done(answered(core, count)),
         Err(TryRecvError::Empty) if POLL_INTERVAL * attempt < STEP_WAIT => Dispatched::Pending {
             after: POLL_INTERVAL,
-            resume: Box::new(move |_: &mut Core| wait(session, answer, answered, attempt + 1)),
+            resume: Box::new(move |core: &mut Core| wait(core, answer, answered, attempt + 1)),
         },
         // both failures say the same
         Err(_) => Dispatched::done(Err(refused(TextSearchFailure::NotLoaded))),
@@ -233,16 +269,7 @@ pub(crate) fn begin_changes(core: &mut Core, request: &Request) -> Dispatched {
         Ok(addressed) => addressed,
         Err(error) => return Dispatched::done(Err(error)),
     };
-    text_action(
-        core,
-        session,
-        pane,
-        &TextPageAction::Changes { forward },
-        move |core| match start_changes(core, session, pane, forward) {
-            Ok(answer) => wait(session, answer, stepped, 0),
-            Err(error) => Dispatched::done(Err(error)),
-        },
-    )
+    text_action(core, session, pane, TextPageAction::Changes { forward })
 }
 
 /// A change step's answer: `N of M` for the change it reached, `no changes` when the page has none.
@@ -273,15 +300,17 @@ fn start_changes(
     session: Uuid,
     pane: Option<OverlayPane>,
     forward: bool,
-) -> Result<Receiver<TextChanges>, ControlError> {
+) -> Result<(Uuid, Receiver<TextChanges>), ControlError> {
     let id = text_changes_page(core, session, pane).map_err(changes_refused)?.id;
-    core.html_host()
+    let answer = core
+        .html_host()
         .and_then(|host| host.step_text_changes(id, forward))
-        .ok_or_else(|| changes_refused(TextChangesFailure::NotLoaded))
+        .ok_or_else(|| changes_refused(TextChangesFailure::NotLoaded))?;
+    Ok((id, answer))
 }
 
-/// The local plain diff page in the slot `pane` of `session` addresses (upstream's `textChangesPage`), with the slot
-/// refusals of [`text_search_page`]; a log page of a patch is not one.
+/// The plain diff page in the slot `pane` of `session` addresses, here or a replica (upstream's `textChangesPage`),
+/// with the slot refusals of [`text_search_page`]; a log page of a patch is not one.
 fn text_changes_page(
     core: &Core,
     session: Uuid,
@@ -293,7 +322,11 @@ fn text_changes_page(
         _ => TextChangesFailure::NotDiff,
     })?;
     match &found.source {
-        HtmlSource::Text { path, .. } if found.text_log.is_none() && text_page::is_diff(path) => Ok(found),
+        HtmlSource::Text { path, .. }
+        | HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Text { .. },
+        } if found.text_log.is_none() && text_page::is_diff(path) => Ok(found),
         _ => Err(TextChangesFailure::NotDiff),
     }
 }
@@ -311,9 +344,7 @@ pub(crate) fn begin_wrap(core: &mut Core, request: &Request) -> Dispatched {
         Ok(addressed) => addressed,
         Err(error) => return Dispatched::done(Err(error)),
     };
-    text_action(core, session, pane, &TextPageAction::Wrap(mode), move |core| {
-        Dispatched::done(wrap(core, session, pane, mode))
-    })
+    text_action(core, session, pane, TextPageAction::Wrap(mode))
 }
 
 /// A follow or wrap request's mode, an absent one toggling.
@@ -324,7 +355,7 @@ fn toggle_mode(args: &Args, command: &str) -> Result<ToggleMode, ControlError> {
 }
 
 /// The local wrap of the text page in `pane`'s slot of `session`.
-pub(crate) fn wrap(core: &mut Core, session: Uuid, pane: Option<OverlayPane>, mode: ToggleMode) -> Outcome {
+fn wrap(core: &mut Core, session: Uuid, pane: Option<OverlayPane>, mode: ToggleMode) -> Outcome {
     let shown = text_search_page(core, session, pane).map_err(|failure| {
         let failure = match failure {
             TextSearchFailure::Page(failure) => TextWrapFailure::Page(failure),
@@ -350,13 +381,11 @@ pub(crate) fn begin_follow(core: &mut Core, request: &Request) -> Dispatched {
         Ok(addressed) => addressed,
         Err(error) => return Dispatched::done(Err(error)),
     };
-    text_action(core, session, pane, &TextPageAction::Follow(mode), move |core| {
-        Dispatched::done(follow(core, session, pane, mode))
-    })
+    text_action(core, session, pane, TextPageAction::Follow(mode))
 }
 
 /// The local follow change of the log page in `pane`'s slot of `session`.
-pub(crate) fn follow(core: &mut Core, session: Uuid, pane: Option<OverlayPane>, mode: ToggleMode) -> Outcome {
+fn follow(core: &mut Core, session: Uuid, pane: Option<OverlayPane>, mode: ToggleMode) -> Outcome {
     let (store, _) = super::session_store(core, Some(&uuid_string(session)), None)?;
     let following = store
         .set_text_log_following(session, pane, |current| mode.desired_value(current))

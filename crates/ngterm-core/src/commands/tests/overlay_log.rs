@@ -358,25 +358,34 @@ fn follow_refuses_everything_but_a_log_page() {
     );
 }
 
-/// A replica of another machine's log page keeps upstream's replica refusal: that machine alone follows its file.
+/// Upstream's `setTextLogFollowing` on a replica (#978): a log page shown here for another machine follows here, a
+/// replica of another kind keeps the replica refusal.
 #[test]
-fn a_replica_log_page_is_followed_where_it_was_opened() {
+fn a_replica_log_page_follows_here_and_another_replica_is_refused() {
     let (mut f, _) = fixture();
     let id = f.sessions[0];
-    let replica = HtmlOverlay {
+    let replica = |content| HtmlOverlay {
         replica_of: Some(Uuid::new_v4()),
         ..HtmlOverlay::new(
             HtmlSource::Replica {
                 path: "/tmp/app.log".to_owned(),
-                content: crate::html::ReplicaContent::Html,
+                content,
             },
             HtmlPageFlags::default(),
         )
-    }
-    .with_text_log(Some(TextLog { tail: 10, follow: true }));
+    };
+    let log = replica(crate::html::ReplicaContent::Text { line: None })
+        .with_text_log(Some(TextLog { tail: 10, follow: true }));
     f.store_mut()
         .unwrap()
-        .open_html_overlay(id, None, replica, None, None)
+        .open_html_overlay(id, None, log, None, None)
+        .unwrap();
+    assert_eq!(follow(&mut f, &wire(id), Some("off")).result.unwrap()["text"], "paused");
+    assert!(f.store_mut().unwrap().close_overlay(id));
+    let html = replica(crate::html::ReplicaContent::Html);
+    f.store_mut()
+        .unwrap()
+        .open_html_overlay(id, None, html, None, None)
         .unwrap();
     assert_eq!(follow(&mut f, &wire(id), Some("off")), failure(errors::REPLICA_SUBMIT));
 }

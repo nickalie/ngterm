@@ -56,6 +56,8 @@ struct Origin {
     seen: usize,
     lines: VecDeque<Vec<u8>>,
     held_cancels: Vec<RequestId>,
+    /// The log's end it serves, `None` for a page that is no log page.
+    log: Option<crate::bounded_file::TailRead>,
 }
 
 impl Origin {
@@ -72,6 +74,7 @@ impl Origin {
             seen: 0,
             lines: VecDeque::new(),
             held_cancels: Vec::new(),
+            log: None,
         }
     }
 
@@ -107,6 +110,27 @@ impl Origin {
                     None => self.line(&PageServeFrame::Failure {
                         id,
                         error: "no such file".to_owned(),
+                    }),
+                },
+                PageServeFrame::LogTail { id, stamp } => match self.log.clone() {
+                    Some(log) if stamp == Some(log.stamp) => self.line(&PageServeFrame::LogUnchanged { id }),
+                    Some(log) => {
+                        self.line(&PageServeFrame::LogHead {
+                            id,
+                            stamp: log.stamp,
+                            offset: log.offset,
+                        });
+                        for chunk in log.data.chunks(CHUNK) {
+                            self.line(&PageServeFrame::Chunk {
+                                id,
+                                data: chunk.to_vec(),
+                            });
+                        }
+                        self.line(&PageServeFrame::End { id });
+                    }
+                    None => self.line(&PageServeFrame::Failure {
+                        id,
+                        error: "not a log page".to_owned(),
                     }),
                 },
                 PageServeFrame::Cancel { id } if self.hold_cancels => self.held_cancels.push(id),
@@ -192,6 +216,12 @@ impl Harness {
 
     fn fetch_at(&mut self, path: &str, revision: u64) -> RequestId {
         let (id, events) = self.channel.fetch(path, revision).unwrap();
+        self.events.extend(events);
+        id
+    }
+
+    fn log_tail(&mut self, stamp: Option<FileStamp>) -> RequestId {
+        let (id, events) = self.channel.log_tail(stamp).unwrap();
         self.events.extend(events);
         id
     }
@@ -765,8 +795,7 @@ fn stale_resource_and_bridge_replies_do_not_finish_another_request() {
     assert_eq!(harness.permits.free(), INBOUND_LIMIT);
 }
 
-/// This machine asks for no log tail yet (#978): a log answer names no request, so it changes nothing and frees its
-/// permit.
+/// A log answer that names no request changes nothing and frees its permit.
 #[test]
 fn a_log_answer_for_no_request_is_dropped() {
     let mut harness = Harness::new();
@@ -782,4 +811,110 @@ fn a_log_answer_for_no_request_is_dropped() {
     for _ in 0..super::INBOUND_LIMIT {
         assert!(harness.permits.try_take(), "every permit came back");
     }
+}
+
+fn log_stamp() -> FileStamp {
+    FileStamp {
+        identity: (1, 2),
+        size: 3000,
+        modified: (4, 5),
+    }
+}
+
+/// Upstream's `testALogTailReturnsTheOriginsBytesAndNilWhileUnchanged`: the origin's raw bytes come with its stamp and
+/// offset, an unchanged file ends with nothing to pull, and the channel serves files after both.
+#[test]
+fn a_log_tail_returns_the_origins_bytes_and_nothing_while_unchanged() {
+    let mut harness = Harness::new();
+    let data: Vec<u8> = (0..3000).map(|byte: usize| u8::try_from(byte % 251).unwrap()).collect();
+    harness.origin.log = Some(crate::bounded_file::TailRead {
+        data: data.clone(),
+        offset: 7,
+        stamp: log_stamp(),
+    });
+    let fresh = harness.log_tail(None);
+    assert_eq!(harness.read(fresh), Ok(data));
+    assert!(harness.events.contains(&ChannelEvent::LogHead {
+        id: fresh,
+        stamp: log_stamp(),
+        offset: 7,
+    }));
+    let unchanged = harness.log_tail(Some(log_stamp()));
+    harness.pump();
+    assert!(harness.events.contains(&ChannelEvent::LogUnchanged { id: unchanged }));
+    assert_eq!(harness.finished(unchanged), Some(Ok(())));
+    assert_eq!(
+        harness.channel.pull(unchanged),
+        Pull::Done(Err(ChannelFailure::Closed)),
+        "nothing is left"
+    );
+    let next = harness.fetch("/docs/index.html");
+    assert_eq!(harness.read(next), Ok(INDEX.to_vec()));
+}
+
+/// Upstream's `testALogTailTheOriginRefusesThrowsAndTheChannelStays`.
+#[test]
+fn a_log_tail_the_origin_refuses_fails_and_the_channel_stays() {
+    let mut harness = Harness::new();
+    let tail = harness.log_tail(None);
+    assert_eq!(
+        harness.read(tail),
+        Err(ChannelFailure::Refused("not a log page".to_owned()))
+    );
+    let next = harness.fetch("/docs/index.html");
+    assert_eq!(harness.read(next), Ok(INDEX.to_vec()));
+    assert_eq!(harness.closes(), 0);
+}
+
+/// Upstream's `fetch` and `logTail` heads: an answer of the other kind fails its request and withdraws it on the origin,
+/// and the channel stays.
+#[test]
+fn an_answer_of_the_other_kind_fails_its_request_and_withdraws_it() {
+    let mut harness = Harness::new();
+    let tail = harness.log_tail(None);
+    let head = br#"{"id":1,"kind":"head","mimeType":"text/plain"}"#;
+    assert!(harness.permits.try_take());
+    let events = harness.channel.receive(head);
+    assert_eq!(
+        events.first(),
+        Some(&ChannelEvent::Finished {
+            id: tail,
+            result: Err(ChannelFailure::Refused("not a log answer".to_owned())),
+        })
+    );
+    assert_eq!(harness.origin.cancels(), [tail]);
+
+    let file = harness.fetch("/docs/index.html");
+    let mut line = page_serve::encode(&PageServeFrame::LogUnchanged { id: file }).unwrap();
+    line.pop();
+    assert!(harness.permits.try_take());
+    assert_eq!(
+        harness.channel.receive(&line),
+        [ChannelEvent::Finished {
+            id: file,
+            result: Err(ChannelFailure::Refused("not a file answer".to_owned())),
+        }]
+    );
+    assert_eq!(harness.closes(), 0);
+}
+
+/// A log tail is no page load's: a reload withdraws the file reads made before it and leaves the tail to its answer.
+#[test]
+fn a_reload_leaves_a_log_tail_in_flight() {
+    let mut harness = Harness::new();
+    harness.origin.held.push("/docs/index.html");
+    let file = harness.fetch_at("/docs/index.html", 1);
+    let tail = harness.log_tail(None);
+    let events = harness.channel.revision_moved(2);
+    assert_eq!(
+        events,
+        [ChannelEvent::Finished {
+            id: file,
+            result: Err(ChannelFailure::Cancelled),
+        }]
+    );
+    assert_eq!(
+        harness.read(tail),
+        Err(ChannelFailure::Refused("not a log page".to_owned()))
+    );
 }

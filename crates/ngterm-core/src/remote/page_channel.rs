@@ -17,6 +17,7 @@ use std::fmt;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use super::page_serve::{self, BRIDGE_LIMIT, PageServeFrame, RESOURCE_LIMIT};
+use crate::bounded_file::FileStamp;
 
 /// Lines the helper's reader may hold before the channel handled them (upstream's `inboundLimit`).
 pub const INBOUND_LIMIT: usize = 64;
@@ -28,6 +29,10 @@ const TOO_LARGE: &str = "request too large for the page channel";
 const CANCELLED: &str = "cancelled";
 /// What a resource whose answer ended before its head fails with (upstream's `finish` on a success).
 const EMPTY_ANSWER: &str = "empty answer";
+/// A file read answered as a log tail (upstream's refusal).
+const NOT_A_FILE: &str = "not a file answer";
+/// A log tail answered as a file read (upstream's refusal).
+const NOT_A_LOG: &str = "not a log answer";
 
 /// Bounds the inbound lines a channel holds (upstream's `RemotePagePermits`): the reader takes one per line and stops
 /// at the bound, a line gives its permit back once handled, and a file chunk only once it is consumed.
@@ -141,6 +146,15 @@ pub type RequestId = i64;
 pub enum ChannelEvent {
     /// A resource's answer starts.
     Head { id: RequestId, mime_type: String },
+    /// A log tail's answer starts: the file's stamp and the offset its bytes start at; the bytes follow as a resource's
+    /// body does.
+    LogHead {
+        id: RequestId,
+        stamp: FileStamp,
+        offset: u64,
+    },
+    /// A log tail's file still has the stamp it named: [`ChannelEvent::Finished`] follows with nothing to pull.
+    LogUnchanged { id: RequestId },
     /// A chunk of a resource's body waits: [`ReplicaChannel::pull`] it.
     Data { id: RequestId },
     /// A resource request ended with nothing left to pull: whole, or failed.
@@ -177,14 +191,16 @@ enum Kind {
 #[derive(Debug)]
 enum Queued {
     Resource { path: String, revision: u64 },
+    LogTail { stamp: Option<FileStamp> },
     Bridge { request: String },
 }
 
-/// An admitted resource request.
+/// An admitted resource request: a file read or a log tail, which share the resource slots.
 #[derive(Debug)]
 struct Transfer {
-    /// The page load that asked; an answer for a load the page left is dropped.
+    /// The page load that asked; an answer for a load the page left is dropped. A log tail is no load's.
     revision: u64,
+    log: bool,
     head: bool,
     /// Chunks not pulled yet, each holding its inbound permit.
     buffer: VecDeque<Vec<u8>>,
@@ -261,6 +277,22 @@ impl ReplicaChannel {
                 revision,
             },
         );
+        Ok((id, events))
+    }
+
+    /// Asks the origin for its log page's file end, unless the file still has `stamp` (upstream's `logTail`). It takes a
+    /// resource slot and is never withdrawn by a page load. Its answer comes as [`ChannelEvent::LogUnchanged`], or as
+    /// [`ChannelEvent::LogHead`] and the raw bytes to pull; then the end.
+    ///
+    /// # Errors
+    ///
+    /// [`ChannelFailure::Closed`] once the channel ended.
+    pub fn log_tail(&mut self, stamp: Option<FileStamp>) -> Result<(RequestId, Vec<ChannelEvent>), ChannelFailure> {
+        if self.closed {
+            return Err(ChannelFailure::Closed);
+        }
+        let id = self.allocate();
+        let events = self.admit(id, Queued::LogTail { stamp });
         Ok((id, events))
     }
 
@@ -386,10 +418,15 @@ impl ReplicaChannel {
         match frame {
             PageServeFrame::Head { id, mime_type } => {
                 self.permits.give();
-                if let Some(transfer) = self.live(id) {
-                    transfer.head = true;
-                    events.push(ChannelEvent::Head { id, mime_type });
-                }
+                events.extend(self.head(id, false, ChannelEvent::Head { id, mime_type }));
+            }
+            PageServeFrame::LogHead { id, stamp, offset } => {
+                self.permits.give();
+                events.extend(self.head(id, true, ChannelEvent::LogHead { id, stamp, offset }));
+            }
+            PageServeFrame::LogUnchanged { id } => {
+                self.permits.give();
+                self.unchanged(id, &mut events);
             }
             PageServeFrame::Chunk { id, data } => match self.live(id) {
                 Some(transfer) => {
@@ -424,8 +461,6 @@ impl ReplicaChannel {
                     });
                 }
             }
-            // this machine asks for no log tail yet, so an answer to one names no request
-            PageServeFrame::LogHead { .. } | PageServeFrame::LogUnchanged { .. } => self.permits.give(),
             PageServeFrame::Resource { .. }
             | PageServeFrame::Cancel { .. }
             | PageServeFrame::Bridge { .. }
@@ -475,7 +510,7 @@ impl ReplicaChannel {
             .chain(self.bridge_slots.waiting.drain(..))
         {
             events.push(match queued {
-                Queued::Resource { .. } => ChannelEvent::Finished {
+                Queued::Resource { .. } | Queued::LogTail { .. } => ChannelEvent::Finished {
                     id,
                     result: Err(ChannelFailure::Closed),
                 },
@@ -488,6 +523,58 @@ impl ReplicaChannel {
         events.push(ChannelEvent::Closed {
             reason: reason.to_owned(),
         });
+        events
+    }
+
+    /// The head of request `id`'s answer, a log tail's when `log`: `event` for a request of that kind, a refusal for one
+    /// of the other kind, nothing for a request withdrawn or started already.
+    fn head(&mut self, id: RequestId, log: bool, event: ChannelEvent) -> Vec<ChannelEvent> {
+        match self.answer_kind(id) {
+            Some(kind) if kind == log => {
+                self.started(id);
+                vec![event]
+            }
+            Some(_) => self.refuse(id, if log { NOT_A_FILE } else { NOT_A_LOG }),
+            None => Vec::new(),
+        }
+    }
+
+    /// A log tail's `log.unchanged`, which also ends it; a file read answered so fails.
+    fn unchanged(&mut self, id: RequestId, events: &mut Vec<ChannelEvent>) {
+        match self.answer_kind(id) {
+            Some(true) => {
+                self.started(id);
+                events.push(ChannelEvent::LogUnchanged { id });
+                self.end(id, Ok(()), events);
+            }
+            Some(false) => self.end(id, Err(ChannelFailure::Refused(NOT_A_FILE.to_owned())), events),
+            // the same frame ends a withdrawn request
+            None => self.end(id, Ok(()), events),
+        }
+    }
+
+    /// Whether the answer to live request `id` starting now is a log tail's; `None` for a request withdrawn, already
+    /// started or unknown, whose head is dropped.
+    fn answer_kind(&mut self, id: RequestId) -> Option<bool> {
+        self.live(id)
+            .filter(|transfer| !transfer.head)
+            .map(|transfer| transfer.log)
+    }
+
+    fn started(&mut self, id: RequestId) {
+        if let Some(transfer) = self.transfers.get_mut(&id) {
+            transfer.head = true;
+        }
+    }
+
+    /// Fails request `id`, whose answer is of the wrong kind, and withdraws it on the origin (upstream's `cancel` before
+    /// its throw).
+    fn refuse(&mut self, id: RequestId, reason: &str) -> Vec<ChannelEvent> {
+        let mut events = vec![ChannelEvent::Finished {
+            id,
+            result: Err(ChannelFailure::Refused(reason.to_owned())),
+        }];
+        events.extend(self.cancel(id));
         events
     }
 
@@ -507,7 +594,7 @@ impl ReplicaChannel {
     /// Takes a slot for `queued` and sends it, or queues it for the next slot freed.
     fn admit(&mut self, id: RequestId, queued: Queued) -> Vec<ChannelEvent> {
         let kind = match queued {
-            Queued::Resource { .. } => Kind::Resource,
+            Queued::Resource { .. } | Queued::LogTail { .. } => Kind::Resource,
             Queued::Bridge { .. } => Kind::Bridge,
         };
         let (slots, limit) = self.slots(kind);
@@ -522,8 +609,10 @@ impl ReplicaChannel {
     /// Sends an admitted request; one no frame holds fails alone and frees its slot, and a helper that stops taking
     /// lines closes the channel.
     fn start(&mut self, id: RequestId, queued: Queued) -> Vec<ChannelEvent> {
+        let log = matches!(queued, Queued::LogTail { .. });
         let (kind, frame, revision) = match queued {
             Queued::Resource { path, revision } => (Kind::Resource, PageServeFrame::Resource { id, path }, revision),
+            Queued::LogTail { stamp } => (Kind::Resource, PageServeFrame::LogTail { id, stamp }, u64::MAX),
             Queued::Bridge { request } => (Kind::Bridge, PageServeFrame::Bridge { id, request }, 0),
         };
         let Ok(line) = page_serve::encode(&frame) else {
@@ -546,6 +635,7 @@ impl ReplicaChannel {
                     id,
                     Transfer {
                         revision,
+                        log,
                         head: false,
                         buffer: VecDeque::new(),
                         terminal: None,

@@ -830,7 +830,7 @@ fn copy_link_puts_the_pages_address_on_the_clipboard(cx: &mut TestAppContext) {
 }
 
 #[test]
-fn focusing_replica_search_goes_to_a_text_replicas_renderer_only() {
+fn find_on_a_text_replica_goes_through_its_bridge_into_its_renderer() {
     fake_native::install();
     let text = overlay(HtmlSource::Replica {
         path: "/notes.txt".to_owned(),
@@ -838,13 +838,13 @@ fn focusing_replica_search_goes_to_a_text_replicas_renderer_only() {
     });
     let model = Model::new(&text);
     let (page, probe) = realized(&text, &model);
-    focus_replica_search(page.id());
+    probe.take();
+    assert!(text_page::focus_search(page.id()));
     assert!(matches!(probe.take().as_slice(), [Call::Renderer(_)]));
     let url = url_overlay();
     let model = Model::new(&url);
     let (page, probe) = realized(&url, &model);
-    focus_replica_search(page.id());
-    focus_replica_search(Uuid::new_v4());
+    assert!(!text_page::focus_search(page.id()));
     assert!(probe.take().is_empty());
 }
 

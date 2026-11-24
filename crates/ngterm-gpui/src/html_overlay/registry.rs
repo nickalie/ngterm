@@ -175,14 +175,6 @@ fn page(id: Uuid) -> Option<Rc<Page>> {
     with(|registry| registry.pages.get(&id).cloned())
 }
 
-/// Find over text replica `id` (`crate::html_overlay::focus_page_search`): the keyboard goes into its renderer's own
-/// field, which no bridge reaches.
-pub(super) fn focus_replica_search(id: Uuid) {
-    if let Some(page) = page(id) {
-        super::text_page::focus_replica_search(&page.overlay(), &*page);
-    }
-}
-
 type DocumentLoad = (Uuid, u64, Result<String, String>);
 
 /// A bounded read a content replica's worker asks the main thread for: the page, the file's path on its origin, the

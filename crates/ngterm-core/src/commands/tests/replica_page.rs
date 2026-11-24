@@ -6,6 +6,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
+use std::time::Duration;
 
 use ngterm_proto::command::SessionCmd;
 use serde_json::{Value, json};
@@ -13,10 +15,15 @@ use uuid::Uuid;
 
 use super::viewer::{Viewer, viewer_built};
 use super::{Fixture, args, failure, wire};
-use crate::html::{HtmlHost, HtmlLoadState, HtmlNavigation, HtmlPageInfo, HtmlReloadTarget, HtmlSource};
+use crate::dispatch::Dispatched;
+use crate::html::text_page::TextChanges;
+use crate::html::{
+    ChangesAnswer, HtmlHost, HtmlLoadState, HtmlNavigation, HtmlPageInfo, HtmlReloadTarget, HtmlSource, SearchAnswer,
+    SearchCount, SearchStep,
+};
 use crate::model::OverlayPane;
 use crate::remote::hub::{PAGE_DETACHED_KIND, SUPPORTED_KINDS};
-use crate::remote::page_channel::{ChannelLink, Permits};
+use crate::remote::page_channel::{ChannelFailure, ChannelLink, Permits};
 use crate::remote::page_serve::{self, PageServeFrame};
 use crate::remote::replica_page::{HelperKey, PageHelperLauncher, PageResource};
 
@@ -31,6 +38,9 @@ struct HostState {
     navigations: Vec<(Uuid, HtmlNavigation)>,
     persistent_failure: Option<String>,
     unavailable: Option<String>,
+    /// The search and change steps the renderers were asked for, each answered when the test sends its count.
+    search_steps: Vec<(Uuid, SearchStep, Sender<SearchCount>)>,
+    change_steps: Vec<(Uuid, bool, Sender<TextChanges>)>,
 }
 
 #[derive(Clone, Default)]
@@ -48,6 +58,18 @@ impl HtmlHost for Host {
     fn navigate(&self, page: Uuid, navigation: HtmlNavigation) -> Result<(), String> {
         self.0.borrow_mut().navigations.push((page, navigation));
         Ok(())
+    }
+
+    fn step_text_search(&self, page: Uuid, step: SearchStep) -> Option<SearchAnswer> {
+        let (sender, answer) = std::sync::mpsc::channel();
+        self.0.borrow_mut().search_steps.push((page, step, sender));
+        Some(answer)
+    }
+
+    fn step_text_changes(&self, page: Uuid, forward: bool) -> Option<ChangesAnswer> {
+        let (sender, answer) = std::sync::mpsc::channel();
+        self.0.borrow_mut().change_steps.push((page, forward, sender));
+        Some(answer)
     }
 }
 
@@ -1989,33 +2011,426 @@ fn a_content_replicas_read_stops_past_its_cap_and_keeps_the_origins_refusal() {
     );
 }
 
-/// This build's own interim refusal until it lists `page.text`: it lists no live text pages, so a text
-/// action an origin sends anyway answers one failed `page.result` by its sequence, an incomplete one as invalid, one
-/// for a page not shown here as such, and leaves `appliedSeq` alone.
+// MARK: - text pages
+
+/// A text page request of `path` from the origin, a log page's when `log` names its tail.
+fn text_page(path: &str, log: Option<usize>) -> Value {
+    let mut page = Replica::page(json!({"text": {"path": path}}));
+    if let Some(tail) = log {
+        page["textLog"] = json!({"tail": tail, "follow": true});
+    }
+    page
+}
+
+/// An origin text action on the page it handed over.
+fn text_command(replica: &mut Replica, seq: i64, fields: &Value) {
+    let mut command = json!({"page": ORIGIN, "seq": seq});
+    command
+        .as_object_mut()
+        .unwrap()
+        .extend(fields.as_object().unwrap().clone());
+    replica.origin_frame("page.command", command);
+}
+
+fn results(replica: &Replica) -> Vec<Value> {
+    replica.payloads("page.result")
+}
+
+/// Runs the steps the origin's text actions left for the main loop until none is left, as the frontend's loop does.
+fn run_text_steps(replica: &mut Replica) {
+    loop {
+        let steps = replica.viewer.fixture.core.take_replica_text_steps();
+        if steps.is_empty() {
+            return;
+        }
+        for (_, resume) in steps {
+            let step = Dispatched::Pending {
+                after: Duration::ZERO,
+                resume,
+            };
+            drop(step.finish_now(&mut replica.viewer.fixture.core));
+        }
+        replica.commit();
+    }
+}
+
+/// Answers the renderer's change steps so far with `changes`.
+fn answer_change_steps(replica: &Replica, changes: TextChanges) {
+    for (_, _, sender) in std::mem::take(&mut replica.host.0.borrow_mut().change_steps) {
+        sender.send(changes).unwrap();
+    }
+}
+
+/// The state a text page reports, as the wire carries it.
+fn text_state(state: crate::remote::frames::PresentationTextState) -> Value {
+    serde_json::to_value(state).unwrap()
+}
+
+/// Upstream's `aLogReplicaOpensWithItsRequestAndTheSeedBeforeItsFirstReport`: a log page handed on again opens with its
+/// log request and the following, query and wrap it had, and its first report carries them.
 #[test]
-fn a_text_action_answers_a_failed_result_and_leaves_the_applied_sequence() {
+fn a_log_replica_opens_with_its_request_and_the_seed_before_its_first_report() {
+    use crate::html::text_page::{TextLog, TextLogReport};
+    let mut replica = Replica::new();
+    let mut page = text_page("/var/log/app.log", Some(200));
+    page["textSeed"] = json!({"following": false, "query": "err", "revision": 4, "wrap": true});
+    replica.request(page);
+
+    let shown = replica.session().overlay.page().unwrap();
+    assert_eq!(
+        shown.text_log,
+        Some(TextLog {
+            tail: 200,
+            follow: true
+        })
+    );
+    assert_eq!(shown.log_state.map(|state| state.following), Some(false));
+    assert_eq!(
+        shown.text_search.as_ref().map(|search| search.query.as_str()),
+        Some("err")
+    );
+    assert_eq!(shown.search_revision, 4);
+    assert!(shown.text_wrap);
+    replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 1, "action": "hide"}));
+    let expected = crate::remote::frames::PresentationTextState {
+        following: Some(false),
+        log: Some(TextLogReport::default()),
+        query: Some("err".to_owned()),
+        revision: 4,
+        matches: Some(0),
+        current: Some(0),
+        wrap: true,
+        changes: None,
+    };
+    assert_eq!(replica.states().last().unwrap()["text"], text_state(expected));
+}
+
+/// A text page's seed reaches no other kind of page, and a page with no log request takes none.
+#[test]
+fn a_seed_or_a_log_request_reaches_only_the_page_it_is_for() {
+    let mut replica = Replica::new();
+    let mut page = Replica::page(Replica::url("https://example.com/"));
+    page["textLog"] = json!({"tail": 5, "follow": true});
+    page["textSeed"] = json!({"query": "err", "revision": 4, "wrap": true});
+    replica.request(page);
+    let shown = replica.session().overlay.page().unwrap();
+    assert!(shown.text_log.is_none() && shown.log_state.is_none());
+    assert!(shown.text_search.is_none() && !shown.text_wrap);
+    assert_eq!(shown.search_revision, 0);
+}
+
+/// Upstream's `aTextReplicaReportsItsChangesAndOtherReplicasCarryNoTextState`: a text replica's wrap, query and changes
+/// reach its origin in the state report, it is a diff page for `changes`, and a replica of another kind reports no text
+/// state.
+#[test]
+fn a_text_replica_reports_its_changes_and_other_replicas_carry_no_text_state() {
+    let mut replica = Replica::new();
+    replica.request(text_page("/src/a.diff", None));
+    let (session, local) = (replica.id(), replica.local());
+    let response = replica.viewer.fixture.session(
+        SessionCmd::OverlayWrap,
+        Some(&wire(session)),
+        args(|a| a.mode = Some("on".to_owned())),
+    );
+    assert_eq!(response.result.unwrap()["text"], "wrapped");
+    let core = &mut replica.viewer.fixture.core;
+    let revision = core.set_text_search_from_page(local, "x").unwrap();
+    core.set_text_changes_report(local, Some(TextChanges { count: 3, current: 1 }));
+    replica.commit();
+    let text = replica.states().last().unwrap()["text"].clone();
+    assert_eq!((text["wrap"].clone(), text["query"].clone()), (json!(true), json!("x")));
+    assert_eq!(text["revision"], json!(revision));
+    assert_eq!(text["changes"], json!({"count": 3, "current": 1}));
+    assert!(text.get("following").is_none(), "{text}");
+
+    let mut other = Replica::new();
+    other.request(Replica::page(Replica::url("https://example.com/")));
+    other.origin_frame("page.command", json!({"page": ORIGIN, "seq": 1, "action": "hide"}));
+    assert!(other.states().last().unwrap().get("text").is_none());
+}
+
+/// Upstream's `followOnAReplicaAnswersAsOnALocalPageOfItsKind`: a log replica follows as a local log page does, a
+/// static text replica is no log page, and any other replica keeps its refusal.
+#[test]
+fn follow_on_a_replica_answers_as_on_a_local_page_of_its_kind() {
+    let follow = |replica: &mut Replica, mode: &str| {
+        let target = wire(replica.id());
+        replica.viewer.fixture.session(
+            SessionCmd::OverlayFollow,
+            Some(&target),
+            args(|a| a.mode = Some(mode.to_owned())),
+        )
+    };
+    let mut log = Replica::new();
+    log.request(text_page("/var/log/app.log", Some(50)));
+    assert_eq!(follow(&mut log, "toggle").result.unwrap()["text"], "paused");
+    assert_eq!(
+        log.session()
+            .overlay
+            .page()
+            .unwrap()
+            .log_state
+            .map(|state| state.following),
+        Some(false)
+    );
+
+    let mut text = Replica::new();
+    text.request(text_page("/src/main.go", None));
+    assert_eq!(follow(&mut text, "on"), failure("no log page"));
+
+    let mut url = Replica::new();
+    url.request(Replica::page(Replica::url("https://example.com/")));
+    assert_eq!(
+        follow(&mut url, "on"),
+        failure("submit on the Mac that opened the page")
+    );
+}
+
+/// Upstream's `testTextCommandsOnAReplicaAnswerAsLocallyAndReachTheOrigin`: search, wrap, follow and a change step
+/// on a text replica answer as on a local page, and the origin hears the state they left.
+#[test]
+fn text_commands_on_a_replica_answer_as_locally_and_reach_the_origin() {
+    let mut replica = Replica::new();
+    replica.request(text_page("/src/a.diff", None));
+    let target = wire(replica.id());
+    let command = |replica: &mut Replica, cmd, change: fn(&mut ngterm_proto::Args)| {
+        let request = ngterm_proto::Request {
+            cmd: ngterm_proto::command::Command::Session(cmd),
+            target: Some(target.clone()),
+            args: Some(args(change)),
+        };
+        replica.viewer.fixture.core.begin(&request)
+    };
+    let search = command(&mut replica, SessionCmd::OverlaySearch, |a| {
+        a.text = Some("b".to_owned());
+    });
+    let wrap = command(&mut replica, SessionCmd::OverlayWrap, |a| {
+        a.mode = Some("on".to_owned());
+    });
+    let follow = command(&mut replica, SessionCmd::OverlayFollow, |a| {
+        a.mode = Some("on".to_owned());
+    });
+    let step = command(&mut replica, SessionCmd::OverlayChanges, |a| {
+        a.to = Some("next".to_owned());
+    });
+    answer_change_steps(&replica, TextChanges { count: 1, current: 1 });
+    let core = &mut replica.viewer.fixture.core;
+    let [search, wrap, follow, step] = [search, wrap, follow, step].map(|dispatched| dispatched.finish_now(core));
+    assert!(search.ok, "{:?}", search.error);
+    assert_eq!(wrap.result.unwrap()["text"], "wrapped");
+    assert_eq!(follow.error.as_deref(), Some("no log page"));
+    assert_eq!(step.result.unwrap()["text"], "1 of 1");
+    replica.commit();
+    let text = replica.states().last().unwrap()["text"].clone();
+    assert_eq!(text["query"], "b");
+    assert_eq!(text["wrap"], true);
+    assert_eq!(text["changes"], json!({"count": 1, "current": 1}));
+    assert!(text.get("following").is_none(), "{text}");
+}
+
+/// Upstream's `testAnOriginTextActionRunsAsTheLocalCommandAndAnswersWithThePageState`: the origin's actions run here in
+/// order, one waiting on the renderer holding back those after it, and each answers with the page's text state after
+/// it, a refusal included.
+#[test]
+fn an_origin_text_action_runs_as_the_local_command_and_answers_with_the_page_state() {
+    let mut replica = Replica::new();
+    replica.request(text_page("/src/a.diff", None));
+    text_command(&mut replica, 1, &json!({"action": "wrap", "toggle": "on"}));
+    text_command(&mut replica, 2, &json!({"action": "changes", "step": "next"}));
+    text_command(&mut replica, 3, &json!({"action": "follow", "toggle": "on"}));
+    assert_eq!(results(&replica).len(), 1, "the follow waits for the change step");
+    assert!(!replica.states().iter().any(|state| state["appliedSeq"] != json!(0)));
+
+    answer_change_steps(&replica, TextChanges { count: 1, current: 1 });
+    run_text_steps(&mut replica);
+    let answered = results(&replica);
+    assert_eq!(
+        answered.iter().map(|result| result["seq"].clone()).collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        (answered[0]["text"].clone(), answered[0]["state"]["wrap"].clone()),
+        (json!("wrapped"), json!(true))
+    );
+    assert_eq!(answered[1]["text"], "1 of 1");
+    assert_eq!(answered[1]["state"]["changes"], json!({"count": 1, "current": 1}));
+    assert_eq!(
+        answered[2],
+        json!({"page": ORIGIN, "seq": 3, "ok": false, "error": "no log page", "state": answered[1]["state"]})
+    );
+}
+
+/// Upstream's `testATextActionOnAPageThatIsNotTextAnswersTheLocalRefusalAndAdvancesNoSequence`: the local refusal, an
+/// incomplete action as invalid and one for a page not shown here as such, with no state report and `appliedSeq` left.
+#[test]
+fn a_text_action_on_a_page_that_is_not_text_answers_the_local_refusal_and_advances_no_sequence() {
     let mut replica = Replica::new();
     replica.request(Replica::page(Replica::url("https://example.com/")));
-    replica.commit();
-    replica.origin_frame(
-        "page.command",
-        json!({"page": ORIGIN, "seq": 7, "action": "follow", "toggle": "on"}),
-    );
-    replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 8, "action": "search"}));
+    replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 5, "action": "hide"}));
+    let before = replica.states().len();
+    text_command(&mut replica, 6, &json!({"action": "search", "query": "x"}));
+    text_command(&mut replica, 7, &json!({"action": "search"}));
     replica.origin_frame(
         "page.command",
         json!({"page": "elsewhere", "seq": 2, "action": "wrap", "toggle": "on"}),
     );
     assert_eq!(
-        replica.payloads("page.result"),
+        results(&replica),
         [
-            json!({"page": ORIGIN, "seq": 7, "ok": false, "error": "text page actions are not supported"}),
-            json!({"page": ORIGIN, "seq": 8, "ok": false, "error": "invalid text page action"}),
+            json!({"page": ORIGIN, "seq": 6, "ok": false, "error": "no text page"}),
+            json!({"page": ORIGIN, "seq": 7, "ok": false, "error": "invalid text page action"}),
             json!({"page": "elsewhere", "seq": 2, "ok": false, "error": "page not shown"}),
         ]
     );
-    replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 9, "action": "hide"}));
-    let states = replica.states();
-    assert_eq!(states.last().unwrap()["appliedSeq"], json!(9));
-    assert!(states.iter().all(|state| state["appliedSeq"] != json!(7)));
+    assert_eq!(replica.states().len(), before);
+    replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 9, "action": "show"}));
+    assert_eq!(replica.states().last().unwrap()["appliedSeq"], json!(9));
+}
+
+/// Upstream's `testAQueuedTextActionNeverReachesAPageThatReplacedItsOwn`: an action waiting behind another when its
+/// page goes answers that the page is not shown, and never acts on the page offered after it.
+#[test]
+fn a_queued_text_action_never_reaches_a_page_that_replaced_its_own() {
+    let mut replica = Replica::new();
+    replica.request(text_page("/src/a.diff", None));
+    let first = replica.local();
+    text_command(&mut replica, 1, &json!({"action": "changes", "step": "next"}));
+    text_command(&mut replica, 2, &json!({"action": "wrap", "toggle": "on"}));
+    replica.origin_frame("page.close", json!({"page": ORIGIN}));
+    assert_eq!(
+        results(&replica),
+        [json!({"page": ORIGIN, "seq": 2, "ok": false, "error": "page not shown"})]
+    );
+    replica.request(text_page("/src/a.diff", None));
+    answer_change_steps(&replica, TextChanges { count: 1, current: 1 });
+    run_text_steps(&mut replica);
+    assert_ne!(replica.local(), first);
+    assert!(!replica.session().overlay.page().unwrap().text_wrap);
+    assert_eq!(results(&replica).len(), 2, "the running step still answers");
+}
+
+type Tailed = Rc<RefCell<Option<Result<Option<crate::bounded_file::TailRead>, ChannelFailure>>>>;
+
+fn log_tail(replica: &mut Replica, stamp: Option<crate::bounded_file::FileStamp>) -> Tailed {
+    let cell: Tailed = Rc::default();
+    let into = Rc::clone(&cell);
+    let local = replica.local();
+    replica.viewer.fixture.core.replica_log_tail(
+        local,
+        stamp,
+        Box::new(move |result| *into.borrow_mut() = Some(result)),
+    );
+    cell
+}
+
+/// Upstream's `logTail` through a log replica's channel: the origin's end of the file with its stamp and offset, nothing
+/// while the stamp holds, a cap on what an answer may carry, and a page with no channel reads nothing.
+#[test]
+fn a_log_replica_reads_its_files_end_over_its_channel() {
+    use crate::bounded_file::{FileStamp, TailRead};
+    let mut replica = Replica::new();
+    replica.request(text_page("/var/log/app.log", Some(20)));
+    let stamp = FileStamp {
+        identity: (1, 2),
+        size: 9,
+        modified: (3, 4),
+    };
+    let fresh = log_tail(&mut replica, None);
+    assert_eq!(
+        replica.helper_sent(0).last(),
+        Some(&PageServeFrame::LogTail { id: 1, stamp: None })
+    );
+    replica.helper_line(
+        0,
+        &PageServeFrame::LogHead {
+            id: 1,
+            stamp,
+            offset: 2,
+        },
+    );
+    replica.helper_line(
+        0,
+        &PageServeFrame::Chunk {
+            id: 1,
+            data: b"a\nb\n".to_vec(),
+        },
+    );
+    replica.helper_line(0, &PageServeFrame::End { id: 1 });
+    assert_eq!(
+        fresh.borrow_mut().take(),
+        Some(Ok(Some(TailRead {
+            data: b"a\nb\n".to_vec(),
+            offset: 2,
+            stamp,
+        })))
+    );
+
+    let unchanged = log_tail(&mut replica, Some(stamp));
+    replica.helper_line(0, &PageServeFrame::LogUnchanged { id: 2 });
+    assert_eq!(unchanged.borrow_mut().take(), Some(Ok(None)));
+
+    let grown = log_tail(&mut replica, None);
+    replica.helper_line(
+        0,
+        &PageServeFrame::LogHead {
+            id: 3,
+            stamp,
+            offset: 0,
+        },
+    );
+    let chunk = crate::remote::page_serve::MAX_CHUNK_BYTES;
+    for _ in 0..=crate::html::text_page::MAX_TAIL_BYTES / chunk {
+        assert!(grown.borrow().is_none(), "an answer within the cap still reads");
+        replica.helper_line(
+            0,
+            &PageServeFrame::Chunk {
+                id: 3,
+                data: vec![b'x'; chunk],
+            },
+        );
+    }
+    assert_eq!(grown.borrow_mut().take(), Some(Err(ChannelFailure::TooLarge)));
+    assert_eq!(replica.helper_sent(0).last(), Some(&PageServeFrame::Cancel { id: 3 }));
+
+    let cell: Tailed = Rc::default();
+    let into = Rc::clone(&cell);
+    replica.viewer.fixture.core.replica_log_tail(
+        Uuid::new_v4(),
+        None,
+        Box::new(move |result| *into.borrow_mut() = Some(result)),
+    );
+    assert_eq!(cell.borrow_mut().take(), Some(Err(ChannelFailure::Closed)));
+}
+
+/// A log tail still waiting when its page closes fails as the channel's close, once.
+#[test]
+fn a_log_tail_in_flight_fails_when_its_page_closes() {
+    let mut replica = Replica::new();
+    replica.request(text_page("/var/log/app.log", Some(20)));
+    let waiting = log_tail(&mut replica, None);
+    replica.origin_frame("page.close", json!({"page": ORIGIN}));
+    assert_eq!(waiting.borrow_mut().take(), Some(Err(ChannelFailure::Closed)));
+}
+
+/// Upstream's `TextPageBridge.step`: the model takes a search step's count before the step answers, and a step that
+/// found a match pauses a following log as the page's own move does, so the origin's result already carries both.
+#[test]
+fn a_search_step_records_its_count_and_pauses_a_following_log_before_it_answers() {
+    let mut replica = Replica::new();
+    replica.request(text_page("/var/log/app.log", Some(20)));
+    text_command(&mut replica, 1, &json!({"action": "search", "query": "err"}));
+    text_command(&mut replica, 2, &json!({"action": "search", "step": "next"}));
+    let steps = std::mem::take(&mut replica.host.0.borrow_mut().search_steps);
+    let [(_, step, sender)] = <[_; 1]>::try_from(steps).ok().unwrap();
+    assert_eq!((step.query.as_str(), step.forward), ("err", true));
+    sender.send(SearchCount { matches: 2, current: 1 }).unwrap();
+    run_text_steps(&mut replica);
+    let answered = results(&replica);
+    assert_eq!(answered[1]["text"], "1 of 2");
+    let state = &answered[1]["state"];
+    assert_eq!(
+        (state["matches"].clone(), state["current"].clone()),
+        (json!(2), json!(1))
+    );
+    assert_eq!(state["following"], false);
 }

@@ -201,6 +201,24 @@ pub(crate) fn is_text(source: &HtmlSource) -> bool {
     )
 }
 
+/// Opens a text page handed on again with the following, query and wrap it had (upstream's `seeded`); a step is never
+/// replayed, and any other page is left as it is.
+pub(crate) fn seed(page: &mut HtmlOverlay, seed: Option<&PresentationTextState>) {
+    let Some(seed) = seed.filter(|_| is_text(&page.source)) else {
+        return;
+    };
+    if let (Some(following), Some(state)) = (seed.following, page.log_state.as_mut()) {
+        state.following = following;
+    }
+    page.search_revision = seed.revision;
+    page.text_search = seed
+        .query
+        .as_deref()
+        .filter(|query| !query.is_empty())
+        .map(TextSearch::new);
+    page.text_wrap = seed.wrap;
+}
+
 /// Takes the presenter's text state into `page`'s record (upstream's `HtmlOverlay.mirror`): true when a log's
 /// following, the search query or the wrap changed; the counts alone never count.
 pub(crate) fn mirror(page: &mut HtmlOverlay, text: &PresentationTextState) -> bool {

@@ -4,7 +4,9 @@
 //! search and wrap, and owns a log page's [`LogFollower`].
 //!
 //! A static text page reads its file on the background executor and keeps the text, so a theme change redraws without
-//! reading it again; a shown page reopens where it was scrolled. A log page's documents are its follower's. Every
+//! reading it again; a shown page reopens where it was scrolled. A text page shown here for another machine runs the
+//! same bridge, its text and a log's end read from that machine over the page's channel on a thread of their own
+//! ([`Reads`], #978). A log page's documents are its follower's. Every
 //! document carries the model's search (query, revision and the match shown), its wrap (`data-wrap`) and its build
 //! generation (`data-load`).
 //!
@@ -30,11 +32,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::rc::{Rc, Weak};
 
 use gpui_kit::{App, AppContext as _, AsyncApp, Task};
-use ngterm_app::log_follower::{LogFollower, LogRead, LogSink, ReadResult, Update};
+use ngterm_app::documents::FileStamp;
+use ngterm_app::log_follower::{LogFollower, LogRead, LogSink, ReadResult, Reader, Update};
 use ngterm_core::html::text_page::{self as core_text, PageState, SearchState, TextChanges, TextLogReport};
 use ngterm_core::html::{
-    ChangesAnswer, HtmlOverlay, HtmlSource, ReplicaContent, SearchAnswer, SearchCount, SearchStep,
+    ChangesAnswer, HtmlOverlay, HtmlSource, ReplicaContent, SearchAnswer, SearchCount, SearchStep, errors,
 };
+use ngterm_core::remote::page_channel::ChannelFailure;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -257,9 +261,8 @@ pub(super) fn step_changes(page: Uuid, forward: bool) -> Option<ChangesAnswer> {
     bridge(page)?.step_changes(forward)
 }
 
-/// Moves the keyboard into text page `page`'s own search field (upstream's `focusSearch`); the deck gives the page's
-/// element the keyboard. False when `page` has no bridge here, as a text page shown for another machine has none
-/// ([`focus_replica_search`]).
+/// Moves the keyboard into text page `page`'s own search field (upstream's `focusSearch`), one of this machine's own or
+/// one shown here for another; the deck gives the page's element the keyboard. False when `page` has no bridge here.
 pub(crate) fn focus_search(page: Uuid) -> bool {
     let Some(bridge) = bridge(page) else {
         return false;
@@ -268,18 +271,69 @@ pub(crate) fn focus_search(page: Uuid) -> bool {
     true
 }
 
-/// Moves the keyboard into the search field of `overlay`'s page reached through `channel` when it is a text page shown
-/// here for another machine (upstream's `focusSearch` on a replica): its static document runs the text renderer, which
-/// carries the field, but no bridge does. Any other page is left alone.
-pub(super) fn focus_replica_search(overlay: &HtmlOverlay, channel: &dyn PageChannel) {
-    if matches!(
-        overlay.source,
-        HtmlSource::Replica {
-            content: ReplicaContent::Text { .. },
-            ..
+/// Where a text page's text comes from (upstream's `TextPageBridge.Reads`): a file on this machine, or, for a page
+/// shown here for another machine, that machine's file over the page's channel, the core answering on the main loop.
+#[derive(Clone)]
+enum Reads {
+    Local,
+    Replica(Poster),
+}
+
+impl Reads {
+    /// The page's whole text, judged as a local file's would be. Blocking: a worker's.
+    fn text(&self, page: Uuid, path: &str) -> Result<String, String> {
+        let Self::Replica(poster) = self else {
+            return ngterm_app::documents::load_text(std::path::Path::new(path));
+        };
+        let (limit, failures) = ngterm_app::documents::replica_read(ReplicaContent::Text { line: None }, path)
+            .ok_or_else(|| errors::REMOTE_FILE.to_owned())?;
+        let unreadable = failures.unreadable.clone();
+        let (answer, answered) = std::sync::mpsc::channel();
+        let file = path.to_owned();
+        post(poster, move |state: &mut AppState| {
+            let answer = Box::new(move |result| drop(answer.send(result)));
+            state.core.replica_read(page, &file, limit, failures, answer);
+            state.settle();
+        });
+        let bytes = answered.recv().unwrap_or(Err(unreadable))?;
+        ngterm_app::documents::text_from_bytes(bytes, path)
+    }
+
+    /// The reader of a replica's log, whose end comes raw from the machine that opened it and is cut into lines here,
+    /// so a log over the text cap still opens (upstream's `logTail` reader); `None` for a local page's file reads.
+    fn log_reader(&self, page: Uuid) -> Option<Reader> {
+        let Self::Replica(poster) = self else {
+            return None;
+        };
+        let poster = poster.clone();
+        Some(std::sync::Arc::new(
+            move |path: &std::path::Path, tail: usize, stamp: Option<&FileStamp>| {
+                let stamp = stamp.copied();
+                let (answer, answered) = std::sync::mpsc::channel();
+                post(&poster, move |state: &mut AppState| {
+                    let answer = Box::new(move |result| drop(answer.send(result)));
+                    state.core.replica_log_tail(page, stamp, answer);
+                    state.settle();
+                });
+                match answered.recv() {
+                    Ok(Ok(read)) => Ok(read.map(|read| ngterm_app::documents::log_read(&read, tail))),
+                    // a read withdrawn here is no answer about the file, so it never marks the page waiting
+                    Ok(Err(ChannelFailure::Cancelled)) => Ok(None),
+                    _ => Err(format!("unreadable text file: {}", path.display())),
+                }
+            },
+        ))
+    }
+
+    /// Runs `work` off the main thread: on the background executor for a local file, on a thread of its own for a
+    /// replica, whose read waits on the network.
+    async fn off_main<T: Send + 'static>(&self, work: impl FnOnce() -> T + Send + 'static, cx: &AsyncApp) -> Option<T> {
+        if matches!(self, Self::Local) {
+            return Some(cx.background_spawn(async move { work() }).await);
         }
-    ) {
-        drop(channel.call(FOCUS_SEARCH.to_owned()));
+        let (sender, done) = async_channel::bounded(1);
+        std::thread::spawn(move || drop(sender.send_blocking(work())));
+        done.recv().await.ok()
     }
 }
 
@@ -306,6 +360,7 @@ pub(super) struct TextPage {
     channel: Weak<dyn PageChannel>,
     /// A log page's follower; `None` on a static text page, whose documents [`Static`] tracks.
     follower: Option<RefCell<LogFollower>>,
+    reads: Reads,
     page: Static,
     /// The model's search as last applied.
     search: RefCell<SearchState>,
@@ -325,14 +380,23 @@ pub(super) struct TextPage {
 }
 
 impl TextPage {
-    /// The bridge of `overlay`'s page reached through `channel`; `None` for any page but a text page.
+    /// The bridge of `overlay`'s page reached through `channel`; `None` for any page but a text page, one of this
+    /// machine's own or one shown here for another.
     pub(super) fn new(overlay: &HtmlOverlay, channel: Weak<dyn PageChannel>, poster: &Poster) -> Option<Rc<Self>> {
-        let HtmlSource::Text { path, line } = &overlay.source else {
-            return None;
+        let (path, line, reads) = match &overlay.source {
+            HtmlSource::Text { path, line } => (path, line, Reads::Local),
+            HtmlSource::Replica {
+                path,
+                content: ReplicaContent::Text { line },
+            } => (path, line, Reads::Replica(poster.clone())),
+            _ => return None,
         };
         let follower = overlay.text_log.map(|log| {
             let following = overlay.log_state.map_or(log.follow, |state| state.following);
             let mut follower = LogFollower::new(path.clone(), log, following, super::documents::text_style());
+            if let Some(reader) = reads.log_reader(overlay.id) {
+                follower = follower.with_reader(reader);
+            }
             // the page is off screen until its first apply
             follower.set_on_screen(false);
             RefCell::new(follower)
@@ -344,6 +408,7 @@ impl TextPage {
             poster: poster.clone(),
             channel,
             follower,
+            reads,
             page: Static::default(),
             search: RefCell::new(search_state(overlay)),
             wrap: Cell::new(overlay.text_wrap),
@@ -397,9 +462,10 @@ impl TextPage {
                 state.core.set_text_changes_report(id, None);
             });
         }
+        let (id, reads) = (self.id, self.reads.clone());
         let Some(app) = app() else {
             // the unit tests: in place, with no offset to keep
-            let read = read.map(|path| ngterm_app::documents::load_text(std::path::Path::new(&path)));
+            let read = read.map(|path| reads.text(id, &path));
             return self.build(load, read, None);
         };
         let top = shown
@@ -412,10 +478,11 @@ impl TextPage {
                 None => None,
             };
             let read = match read {
-                Some(path) => Some(
-                    cx.background_spawn(async move { ngterm_app::documents::load_text(std::path::Path::new(&path)) })
-                        .await,
-                ),
+                Some(path) => {
+                    let reading = reads.clone();
+                    let text = reads.off_main(move || reading.text(id, &path), cx).await;
+                    Some(text.unwrap_or_else(|| Err(errors::REMOTE_FILE.to_owned())))
+                }
                 None => None,
             };
             if let Some(page) = me.upgrade() {
@@ -704,8 +771,8 @@ impl TextPage {
             return;
         }
         let Some(app) = app() else { return };
-        let me = self.me.clone();
-        let ticks = app.spawn(async move |cx: &mut AsyncApp| run_ticks(&me, interval, cx).await);
+        let (me, reads) = (self.me.clone(), self.reads.clone());
+        let ticks = app.spawn(async move |cx: &mut AsyncApp| run_ticks(&me, &reads, interval, cx).await);
         self.ticks.replace(Some(ticks));
     }
 
@@ -726,10 +793,12 @@ impl TextPage {
             self.finish(&read, result);
             return;
         };
-        let me = self.me.clone();
+        let (me, reads) = (self.me.clone(), self.reads.clone());
         app.spawn(async move |cx: &mut AsyncApp| {
             let job = read.clone();
-            let result = cx.background_spawn(async move { job.run() }).await;
+            let Some(result) = reads.off_main(move || job.run(), cx).await else {
+                return;
+            };
             if let Some(page) = me.upgrade() {
                 page.finish(&read, result);
             }
@@ -738,15 +807,16 @@ impl TextPage {
     }
 }
 
-/// Ticks `page` every `interval` until it is gone or the task is dropped, the first at once; each tick's read runs on
-/// the background executor.
-async fn run_ticks(page: &Weak<TextPage>, interval: std::time::Duration, cx: &mut AsyncApp) {
+/// Ticks `page` every `interval` until it is gone or the task is dropped, the first at once; each tick's read runs off
+/// the main thread ([`Reads::off_main`]).
+async fn run_ticks(page: &Weak<TextPage>, reads: &Reads, interval: std::time::Duration, cx: &mut AsyncApp) {
     while page.strong_count() > 0 {
         let read = page.upgrade().and_then(|page| page.tick());
         if let Some(read) = read {
             let job = read.clone();
-            let result = cx.background_spawn(async move { job.run() }).await;
-            if let Some(page) = page.upgrade() {
+            if let Some(result) = reads.off_main(move || job.run(), cx).await
+                && let Some(page) = page.upgrade()
+            {
                 page.finish(&read, result);
             }
         }
@@ -1172,10 +1242,11 @@ mod tests {
         assert_eq!(channel.take_calls(), ["ngtermTextFocusSearch()"]);
     }
 
-    /// Upstream's `focusSearch` on a replica: a text page shown here for another machine has no bridge, so Find goes
-    /// straight into its renderer's field; a replica of another kind and a local page are left alone by that path.
+    /// Upstream's `TextPageBridge(for:reads:)` on a replica: a text page shown here for another machine runs the bridge,
+    /// so Find reaches its field as a local page's, and reads its text from that machine, which answers nothing once its
+    /// way there is gone; a replica of another kind has no bridge.
     #[test]
-    fn find_reaches_a_text_replicas_field_without_a_bridge() {
+    fn a_text_replica_runs_the_bridge_and_reads_from_its_origin() {
         let replica = |content| {
             HtmlOverlay::new(
                 HtmlSource::Replica {
@@ -1185,25 +1256,19 @@ mod tests {
                 ngterm_core::html::HtmlPageFlags::default(),
             )
         };
+        let channel = Rc::new(Channel::default());
+        let engine: Rc<dyn PageChannel> = channel.clone();
+        let poster = crate::state::detached_poster();
         let text = replica(ReplicaContent::Text { line: None });
-        let channel = Channel::default();
-        assert!(!focus_search(text.id), "no bridge holds a replica");
-        focus_replica_search(&text, &channel);
+        let page = TextPage::new(&text, Rc::downgrade(&engine), &poster).expect("a text replica's bridge");
+        assert!(focus_search(text.id));
         assert_eq!(channel.take_calls(), ["ngtermTextFocusSearch()"]);
+        page.load_document(true);
+        assert!(channel.documents.borrow().is_empty());
+        assert_eq!(*channel.failures.borrow(), ["unreadable text file: /o/main.go"]);
 
-        for other in [
-            replica(ReplicaContent::Markdown),
-            replica(ReplicaContent::Html),
-            HtmlOverlay::new(
-                HtmlSource::Text {
-                    path: "/o/main.go".to_owned(),
-                    line: None,
-                },
-                ngterm_core::html::HtmlPageFlags::default(),
-            ),
-        ] {
-            focus_replica_search(&other, &channel);
-            assert!(channel.take_calls().is_empty(), "{:?}", other.source);
+        for other in [ReplicaContent::Markdown, ReplicaContent::Html] {
+            assert!(TextPage::new(&replica(other), Rc::downgrade(&engine), &poster).is_none());
         }
     }
 

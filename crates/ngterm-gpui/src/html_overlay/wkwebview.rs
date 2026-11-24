@@ -39,7 +39,7 @@ pub use registry::{
     answer, apply, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject, set_covered,
     set_window_scale, settle, shutdown,
 };
-pub(super) use registry::{copy_link, focus_replica_search, navigate};
+pub(super) use registry::{copy_link, navigate};
 pub use view::PageView;
 pub fn hide(element: &gpui_kit::Entity<PageView>, cx: &mut gpui_kit::App) {
     let page = std::rc::Rc::clone(element.read(cx).page());

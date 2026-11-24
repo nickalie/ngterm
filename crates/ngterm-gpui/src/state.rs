@@ -109,6 +109,8 @@ enum Waiter {
     Socket(ReplySender),
     Page(u64),
     PageServe(BridgeReply),
+    /// An origin's text action on a page shown here, which answers the origin itself as it ends.
+    ReplicaText,
 }
 
 impl Waiter {
@@ -117,6 +119,7 @@ impl Waiter {
             Self::Socket(sender) => sender.send(response),
             Self::Page(token) => crate::html_overlay::answer(token, &response),
             Self::PageServe(reply) => reply.answer(&response),
+            Self::ReplicaText => {}
         }
     }
 }
@@ -538,6 +541,7 @@ impl AppState {
         self.arm_info_timers();
         self.arm_job_expiries();
         self.arm_page_claim_expiries();
+        self.arm_replica_text_steps();
         self.arm_interaction_expiries();
         self.arm_remote_tick();
     }
@@ -1057,6 +1061,18 @@ impl AppState {
             if main_loop.post_after(delay, task).is_err() {
                 tracing::debug!("page claim expiry dropped: the loop is closed");
             }
+        }
+    }
+
+    /// Schedules the steps the origins' text actions on pages shown here left waiting on their renderers.
+    fn arm_replica_text_steps(&mut self) {
+        for (after, resume) in self.core.take_replica_text_steps() {
+            self.schedule(
+                Command::Session(SessionCmd::OverlaySearch),
+                after,
+                resume,
+                Waiter::ReplicaText,
+            );
         }
     }
 
