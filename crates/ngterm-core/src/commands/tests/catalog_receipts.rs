@@ -912,6 +912,83 @@ fn a_settle_never_writes_a_receipt_whose_window_did_not_land() {
     );
 }
 
+/// A blocked window write leaves `ws` unsaved; the block clears and `dropped` is dropped.
+fn unsaved_receipt_then_dropped(dir: &Path) -> (Core, PathBuf) {
+    let (mut core, file) = persistent_served(dir);
+    let window = core.library().active_window_id().unwrap();
+    let session = core.library().store(window).unwrap().sessions().next().unwrap().id();
+    split_and_commit(&mut core, session);
+    block_window(&file);
+    let epoch = core.remote.respawns.epoch().to_owned();
+    let reply = core.dispatch(&Request {
+        cmd: Command::Workspace(WorkspaceCmd::New),
+        target: None,
+        args: Some(args(|a| {
+            a.name = Some("dev".to_owned());
+            a.op_id = Some("ws".to_owned());
+            a.epoch = Some(epoch.clone());
+        })),
+    });
+    assert!(!reply.ok, "{reply:?}");
+    std::fs::remove_dir_all(&file).unwrap();
+    drop(core.begin(&swap_request(session, "dropped", epoch)));
+    (core, file)
+}
+
+/// Once the windows can be written again, a dropped command's `unknown` and the receipt that waited reach the disk
+/// with the next window write, not only with a later lookup.
+#[test]
+fn a_commit_after_a_failed_window_write_saves_the_waiting_receipts() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, file) = unsaved_receipt_then_dropped(dir.path());
+    let _ = core.commit();
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
+    let table = on_disk(dir.path());
+    assert_eq!(
+        table.receipt("ws").map(|r| r.outcome.clone()),
+        Some(outcome::APPLIED.to_owned())
+    );
+    assert_eq!(
+        table.receipt("dropped").map(|r| r.outcome.clone()),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+}
+
+/// The quit save writes the table that waited for its windows, so a restart never fences an id whose change is on
+/// the disk.
+#[test]
+fn the_quit_save_writes_a_table_that_waited_for_its_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, file) = persistent_served(dir.path());
+    block_window(&file);
+    let epoch = core.remote.respawns.epoch().to_owned();
+    let reply = core.dispatch(&Request {
+        cmd: Command::Workspace(WorkspaceCmd::New),
+        target: None,
+        args: Some(args(|a| {
+            a.name = Some("dev".to_owned());
+            a.op_id = Some("ws".to_owned());
+            a.epoch = Some(epoch);
+        })),
+    });
+    assert!(!reply.ok, "{reply:?}");
+    std::fs::remove_dir_all(&file).unwrap();
+    assert!(core.save_all());
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
+    assert_eq!(
+        on_disk(dir.path()).receipt("ws").map(|r| r.outcome.clone()),
+        Some(outcome::APPLIED.to_owned())
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, _) = unsaved_receipt_then_dropped(dir.path());
+    assert!(core.save_all());
+    assert_eq!(
+        on_disk(dir.path()).receipt("dropped").map(|r| r.outcome.clone()),
+        Some(outcome::UNKNOWN.to_owned())
+    );
+}
+
 /// Upstream's `theTableIsSavedAndRestoredWithTheStore` and the restart's `adopt`: an operation applied in the last run
 /// is answered after a restart at revision 0 of the new epoch, and a malformed table starts empty.
 #[test]

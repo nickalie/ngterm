@@ -757,9 +757,13 @@ impl Core {
         self.library.is_terminating = true;
         self.settle_all_operations();
         let _ = self.commit();
-        self.persistence
+        let windows = self
+            .persistence
             .as_mut()
-            .is_none_or(|persistence| persistence.save_all_checked(&self.library))
+            .is_none_or(|persistence| persistence.save_all_checked(&self.library));
+        // the windows just landed, so a receipt that waited for them may go to the disk now
+        let operations = self.catalog.served.as_ref().is_none_or(|served| !served.unsaved) || self.save_operations();
+        windows && operations
     }
 
     /// Answers one request. Failures become `ok:false` with the error's text.
