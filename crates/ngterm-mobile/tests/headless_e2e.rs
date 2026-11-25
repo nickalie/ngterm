@@ -35,6 +35,11 @@
 //! attaches a session of each app with `ngtermctl live attach HOST ID`, each through its own app. With agterm's
 //! sessions gone and agterm outside Live sessions mode, both say why it lists nothing.
 //!
+//! A fourth test binds picks and asks to a session the phone presents ([`picks`]): each reaches the phone and its
+//! answer reaches `ngtermctl`, the origin's `--timeout` and a lost stream take one down, the headless origin hands a
+//! lost pick over again, what it held for a session no viewer presented comes as one batch (the ask and the pick
+//! shown, a program overlay and a page refused), and a detach leaves an open pick unanswered.
+//!
 //! Without `sshd` a test skips with a reason, unless `CI` is set: there it fails.
 //!
 //! Linux only, as the script is: the support code is Unix (file modes, an unprivileged `sshd`), and the other hosts'
@@ -65,6 +70,9 @@ mod machine;
 #[cfg(test)]
 #[path = "support/phone.rs"]
 mod phone;
+#[cfg(test)]
+#[path = "support/picks.rs"]
+mod picks;
 #[cfg(test)]
 #[path = "support/sshd.rs"]
 mod sshd;
@@ -262,4 +270,19 @@ fn a_machine_running_both_apps_lists_the_sessions_of_both_and_each_works_through
     );
 
     agterm_outside_live_sessions_mode_is_said_by_both(&viewer, &host, &mut second);
+}
+
+#[test]
+#[ignore = "needs a staged ngterm-headless and sshd: run scripts/test-mobile-e2e.sh"]
+fn picks_and_held_interactions_reach_the_phone_and_end_as_the_origin_ends_them() {
+    let Some(binary) = sshd_or_skip() else {
+        return;
+    };
+    let _alone = machine::one_at_a_time();
+    let world = World::start(&binary);
+    let mut phone = Client::new("pick phone", &world);
+    phone.connect(world.proxy.port());
+    assert_isolated(&world, &phone);
+    let session = create_and_read(&mut phone);
+    picks::picks_and_held_interactions(&world, &mut phone, &session);
 }

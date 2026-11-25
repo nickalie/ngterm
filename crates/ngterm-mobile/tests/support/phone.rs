@@ -8,7 +8,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ngterm_mobile::{
     ChatEvent, ChatState, EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileEvent, Pane,
-    PaneEnd, PaneKey, PaneKeyAction, PaneRole, PaneSize, PeerKind, RemoteLayout, StreamState, VaultError,
+    PaneEnd, PaneKey, PaneKeyAction, PaneRole, PaneSize, PeerKind, RemoteAsk, RemoteLayout, RemotePick, StreamState,
+    VaultError,
 };
 
 use crate::machine::{World, account};
@@ -53,6 +54,14 @@ pub(crate) struct Seen {
     pub(crate) statuses: Vec<Option<String>>,
     /// Every listing's hint, in order ([`MobileEvent::Tree`]).
     pub(crate) hints: Vec<Option<String>>,
+    /// Every ask handed over, in order, with its session.
+    pub(crate) asks: Vec<(String, RemoteAsk)>,
+    /// Every ask taken down, in order: its session and id.
+    pub(crate) ask_dismissals: Vec<(String, String)>,
+    /// Every pick handed over, in order, with its session.
+    pub(crate) picks: Vec<(String, RemotePick)>,
+    /// Every pick taken down, in order: its session and id.
+    pub(crate) pick_dismissals: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for Seen {
@@ -76,6 +85,10 @@ impl std::fmt::Debug for Seen {
             .field("chat_states", &self.chat_states)
             .field("statuses", &self.statuses)
             .field("hints", &self.hints)
+            .field("asks", &self.asks)
+            .field("ask_dismissals", &self.ask_dismissals)
+            .field("picks", &self.picks)
+            .field("pick_dismissals", &self.pick_dismissals)
             .finish()
     }
 }
@@ -110,6 +123,12 @@ impl Seen {
             MobileEvent::ChatState { state, .. } => self.chat_states.push(state),
             MobileEvent::SessionStatus { status, .. } => self.statuses.push(status.map(|status| status.status)),
             MobileEvent::Tree { hint, .. } => self.hints.push(hint),
+            MobileEvent::Ask { session_id, ask, .. } => self.asks.push((session_id, ask)),
+            MobileEvent::AskDismiss { session_id, ask_id, .. } => self.ask_dismissals.push((session_id, ask_id)),
+            MobileEvent::Pick { session_id, pick, .. } => self.picks.push((session_id, pick)),
+            MobileEvent::PickDismiss {
+                session_id, pick_id, ..
+            } => self.pick_dismissals.push((session_id, pick_id)),
             _ => {}
         }
     }
