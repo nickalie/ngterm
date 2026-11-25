@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     ClipboardContent, ClipboardLocation, ClipboardPermissionScope, ClipboardWriteResult, PasteSource, WriteCompletion,
 };
-use ngterm_core::attach_bridge::{Decoder, Envelope, Message, Part, VERSION};
+use ngterm_core::attach_bridge::{Decoder, Envelope, Message, PREFIX, Part, VERSION};
 use ngterm_core::clipboard_wire::{ClipboardStatus, DelegatedReply, DelegatedRequest};
 
 fn envelope(nonce: &str, message: Message) -> Envelope {
@@ -13,8 +13,12 @@ fn envelope(nonce: &str, message: Message) -> Envelope {
     }
 }
 fn peer() -> Fixture {
+    peer_pasting(true)
+}
+fn peer_pasting(paste_through_bridge: bool) -> Fixture {
     let fixture = stream(PaneConfig {
         attach_bridge: Some("connection".into()),
+        paste_through_bridge,
         ..PaneConfig::new(SIZE)
     });
     fixture.feed.deliver(&envelope("connection", Message::Hello).encode());
@@ -347,6 +351,43 @@ fn a_bridge_role_is_only_a_role_report_of_the_bridges_connection() {
             "{titles:?}"
         );
     }
+}
+
+#[test]
+fn a_viewer_that_pastes_past_the_bridge_sends_the_program_plain_bracketed_pastes() {
+    assert_eq!(PaneConfig::new(SIZE).paste_through_bridge, !cfg!(windows));
+    let fixture = peer_pasting(false);
+    fixture.feed.deliver(b"\x1b[?2004h\x1b[5n");
+    fixture.sent_until(b"\x1b[0n");
+    for (text, source) in [
+        ("clipboard", PasteSource::Clipboard),
+        ("/tmp/file.png", PasteSource::Text),
+    ] {
+        assert_eq!(
+            fixture
+                .pane
+                .paste(text, source, ClipboardLocation::Standard, true)
+                .unwrap(),
+            crate::Paste::Written
+        );
+        let sent = fixture.sent_until(format!("\x1b[200~{text}\x1b[201~").as_bytes());
+        assert!(!sent.windows(PREFIX.len()).any(|window| window == PREFIX), "{sent:?}");
+    }
+}
+
+#[test]
+fn a_viewer_that_pastes_through_the_bridge_sends_the_paste_in_an_envelope() {
+    let fixture = peer();
+    fixture.feed.deliver(b"\x1b[?2004h\x1b[5n");
+    fixture.sent_until(b"\x1b[0n");
+    fixture
+        .pane
+        .paste("clipboard", PasteSource::Clipboard, ClipboardLocation::Standard, true)
+        .unwrap();
+    let Message::Paste(paste) = outgoing(&fixture).message else {
+        panic!("expected paste")
+    };
+    assert_eq!(paste.contents[0].data, b"clipboard");
 }
 
 #[test]
