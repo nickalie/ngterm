@@ -7,10 +7,11 @@ internal enum FakeApp {
 
     // how long a screen may take to come
     private static let wait: TimeInterval = 30
-    // how long a list is watched for, at most, before an audit: this many reads, this far apart
+    // how long a list or the navigation bars' buttons are watched for, at most, before an audit: this many reads, this
+    // far apart
     private static let settleReads = 20
     private static let settleBeat: TimeInterval = 0.25
-    // how many reads running a list has to keep still for, its text inside its rows
+    // how many reads running a list (its text inside its rows) or the bars' buttons have to keep still for
     private static let settleQuietReads = 3
     // how often a list whose text lies outside its rows is nudged, and how far
     private static let settleNudges = 3
@@ -218,24 +219,40 @@ internal enum FakeApp {
         }
     }
 
-    /// Waits until `button` has kept still for some reads running, before an audit measures it.
+    /// Waits until the buttons of the navigation bars have kept still for some reads running, before an audit measures
+    /// them.
     ///
     /// When a phone goes back, the navigation bar's Liquid Glass turns the leaving screen's button into the coming
-    /// screen's, and the app's switch for no animations does not stop that: an audit during the change measured the
-    /// button too small to touch, and the button it named had gone when the test looked for it.
+    /// screen's, and the app's switch for no animations does not stop that: an audit during the change measured a
+    /// button too small to touch, and the button it named had gone when the test looked for it. The button of the
+    /// change can have no identifier, so the wait reads every button of the bars, not one. When they do not keep
+    /// still, the audit has its say.
     @MainActor
-    internal static func settle(_ button: XCUIElement) {
-        var before = CGRect.null
+    internal static func settleBars(in app: XCUIApplication) {
+        var before: [CGRect] = []
         var quiet = 0
-        for _ in 0..<settleReads {
-            _ = XCTWaiter.wait(for: [XCTestExpectation(description: "a beat")], timeout: settleBeat)
-            let now = button.frame
-            quiet = now == before ? quiet + 1 : 0
-            if quiet >= settleQuietReads {
-                return
+        ScreenRead.Wait(reads: settleReads, beat: settleBeat).poll {
+            ScreenRead.shows(app) { snapshot in
+                let now = barButtonFrames(under: snapshot)
+                quiet = !now.isEmpty && now == before ? quiet + 1 : 0
+                before = now
+                return quiet >= settleQuietReads
             }
-            before = now
         }
+    }
+
+    @MainActor
+    private static func barButtonFrames(under snapshot: any XCUIElementSnapshot) -> [CGRect] {
+        guard snapshot.elementType == .navigationBar else {
+            return snapshot.children.flatMap { barButtonFrames(under: $0) }
+        }
+        return buttonFrames(under: snapshot)
+    }
+
+    @MainActor
+    private static func buttonFrames(under snapshot: any XCUIElementSnapshot) -> [CGRect] {
+        let own = snapshot.elementType == .button ? [snapshot.frame] : []
+        return own + snapshot.children.flatMap { buttonFrames(under: $0) }
     }
 
     // reads the rows' frames and the text's a beat apart until they agree for `settleQuietReads` reads running with

@@ -44,7 +44,7 @@ internal final class SessionsTests: XCTestCase {
             FakeApp.expectGone(app.buttons["session-menu"], "the session's menu button")
         }
         FakeApp.expect(row, "the new session's row")
-        FakeApp.settle(newSession)
+        FakeApp.settleBars(in: app)
         try FakeApp.audit(app)
 
         row.swipeLeft()
