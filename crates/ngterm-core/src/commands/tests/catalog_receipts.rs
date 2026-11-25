@@ -1033,6 +1033,24 @@ fn a_landed_window_write_lets_the_waiting_table_be_written_alone() {
     );
 }
 
+/// The quit's own window write ends the table's wait: when the settle writes failed and it lands, the table is written
+/// alone, so a window write that fails after it does not fail the quit save or keep the table off the disk.
+#[test]
+fn the_quit_window_write_that_lands_lets_the_waiting_table_be_written_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, _) = unsaved_receipt(dir.path());
+    core.persistence
+        .as_mut()
+        .unwrap()
+        .scripted_full_writes
+        .extend([false, false, true, false]);
+    assert!(core.save_all());
+    assert_eq!(
+        on_disk(dir.path()).receipt("ws").map(|r| r.outcome.clone()),
+        Some(outcome::APPLIED.to_owned())
+    );
+}
+
 /// A table that failed alone, its windows landed, is retried alone on each commit and lands once it can be written:
 /// no commit writes the windows again for it.
 #[test]

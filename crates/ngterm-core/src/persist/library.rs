@@ -81,6 +81,9 @@ pub struct LibraryPersistence {
     /// The live debounced write of each window, by token.
     pending: HashMap<Uuid, u64>,
     next_token: u64,
+    /// The outcomes of the next full writes, for tests: each `false` fails one before it writes anything.
+    #[cfg(test)]
+    pub(crate) scripted_full_writes: std::collections::VecDeque<bool>,
 }
 
 impl LibraryPersistence {
@@ -93,6 +96,8 @@ impl LibraryPersistence {
             launch_unchecked: HashSet::new(),
             pending: HashMap::new(),
             next_token: 0,
+            #[cfg(test)]
+            scripted_full_writes: std::collections::VecDeque::new(),
         }
     }
 
@@ -501,6 +506,10 @@ impl LibraryPersistence {
     /// Writes every open window's snapshot, then the index, attempting all; whether every write landed (the quit
     /// flush and `restore.capture`).
     pub fn save_all_checked(&mut self, library: &WindowLibrary) -> bool {
+        #[cfg(test)]
+        if self.scripted_full_writes.pop_front() == Some(false) {
+            return false;
+        }
         let mut landed = true;
         for id in library.open_ids() {
             landed &= self.save_window(library, id);
