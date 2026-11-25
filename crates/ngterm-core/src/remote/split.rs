@@ -160,6 +160,7 @@ impl Core {
             .filter(|identity| *identity != pane)
             .filter_map(|identity| binding.daemon(identity).map(str::to_owned))
             .collect();
+        let answered = origin_shows_the_asked_split(session);
         let peer = self.remote_row_peer(id, &host);
         let argv = control_command(
             &host,
@@ -192,6 +193,9 @@ impl Core {
             },
             stage: Stage::Creating(answer),
         });
+        if !answered {
+            self.remote.viewer.awaited_split_answers.insert(id);
+        }
         true
     }
 
@@ -395,6 +399,11 @@ impl Core {
         }
         let marks = std::mem::take(&mut self.remote.viewer.swapped_here);
         self.remote.viewer.swapped_here = marks.into_iter().filter(|id| self.cached_layout_pending(*id)).collect();
+        let answers = std::mem::take(&mut self.remote.viewer.awaited_split_answers);
+        self.remote.viewer.awaited_split_answers = answers
+            .into_iter()
+            .filter(|id| self.cached_layout_pending(*id))
+            .collect();
     }
 
     /// The viewer pane closed while its origin split was on its way: once the origin made the split, it closes there
@@ -425,6 +434,7 @@ impl Core {
     }
 
     fn fail_remote_split(&mut self, id: Uuid, pane: Uuid, reason: &str) {
+        self.remote.viewer.awaited_split_answers.remove(&id);
         let message = format!("Could not open the remote pane: {reason}");
         if let Some(session) = self.library_mut().held_session_mut(id)
             && let Some(role) = role_of(session, pane)
@@ -466,4 +476,16 @@ fn set_launch(session: &mut Session, role: StatusPane, launch: PaneLaunch) {
     } else {
         session.split_launch = launch;
     }
+}
+
+/// Whether the origin already shows the split with the axis asked here, so it publishes no layout for the request.
+fn origin_shows_the_asked_split(session: &Session) -> bool {
+    session
+        .remote_presentation()
+        .and_then(|state| state.layout.as_ref())
+        .is_some_and(|layout| {
+            layout.shown
+                && layout.panes.len() == 2
+                && layout.axis.as_deref().and_then(SplitAxis::from_wire) == Some(session.split.axis)
+        })
 }

@@ -156,6 +156,8 @@ pub(crate) struct ViewerRuntime {
     pub(super) split_layouts: HashMap<Uuid, Uuid>,
     /// Sessions swapped here while a layout of the session was still pending: its reconcile keeps their order.
     pub(super) swapped_here: HashSet<Uuid>,
+    /// Sessions whose split request here waits for the origin's two-pane layout that answers it.
+    pub(super) awaited_split_answers: HashSet<Uuid>,
     /// The HUD slot generation of the refusal panel a forwarded click opened, by session ([`super::link_click`]).
     pub(crate) link_refusal_huds: HashMap<Uuid, u64>,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.

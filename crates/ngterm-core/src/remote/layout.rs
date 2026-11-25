@@ -167,9 +167,11 @@ impl Core {
 
     /// Applies the origin's layout to session `id`'s replicas and closes each one the origin removed (upstream's
     /// `agtermApp.applyRemoteLayout`). A new layout from the origin is newer than a swap made here, except the origin's
-    /// first layout of the split, in the order from before that swap, while the layout of the session is pending.
+    /// answer to the split requested here, in the order from before that swap, while the layout of the session is
+    /// pending.
     pub(crate) fn apply_remote_layout(&mut self, layout: &PresentationLayout, id: Uuid) {
-        if !self.layout_has_the_order_before_the_swap(layout, id) {
+        let answer = layout.shown && layout.panes.len() == 2 && self.remote.viewer.awaited_split_answers.remove(&id);
+        if !(answer && self.layout_has_the_order_before_the_swap(layout, id)) {
             self.remote.viewer.swapped_here.remove(&id);
         }
         self.follow_remote_layout(layout, id, true);
@@ -179,9 +181,8 @@ impl Core {
         self.cached_layout_pending(id)
             && self.library().held_session(id).is_some_and(|session| {
                 session.remote_presentation().is_some_and(|state| {
-                    let first_split_layout = state.layout.as_ref().is_none_or(|cached| cached.panes.len() < 2);
                     let primary = state.binding.local_pane(layout.primary);
-                    first_split_layout && primary.is_some() && primary == session.split_pane_identity
+                    primary.is_some() && primary == session.split_pane_identity
                 })
             })
     }
@@ -579,6 +580,7 @@ mod tests {
             .bind_remote(RemoteBinding::new("ORIGIN", daemons, Some(1), None), a.id);
         let (origin_a, origin_b) = (a.origin_a, a.origin_b);
         let (mut core, id) = core_with(a);
+        core.remote.viewer.awaited_split_answers.insert(id);
         core.swap_panes_here(id).unwrap();
         (core, id, primary, split, origin_a, origin_b)
     }
@@ -604,10 +606,7 @@ mod tests {
     fn bind_split_unrealized(core: &mut Core, id: Uuid, split: Uuid, origin: Uuid) {
         let row = core.library_mut().held_session_mut(id).unwrap();
         row.split_surface.replace(fake(split, false));
-        let state = row.remote_presentation.as_mut().unwrap();
-        state.binding.insert_pane(split, daemon_name(origin));
-        core.remote.viewer.split_layouts.insert(split, id);
-        core.advance_remote_splits();
+        bind_split_and_reconcile(core, id, split, origin);
     }
 
     #[test]

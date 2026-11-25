@@ -577,6 +577,14 @@ fn a_cached_origin_swap_is_applied_after_the_new_terminal_is_realized() {
 }
 
 #[test]
+fn an_origin_layout_after_a_swap_here_is_applied_when_the_origin_already_showed_the_asked_split() {
+    let (remote, primary) = swap_then_origin_layouts("vertical", &["vertical"]);
+    let session = remote.fixture.store().session(remote.row).unwrap();
+    assert_eq!(session.pane_identity, primary);
+    assert_eq!(session.split_pane_identity, Some(remote.pane));
+}
+
+#[test]
 fn a_remote_split_carries_the_exact_capability_and_nonce_of_its_attach() {
     for (cached, capability) in [
         (None, None),
@@ -734,9 +742,9 @@ enum SwapFrom {
     Palette,
 }
 
-/// A row whose new split is bound to the origin's `target` while the origin's two-pane layout, horizontal and with its
+/// A row whose new split is bound to the origin's `target` while the origin's two-pane layout, with `cached_axis` and its
 /// own pane first, waits in the cache; the split's terminal is realized, the reconcile not yet run.
-fn swappable_before_the_reconcile() -> (Remote, Uuid, Uuid) {
+fn swappable_before_the_reconcile(cached_axis: &str) -> (Remote, Uuid, Uuid) {
     let target = Uuid::from_u128(2);
     let mut remote = Remote::new();
     remote.script([
@@ -753,7 +761,7 @@ fn swappable_before_the_reconcile() -> (Remote, Uuid, Uuid) {
         &PresentationLayout {
             panes: vec![remote.origin_pane, target],
             primary: remote.origin_pane,
-            axis: Some("horizontal".to_owned()),
+            axis: Some(cached_axis.to_owned()),
             shown: true,
         },
         remote.row,
@@ -761,7 +769,7 @@ fn swappable_before_the_reconcile() -> (Remote, Uuid, Uuid) {
     remote.request();
     remote.spawn();
     let session = remote.fixture.store_mut().unwrap().session_mut(remote.row).unwrap();
-    assert_ne!(session.split.axis, crate::model::SplitAxis::TopBottom);
+    assert_eq!(session.split.axis, crate::model::SplitAxis::LeftRight);
     session.split_surface.replace(realized);
     (remote, target, primary)
 }
@@ -786,7 +794,7 @@ fn swap_here(remote: &mut Remote, from: &SwapFrom) {
 #[test]
 fn a_swap_made_here_before_the_new_split_is_realized_survives_the_cached_layout() {
     for from in [SwapFrom::Command, SwapFrom::Palette] {
-        let (mut remote, _, primary) = swappable_before_the_reconcile();
+        let (mut remote, _, primary) = swappable_before_the_reconcile("horizontal");
         swap_here(&mut remote, &from);
         remote.fixture.core.remote_tick(Instant::now());
         let session = remote.fixture.store().session(remote.row).unwrap();
@@ -809,24 +817,27 @@ fn a_swap_made_here_before_the_new_split_is_realized_survives_the_cached_layout(
     }
 }
 
-#[test]
-fn an_origin_layout_that_comes_after_a_swap_here_is_applied_at_the_reconcile() {
-    let (mut remote, target, primary) = swappable_before_the_reconcile();
+/// Swaps here with the split unrealized, applies each origin layout (panes as in the cache, its own pane first, with
+/// the axis given), then realizes the split and runs the reconcile.
+fn swap_then_origin_layouts(cached_axis: &str, axes: &[&str]) -> (Remote, Uuid) {
+    let (mut remote, target, primary) = swappable_before_the_reconcile(cached_axis);
     swap_here(&mut remote, &SwapFrom::Command);
     let session = remote.fixture.store_mut().unwrap().session_mut(remote.row).unwrap();
     let realized = session.split_surface.take();
     session
         .split_surface
         .replace(Box::new(FakeSurface::new(wire(primary)).with_realized(false)));
-    remote.fixture.core.apply_remote_layout(
-        &PresentationLayout {
-            panes: vec![remote.origin_pane, target],
-            primary: remote.origin_pane,
-            axis: Some("vertical".to_owned()),
-            shown: true,
-        },
-        remote.row,
-    );
+    for axis in axes {
+        remote.fixture.core.apply_remote_layout(
+            &PresentationLayout {
+                panes: vec![remote.origin_pane, target],
+                primary: remote.origin_pane,
+                axis: Some((*axis).to_owned()),
+                shown: true,
+            },
+            remote.row,
+        );
+    }
     let session = remote.fixture.store_mut().unwrap().session_mut(remote.row).unwrap();
     assert_eq!(
         session.pane_identity, remote.pane,
@@ -834,9 +845,25 @@ fn an_origin_layout_that_comes_after_a_swap_here_is_applied_at_the_reconcile() {
     );
     session.split_surface.replace(realized.unwrap());
     remote.fixture.core.remote_tick(Instant::now());
+    (remote, primary)
+}
+
+#[test]
+fn the_origin_answer_to_the_split_keeps_a_swap_here_when_the_origin_already_had_two_panes() {
+    let (remote, primary) = swap_then_origin_layouts("horizontal", &["vertical"]);
+    let session = remote.fixture.store().session(remote.row).unwrap();
+    assert_eq!(session.pane_identity, remote.pane);
+    assert_eq!(session.split_pane_identity, Some(primary));
+    assert_eq!(session.split.axis, crate::model::SplitAxis::LeftRight);
+}
+
+#[test]
+fn an_origin_layout_that_comes_after_a_swap_here_is_applied_at_the_reconcile() {
+    let (remote, primary) = swap_then_origin_layouts("horizontal", &["vertical", "horizontal"]);
     let session = remote.fixture.store().session(remote.row).unwrap();
     assert_eq!(session.pane_identity, primary);
     assert_eq!(session.split_pane_identity, Some(remote.pane));
+    assert_eq!(session.split.axis, crate::model::SplitAxis::TopBottom);
 }
 
 #[test]
