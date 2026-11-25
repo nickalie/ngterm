@@ -157,8 +157,9 @@ impl From<Vec<MobileEvent>> for Handled {
 pub(crate) fn config(size: GridSize, wake: Wake) -> PaneConfig {
     let mut config = PaneConfig::new(size);
     config.kitty_image_limit = 0;
-    // keys reach the origin's program, not a pseudoconsole on this device
+    // keys and pastes reach the origin's program, not a pseudoconsole on this device
     config.legacy_keys = false;
+    config.paste_through_bridge = true;
     config.wake = Some(wake);
     config
 }

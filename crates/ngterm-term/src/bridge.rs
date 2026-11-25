@@ -141,6 +141,8 @@ pub(crate) struct Peer {
     pub nonce: Option<String>,
     pub(crate) pastes: VecDeque<(String, Vec<crate::ClipboardContent>, Instant)>,
     pub(crate) next_id: u64,
+    /// [`crate::PaneConfig::paste_through_bridge`].
+    pub(crate) paste_through_bridge: bool,
 }
 #[derive(Clone, Copy)]
 pub(crate) struct PasteOptions<'a> {
@@ -150,10 +152,11 @@ pub(crate) struct PasteOptions<'a> {
     pub lazy: bool,
 }
 impl Peer {
-    /// A peer that expects a launch's `nonce`, only on a viewer of a capability-advertising attach endpoint.
-    pub(crate) fn expecting(nonce: Option<String>) -> Self {
+    /// A peer that expects the config's launch nonce, only on a viewer of a capability-advertising attach endpoint.
+    pub(crate) fn expecting(config: &crate::PaneConfig) -> Self {
         Self {
-            expected_nonce: nonce,
+            expected_nonce: config.attach_bridge.clone(),
+            paste_through_bridge: config.paste_through_bridge,
             ..Self::default()
         }
     }
@@ -170,7 +173,7 @@ impl Peer {
             allow_unsafe,
             lazy,
         } = options;
-        let Some(nonce) = self.nonce.clone() else {
+        let Some(nonce) = self.nonce.clone().filter(|_| self.paste_through_bridge) else {
             return Ok(false);
         };
         self.next_id += 1;

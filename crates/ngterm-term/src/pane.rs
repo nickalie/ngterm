@@ -105,6 +105,9 @@ pub struct PaneConfig {
     /// Keys always take their legacy encodings, whatever the program asks for ([`vt::KeyEncoder::set_legacy_only`]):
     /// on by default on Windows, whose pseudoconsole drops the Kitty keyboard protocol's and `modifyOtherKeys`' keys.
     pub legacy_keys: bool,
+    /// A paste goes to a viewer's attach bridge ([`PaneConfig::attach_bridge`]) as an envelope; otherwise as the plain
+    /// paste bytes a local program gets. Off by default on Windows, whose pseudoconsole drops the envelope's OSC.
+    pub paste_through_bridge: bool,
     /// Input held until the program reads a bracketed paste: a launch's input for a shell's line editor.
     pub held_input: Option<HeldInput>,
     pub wake: Option<Wake>,
@@ -157,6 +160,7 @@ impl PaneConfig {
             grapheme_clusters: true,
             color_scheme: ColorScheme::default(),
             legacy_keys: cfg!(windows),
+            paste_through_bridge: !cfg!(windows),
             held_input: None,
             wake: None,
         }
@@ -178,6 +182,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("grapheme_clusters", &self.grapheme_clusters)
             .field("color_scheme", &self.color_scheme)
             .field("legacy_keys", &self.legacy_keys)
+            .field("paste_through_bridge", &self.paste_through_bridge)
             .field("held_input", &self.held_input)
             .field("wake", &self.wake.is_some())
             .finish()
@@ -1073,7 +1078,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
     let colors = terminal.colors();
     let input = InputState::new(config.legacy_keys).map_err(PaneError::terminal)?;
     Ok(Shared {
-        bridge: Mutex::new(crate::bridge::Peer::expecting(config.attach_bridge.clone())),
+        bridge: Mutex::new(crate::bridge::Peer::expecting(config)),
         vt: Mutex::new(Vt {
             terminal,
             input,
