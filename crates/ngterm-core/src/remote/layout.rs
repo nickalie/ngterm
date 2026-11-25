@@ -166,26 +166,28 @@ impl Core {
     }
 
     /// Applies the origin's layout to session `id`'s replicas and closes each one the origin removed (upstream's
-    /// `agtermApp.applyRemoteLayout`). A new layout from the origin is newer than a swap made here, except one that
-    /// only gives the order of a split this viewer requested and that is still unbound.
+    /// `agtermApp.applyRemoteLayout`). A new layout from the origin is newer than a swap made here, except the origin's
+    /// first layout of the split, in the order from before that swap, while the layout of the session is pending.
     pub(crate) fn apply_remote_layout(&mut self, layout: &PresentationLayout, id: Uuid) {
-        if !self.layout_has_the_split_request_order(layout, id) {
+        if !self.layout_has_the_order_before_the_swap(layout, id) {
             self.remote.viewer.swapped_here.remove(&id);
         }
         self.follow_remote_layout(layout, id, true);
     }
 
-    fn layout_has_the_split_request_order(&self, layout: &PresentationLayout, id: Uuid) -> bool {
-        self.library().held_session(id).is_some_and(|session| {
-            has_unbound_split(session)
-                && session
-                    .remote_presentation()
-                    .is_some_and(|state| state.binding.local_pane(layout.primary).is_some())
-        })
+    fn layout_has_the_order_before_the_swap(&self, layout: &PresentationLayout, id: Uuid) -> bool {
+        self.cached_layout_pending(id)
+            && self.library().held_session(id).is_some_and(|session| {
+                session.remote_presentation().is_some_and(|state| {
+                    let first_split_layout = state.layout.as_ref().is_none_or(|cached| cached.panes.len() < 2);
+                    let primary = state.binding.local_pane(layout.primary);
+                    first_split_layout && primary.is_some() && primary == session.split_pane_identity
+                })
+            })
     }
 
-    /// Applies the layout cached for session `id`, in the order here when the user swapped the panes after that layout
-    /// came.
+    /// Applies the layout cached for session `id`, in the order here when the user swapped the panes while a layout of
+    /// the session was still pending.
     pub(super) fn apply_cached_layout(&mut self, layout: &PresentationLayout, id: Uuid) {
         let order = !self.remote.viewer.swapped_here.contains(&id);
         self.follow_remote_layout(layout, id, order);
@@ -597,6 +599,37 @@ mod tests {
         assert!(core.remote.viewer.swapped_here.contains(&id));
         bind_split_and_reconcile(&mut core, id, split, origin_b);
         assert_order_kept_with_origin_axis(&core, id, split, primary);
+    }
+
+    fn bind_split_unrealized(core: &mut Core, id: Uuid, split: Uuid, origin: Uuid) {
+        let row = core.library_mut().held_session_mut(id).unwrap();
+        row.split_surface.replace(fake(split, false));
+        let state = row.remote_presentation.as_mut().unwrap();
+        state.binding.insert_pane(split, daemon_name(origin));
+        core.remote.viewer.split_layouts.insert(split, id);
+        core.advance_remote_splits();
+    }
+
+    #[test]
+    fn the_origin_layout_of_the_requested_split_after_the_bind_keeps_a_swap_made_before_it() {
+        let (mut core, id, primary, split, origin_a, origin_b) = swapped_here_before_the_split_binds();
+        bind_split_unrealized(&mut core, id, split, origin_b);
+        let requested = layout(vec![origin_a, origin_b], origin_a, Some("horizontal"), true);
+        core.apply_remote_layout(&requested, id);
+        assert!(core.remote.viewer.swapped_here.contains(&id));
+        let row = core.library_mut().held_session_mut(id).unwrap();
+        row.split_surface.replace(fake(split, true));
+        core.advance_remote_splits();
+        assert_order_kept_with_origin_axis(&core, id, split, primary);
+    }
+
+    #[test]
+    fn an_origin_layout_with_another_primary_after_the_bind_clears_the_swap_mark() {
+        let (mut core, id, _, split, origin_a, origin_b) = swapped_here_before_the_split_binds();
+        bind_split_unrealized(&mut core, id, split, origin_b);
+        let reordered = layout(vec![origin_b, origin_a], origin_b, Some("horizontal"), true);
+        core.apply_remote_layout(&reordered, id);
+        assert!(core.remote.viewer.swapped_here.is_empty());
     }
 
     #[test]

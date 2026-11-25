@@ -154,7 +154,7 @@ pub(crate) struct ViewerRuntime {
     pub(super) queued_split_panes: HashMap<Uuid, Uuid>,
     /// Newly bound panes whose cached layouts must be reconsidered after realization (pane → session).
     pub(super) split_layouts: HashMap<Uuid, Uuid>,
-    /// Sessions swapped here after their cached layout came: its reconcile keeps their order.
+    /// Sessions swapped here while a layout of the session was still pending: its reconcile keeps their order.
     pub(super) swapped_here: HashSet<Uuid>,
     /// The HUD slot generation of the refusal panel a forwarded click opened, by session ([`super::link_click`]).
     pub(crate) link_refusal_huds: HashMap<Uuid, u64>,
