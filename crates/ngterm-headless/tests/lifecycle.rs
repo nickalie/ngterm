@@ -655,3 +655,105 @@ fn a_missing_session_host_refuses_launch_with_the_live_probe_reason() {
     );
     assert!(!fixture.socket().exists());
 }
+
+/// The catalog stream's hello and snapshot: the epoch and the catalog id.
+fn catalog_hello(fixture: &Fixture) -> Result<(String, String), Box<dyn std::error::Error>> {
+    let mut stream = endpoint::connect(&fixture.socket())?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.write_all(b"{\"cmd\":\"catalog.subscribe\"}\n")?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut frame = || -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        Ok(serde_json::from_str(&line)?)
+    };
+    let reply = frame()?;
+    assert_eq!(reply["ok"], true, "{reply}");
+    stream.write_all(b"{\"kind\":\"hello\",\"hello\":{\"version\":1}}\n")?;
+    let hello = frame()?;
+    let snapshot = frame()?;
+    assert_eq!(snapshot["kind"], "snapshot", "{snapshot}");
+    let epoch = hello["hello"]["epoch"].as_str().ok_or("no epoch")?.to_owned();
+    let catalog_id = snapshot["snapshot"]["catalogID"]
+        .as_str()
+        .ok_or("no catalog id")?
+        .to_owned();
+    Ok((epoch, catalog_id))
+}
+
+fn session_ids(fixture: &Fixture) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let tree = control(fixture, &serde_json::json!({"cmd":"tree"}))?;
+    let workspaces = tree["result"]["tree"]["workspaces"].as_array().ok_or("no workspaces")?;
+    Ok(workspaces
+        .iter()
+        .flat_map(|workspace| workspace["sessions"].as_array().into_iter().flatten())
+        .filter_map(|session| session["id"].as_str().map(str::to_owned))
+        .collect())
+}
+
+#[test]
+fn the_catalog_id_and_its_receipts_outlive_a_restart() {
+    let fixture = Fixture::new(false).unwrap();
+    let mut child = fixture.start(&["--skip-agent-setup"], &[]).unwrap();
+    drop(ready(&fixture, &mut child).unwrap());
+    let (epoch, catalog_id) = catalog_hello(&fixture).unwrap();
+    let created = control(
+        &fixture,
+        &serde_json::json!({"cmd":"session.new", "args":{"opID":"op-restart", "epoch":epoch}}),
+    )
+    .unwrap();
+    assert_eq!(created["result"]["receipt"]["outcome"], "applied", "{created}");
+    child.terminate().unwrap();
+    assert!(wait_exit(&mut child).unwrap());
+    let saved = std::fs::read_to_string(fixture.root.path().join("state/catalog-id")).unwrap();
+    assert!(
+        saved.trim().eq_ignore_ascii_case(&catalog_id),
+        "{saved} != {catalog_id}"
+    );
+
+    let mut child = fixture.start(&["--skip-agent-setup"], &[]).unwrap();
+    drop(ready(&fixture, &mut child).unwrap());
+    let (restarted, same_id) = catalog_hello(&fixture).unwrap();
+    assert_ne!(restarted, epoch);
+    assert_eq!(same_id, catalog_id);
+    let before = session_ids(&fixture).unwrap();
+    // an applied receipt moves to the new epoch at rev 0, so a repeat sent at either epoch runs nothing
+    let applied = serde_json::json!({"receipt":{"opID":"op-restart", "epoch":restarted, "outcome":"applied", "rev":0}});
+    for sent_at in [&epoch, &restarted] {
+        let repeated = control(
+            &fixture,
+            &serde_json::json!({"cmd":"session.new", "args":{"opID":"op-restart", "epoch":sent_at}}),
+        )
+        .unwrap();
+        assert_eq!(repeated, serde_json::json!({"ok":true, "result":applied}));
+    }
+    let looked = control(
+        &fixture,
+        &serde_json::json!({"cmd":"catalog.op", "target":"op-restart"}),
+    )
+    .unwrap();
+    assert_eq!(looked, serde_json::json!({"ok":true, "result":applied}));
+    let after = session_ids(&fixture).unwrap();
+    assert!(after.iter().all(|id| before.contains(id)), "{before:?} -> {after:?}");
+    child.terminate().unwrap();
+    assert!(wait_exit(&mut child).unwrap());
+}
+
+#[test]
+fn a_start_refuses_a_malformed_catalog_id_and_leaves_it_alone() {
+    let fixture = Fixture::new(false).unwrap();
+    let file = fixture.root.path().join("state").join("catalog-id");
+    std::fs::create_dir_all(fixture.root.path().join("state")).unwrap();
+    std::fs::write(&file, "not-a-uuid\n").unwrap();
+    let output = fixture.command().arg("--skip-agent-setup").output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(&format!(
+            "ngterm-headless: catalog id is not a UUID: {}",
+            file.display()
+        )),
+        "{output:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "not-a-uuid\n");
+    assert!(endpoint::connect(&fixture.socket()).is_err());
+}
