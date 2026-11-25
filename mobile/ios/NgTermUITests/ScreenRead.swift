@@ -52,13 +52,15 @@ internal enum ScreenRead {
     /// A wait that reads a condition again, a beat apart, until it holds.
     ///
     /// It gives up after `reads` reads that completed and `lasting` seconds both, or after `limit` (or `lasting`, when
-    /// that is longer) whatever its reads. The count of reads is the bound, not a short time alone: on a loaded runner
-    /// one read can take as long as a whole timed wait. The limit stops a wait whose reads are all that slow.
+    /// that is longer) once a read completed. The count of reads is the bound, not a short time alone: on a loaded
+    /// runner one read can take as long as a whole timed wait. The limit stops a wait whose reads are all that slow.
+    /// A wait whose reads all failed knows nothing of the screen yet, so it gives up only at `blindLimit`.
     internal struct Wait {
         internal var reads = ScreenRead.reads
         internal var lasting: TimeInterval = 0
         internal var beat = ScreenRead.beat
         internal var limit = ScreenRead.limit
+        internal var blindLimit = ScreenRead.blindLimit
 
         /// Reads `done` until it holds, and tells whether it did.
         ///
@@ -67,7 +69,6 @@ internal enum ScreenRead {
         @discardableResult
         internal func poll(until done: () -> Answer) -> Polled {
             let start = Date.now
-            let end = max(limit, lasting)
             var count = 0
             var failed = 0
             while true {
@@ -83,6 +84,7 @@ internal enum ScreenRead {
                     failed += 1
                 }
                 let seconds = Date.now.timeIntervalSince(start)
+                let end = max(count > 0 ? limit : blindLimit, lasting)
                 if (count >= reads && seconds >= lasting) || seconds >= end {
                     return Polled(held: false, reads: count, failed: failed, seconds: seconds)
                 }
@@ -102,6 +104,11 @@ internal enum ScreenRead {
     /// How long a wait reads the screen, at most, when its reads are slow: a failed wait must end well inside the CI
     /// job's time limit, its retry included.
     internal static let limit: TimeInterval = 180
+    /// How long a wait reads the screen, at most, when none of its reads completed.
+    ///
+    /// On a runner at load 880 on 3 CPUs the app answered no read for 205 s (each read: 3 tries of 30 s), and the next
+    /// read found the element. A test still ends inside its time allowance (UI.xctestplan).
+    internal static let blindLimit: TimeInterval = 600
     // the error XCTest gives for a read of an element that completed and matched nothing
     private static let uiTestingErrors = "com.apple.dt.xctest.ui-testing.error"
     private static let noMatches = 10_008

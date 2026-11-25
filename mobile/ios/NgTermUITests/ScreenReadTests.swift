@@ -24,12 +24,37 @@ internal final class ScreenReadTests: XCTestCase {
     }
 
     @MainActor
-    internal func testReadsThatAllFailEndTheWaitOnlyAtItsTimeLimit() {
-        let polled = ScreenRead.Wait(reads: 3, beat: 0, limit: 1).poll { ScreenRead.Answer.failed }
+    internal func testReadsThatAllFailEndTheWaitOnlyAtItsBlindLimit() {
+        let polled = ScreenRead.Wait(reads: 3, beat: 0.1, limit: 0.2, blindLimit: 1).poll { ScreenRead.Answer.failed }
         XCTAssertFalse(polled.held)
         XCTAssertEqual(polled.reads, 0)
         XCTAssertEqual(polled.answer, .failed)
         XCTAssertGreaterThanOrEqual(polled.seconds, 1)
+    }
+
+    // the CI read that failed for 205 s: the time limit of a wait does not end it before a read tells it anything
+    @MainActor
+    internal func testAWaitPastItsLimitHoldsAtTheFirstReadThatCompletes() {
+        let start = Date.now
+        let polled = ScreenRead.Wait(reads: 3, beat: 0.1, limit: 0.5, blindLimit: 5).poll {
+            Date.now.timeIntervalSince(start) >= 1 ? .holds : .failed
+        }
+        XCTAssertTrue(polled.held)
+        XCTAssertEqual(polled.reads, 1)
+        XCTAssertGreaterThanOrEqual(polled.seconds, 1)
+    }
+
+    @MainActor
+    internal func testOnceAReadCompletedTheWaitEndsAtItsLimit() {
+        var calls = 0
+        let polled = ScreenRead.Wait(reads: 1_000, beat: 0.1, limit: 1, blindLimit: 60).poll {
+            calls += 1
+            return calls == 1 ? .doesNotHold : .failed
+        }
+        XCTAssertFalse(polled.held)
+        XCTAssertEqual(polled.reads, 1)
+        XCTAssertEqual(polled.answer, .doesNotHold)
+        XCTAssertLessThan(polled.seconds, 60)
     }
 
     @MainActor
@@ -115,7 +140,7 @@ internal final class ScreenReadTests: XCTestCase {
         XCTAssertEqual(ScreenRead.isGone(elsewhere), .failed)
         XCTAssertEqual(ScreenRead.isShown(elsewhere), .failed)
         XCTAssertEqual(ScreenRead.shows(elsewhere) { _ in true }, .failed)
-        let polled = ScreenRead.Wait(reads: 1, beat: 0, limit: 1).poll { ScreenRead.isGone(elsewhere) }
+        let polled = ScreenRead.Wait(reads: 1, beat: 0, blindLimit: 1).poll { ScreenRead.isGone(elsewhere) }
         XCTAssertEqual(polled.reads, 0)
         XCTAssertGreaterThan(polled.failed, 0)
     }
