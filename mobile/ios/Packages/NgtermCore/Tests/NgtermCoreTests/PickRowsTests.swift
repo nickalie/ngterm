@@ -21,6 +21,10 @@ internal struct PickRowsTests {
     internal func labels() {
         #expect(Self.rows("new") == [.item(index: 2), .item(index: 3)])
         #expect(Self.rows("worker") == [.item(index: 3)])
+        let reversed = ["newsletter worker", "new"].map { label in
+            RemotePickItem(id: label, label: label, subtitle: nil, status: nil, statusColor: nil, statusShape: nil)
+        }
+        #expect(pickRows(items: reversed, query: "new", allowCustom: false) == [.item(index: 1), .item(index: 0)])
     }
 
     @Test("an unmatched query is the answer only when the pick allows one")

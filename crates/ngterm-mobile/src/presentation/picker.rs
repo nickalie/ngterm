@@ -85,6 +85,8 @@ mod tests {
     fn a_query_matches_labels_only_best_first() {
         assert_eq!(pick_rows(items(), "new".to_owned(), false), rows(&[2, 3]));
         assert_eq!(pick_rows(items(), "worker".to_owned(), false), rows(&[3]));
+        let reversed = vec![item("newsletter worker", None), item("new", None)];
+        assert_eq!(pick_rows(reversed, "new".to_owned(), false), rows(&[1, 0]));
     }
 
     #[test]
