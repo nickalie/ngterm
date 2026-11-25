@@ -3,7 +3,7 @@
 //! only), makes the app's calls into that world ([`PageChannel::call`], which answer), hands the page the model's
 //! search and wrap, and owns a log page's [`LogFollower`].
 //!
-//! A static text page reads its file on the background executor and keeps the text, so a theme change redraws without
+//! A static text page reads its file off the main thread and keeps the text, so a theme change redraws without
 //! reading it again; a shown page reopens where it was scrolled. A text page shown here for another machine runs the
 //! same bridge, its text and a log's end read from that machine over the page's channel on a thread of their own
 //! ([`Reads`], #978). A log page's documents are its follower's. Every
@@ -456,8 +456,8 @@ impl TextPage {
         }
     }
 
-    /// A static page's build: the file read on the background executor when `fresh` or never read, the scroll offset
-    /// of a page already shown read first, so a reload or a theme change never moves the view.
+    /// A static page's build: the file read off the main thread ([`Reads::off_main`]) when `fresh` or never read, the
+    /// scroll offset of a page already shown read first, so a reload or a theme change never moves the view.
     fn load_static(&self, fresh: bool) {
         let load = self.page.load.get().wrapping_add(1);
         self.page.load.set(load);

@@ -1017,10 +1017,11 @@ impl Core {
                 self.refuse_text_action(&command, session, NOT_SHOWN);
                 continue;
             };
-            match local_text_action(self, session, pane, action) {
+            let cmd = text_action_command(&action);
+            match guarded(cmd, || local_text_action(self, session, pane, action)) {
                 Dispatched::Done(response) => self.answer_text_action(local, session, &command, &response),
                 Dispatched::Pending { after, resume } => {
-                    let step = text_step(local, session, command, after, resume);
+                    let step = text_step(local, session, command, cmd, after, resume);
                     self.remote.viewer.pages.text_steps.push(step);
                     return;
                 }
@@ -1417,27 +1418,23 @@ impl Core {
     }
 }
 
-/// One step of origin text action `command` on page `local`, which answers the origin once the action answers here and
-/// then runs the page's next queued action. A panicking step answers `ok:false` as a handler's panic does.
+/// One step of origin text action `command` (control command `cmd`) on page `local`, which answers the origin once the
+/// action answers here and then runs the page's next queued action.
 pub(crate) fn text_step(
     local: Uuid,
     session: Uuid,
     command: PresentationPageCommand,
+    cmd: Command,
     after: Duration,
     resume: Resume,
 ) -> (Duration, Resume) {
     let step: Resume = Box::new(move |core: &mut Core| {
-        let response = match panic::catch_unwind(AssertUnwindSafe(|| resume(core))) {
-            Ok(Dispatched::Pending { after, resume }) => {
-                let (after, resume) = text_step(local, session, command, after, resume);
+        let response = match guarded(cmd, || resume(core)) {
+            Dispatched::Pending { after, resume } => {
+                let (after, resume) = text_step(local, session, command, cmd, after, resume);
                 return Dispatched::Pending { after, resume };
             }
-            Ok(Dispatched::Done(response)) => response,
-            Err(_) => {
-                let cmd = text_action_command(command.action);
-                tracing::error!(%cmd, "an origin text action panicked in a deferred step");
-                Response::from(ControlError::HandlerPanicked(cmd))
-            }
+            Dispatched::Done(response) => response,
         };
         core.answer_text_action(local, session, &command, &response);
         core.run_text_actions(local);
@@ -1446,13 +1443,22 @@ pub(crate) fn text_step(
     (after, step)
 }
 
+/// Runs one part of an origin text action whose control command is `cmd`; a panic in it answers `ok:false` as a
+/// handler's panic does, so the origin gets its answer and the page's queue goes on.
+pub(crate) fn guarded(cmd: Command, part: impl FnOnce() -> Dispatched) -> Dispatched {
+    panic::catch_unwind(AssertUnwindSafe(part)).unwrap_or_else(|_| {
+        tracing::error!(%cmd, "an origin text action panicked");
+        Dispatched::Done(Response::from(ControlError::HandlerPanicked(cmd)))
+    })
+}
+
 /// The control command an origin text action runs here.
-fn text_action_command(action: PresentationPageAction) -> Command {
+pub(crate) fn text_action_command(action: &TextPageAction) -> Command {
     Command::Session(match action {
-        PresentationPageAction::Follow => SessionCmd::OverlayFollow,
-        PresentationPageAction::Wrap => SessionCmd::OverlayWrap,
-        PresentationPageAction::Changes => SessionCmd::OverlayChanges,
-        _ => SessionCmd::OverlaySearch,
+        TextPageAction::Follow(_) => SessionCmd::OverlayFollow,
+        TextPageAction::Wrap(_) => SessionCmd::OverlayWrap,
+        TextPageAction::Search(_) => SessionCmd::OverlaySearch,
+        TextPageAction::Changes { .. } => SessionCmd::OverlayChanges,
     })
 }
 
