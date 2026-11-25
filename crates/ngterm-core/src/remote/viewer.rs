@@ -7,7 +7,7 @@
 //! The frontend installs the [`PresentationTransport`] that runs each bridge and reports its lines and its end, and
 //! runs [`Core::remote_tick`] whenever [`Core::remote_wake`] asks; everything else happens here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -154,6 +154,8 @@ pub(crate) struct ViewerRuntime {
     pub(super) queued_split_panes: HashMap<Uuid, Uuid>,
     /// Newly bound panes whose cached layouts must be reconsidered after realization (pane → session).
     pub(super) split_layouts: HashMap<Uuid, Uuid>,
+    /// Sessions swapped here after their cached layout came: its reconcile keeps their order.
+    pub(super) swapped_here: HashSet<Uuid>,
     /// The HUD slot generation of the refusal panel a forwarded click opened, by session ([`super::link_click`]).
     pub(crate) link_refusal_huds: HashMap<Uuid, u64>,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.

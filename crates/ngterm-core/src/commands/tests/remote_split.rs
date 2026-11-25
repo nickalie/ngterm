@@ -13,6 +13,8 @@ use super::{Fixture, args, wire};
 use crate::commands::notify::NotificationEffect;
 use crate::live::daemon_name;
 use crate::model::{NewSession, RemoteBinding, RemoteOrigin};
+use crate::palette::{PaletteAction, PaletteMode};
+use crate::palette_catalog::PaletteCommand;
 use crate::remote::frames::PresentationLayout;
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
 use crate::restore::spawn_plan::LaunchSeed;
@@ -727,8 +729,14 @@ fn closing_a_remote_split_swapped_here_closes_the_same_pane_on_the_origin() {
     );
 }
 
-#[test]
-fn a_swap_made_here_before_the_new_split_is_realized_survives_the_cached_layout() {
+enum SwapFrom {
+    Command,
+    Palette,
+}
+
+/// A row whose new split is bound to the origin's `target` while the origin's two-pane layout, horizontal and with its
+/// own pane first, waits in the cache; the split's terminal is realized, the reconcile not yet run.
+fn swappable_before_the_reconcile() -> (Remote, Uuid, Uuid) {
     let target = Uuid::from_u128(2);
     let mut remote = Remote::new();
     remote.script([
@@ -745,7 +753,7 @@ fn a_swap_made_here_before_the_new_split_is_realized_survives_the_cached_layout(
         &PresentationLayout {
             panes: vec![remote.origin_pane, target],
             primary: remote.origin_pane,
-            axis: Some("vertical".to_owned()),
+            axis: Some("horizontal".to_owned()),
             shown: true,
         },
         remote.row,
@@ -753,28 +761,82 @@ fn a_swap_made_here_before_the_new_split_is_realized_survives_the_cached_layout(
     remote.request();
     remote.spawn();
     let session = remote.fixture.store_mut().unwrap().session_mut(remote.row).unwrap();
+    assert_ne!(session.split.axis, crate::model::SplitAxis::TopBottom);
     session.split_surface.replace(realized);
-    let reply = remote
-        .fixture
-        .session(SessionCmd::Swap, Some(&wire(remote.row)), args(|_| {}));
-    assert!(reply.ok);
+    (remote, target, primary)
+}
+
+fn swap_here(remote: &mut Remote, from: &SwapFrom) {
+    match from {
+        SwapFrom::Command => {
+            let reply = remote
+                .fixture
+                .session(SessionCmd::Swap, Some(&wire(remote.row)), args(|_| {}));
+            assert!(reply.ok);
+        }
+        SwapFrom::Palette => {
+            let window = remote.fixture.window;
+            remote.fixture.core.toggle_palette(window, PaletteMode::Actions);
+            let swap = PaletteAction::Command(PaletteCommand::SwapPanes);
+            remote.fixture.core.run_palette_entry(window, &swap);
+        }
+    }
+}
+
+#[test]
+fn a_swap_made_here_before_the_new_split_is_realized_survives_the_cached_layout() {
+    for from in [SwapFrom::Command, SwapFrom::Palette] {
+        let (mut remote, _, primary) = swappable_before_the_reconcile();
+        swap_here(&mut remote, &from);
+        remote.fixture.core.remote_tick(Instant::now());
+        let session = remote.fixture.store().session(remote.row).unwrap();
+        assert_eq!(session.pane_identity, remote.pane);
+        assert_eq!(session.split_pane_identity, Some(primary));
+        assert_eq!(session.split.axis, crate::model::SplitAxis::TopBottom);
+        remote.runner.calls.lock().unwrap().clear();
+        remote.script([result(&json!({"ok": true})), result(&json!({"ok": true}))]);
+        let reply = remote
+            .fixture
+            .session(SessionCmd::SplitClose, Some(&wire(remote.row)), args(|_| {}));
+        assert!(reply.ok);
+        assert_eq!(
+            remote.origin_lines(2),
+            [
+                origin_line(&["session", "swap", "--target", "origin-session"]),
+                origin_line(&["session", "split", "close", "--target", "origin-session"]),
+            ]
+        );
+    }
+}
+
+#[test]
+fn an_origin_layout_that_comes_after_a_swap_here_is_applied_at_the_reconcile() {
+    let (mut remote, target, primary) = swappable_before_the_reconcile();
+    swap_here(&mut remote, &SwapFrom::Command);
+    let session = remote.fixture.store_mut().unwrap().session_mut(remote.row).unwrap();
+    let realized = session.split_surface.take();
+    session
+        .split_surface
+        .replace(Box::new(FakeSurface::new(wire(primary)).with_realized(false)));
+    remote.fixture.core.apply_remote_layout(
+        &PresentationLayout {
+            panes: vec![remote.origin_pane, target],
+            primary: remote.origin_pane,
+            axis: Some("vertical".to_owned()),
+            shown: true,
+        },
+        remote.row,
+    );
+    let session = remote.fixture.store_mut().unwrap().session_mut(remote.row).unwrap();
+    assert_eq!(
+        session.pane_identity, remote.pane,
+        "an unrealized split waits for the reconcile"
+    );
+    session.split_surface.replace(realized.unwrap());
     remote.fixture.core.remote_tick(Instant::now());
     let session = remote.fixture.store().session(remote.row).unwrap();
-    assert_eq!(session.pane_identity, remote.pane);
-    assert_eq!(session.split_pane_identity, Some(primary));
-    remote.runner.calls.lock().unwrap().clear();
-    remote.script([result(&json!({"ok": true})), result(&json!({"ok": true}))]);
-    let reply = remote
-        .fixture
-        .session(SessionCmd::SplitClose, Some(&wire(remote.row)), args(|_| {}));
-    assert!(reply.ok);
-    assert_eq!(
-        remote.origin_lines(2),
-        [
-            origin_line(&["session", "swap", "--target", "origin-session"]),
-            origin_line(&["session", "split", "close", "--target", "origin-session"]),
-        ]
-    );
+    assert_eq!(session.pane_identity, primary);
+    assert_eq!(session.split_pane_identity, Some(remote.pane));
 }
 
 #[test]

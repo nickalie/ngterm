@@ -19,6 +19,12 @@ impl AppStore {
     /// are realized replicas of exactly the origin's two panes does it swap, set the axis and show or hide the split.
     /// The local identities a removal frame now lets close.
     pub fn apply_remote_layout(&mut self, layout: &PresentationLayout, id: Uuid) -> Vec<Uuid> {
+        self.follow_remote_layout(layout, id, true)
+    }
+
+    /// [`Self::apply_remote_layout`]; with `order` false, the panes keep their order here and only the axis, the
+    /// visibility and the removals follow `layout`.
+    fn follow_remote_layout(&mut self, layout: &PresentationLayout, id: Uuid, order: bool) -> Vec<Uuid> {
         if !layout.is_valid() {
             return Vec::new();
         }
@@ -30,7 +36,7 @@ impl AppStore {
         };
         state.layout = Some(layout.clone());
         if let Some(swap) = self.session(id).and_then(|session| replicas_follow(session, layout)) {
-            if swap && self.swap_panes(id).is_err() {
+            if swap && order && self.swap_panes(id).is_err() {
                 return Vec::new();
             }
             if let Some(axis) = layout.axis.as_deref().and_then(SplitAxis::from_wire)
@@ -130,8 +136,8 @@ fn replicas_follow(session: &Session, layout: &PresentationLayout) -> Option<boo
 }
 
 impl Core {
-    /// Swaps session `id`'s panes for the user. A layout cached for a pane still to be realized is older than this
-    /// swap, so it is dropped: applied later, it would swap the panes back.
+    /// Swaps session `id`'s panes for the user. The swap is newer than the order of a layout cached for a pane still
+    /// to be realized, so that layout's reconcile keeps the panes in their order here.
     ///
     /// # Errors
     ///
@@ -141,17 +147,32 @@ impl Core {
             .store_for_session_mut(id)
             .ok_or(SwapRefusal::NoSession)?
             .swap_panes(id)?;
-        self.remote.viewer.split_layouts.retain(|_, session| *session != id);
+        let viewer = &mut self.remote.viewer;
+        if viewer.split_layouts.values().any(|session| *session == id) {
+            viewer.swapped_here.insert(id);
+        }
         Ok(())
     }
 
     /// Applies the origin's layout to session `id`'s replicas and closes each one the origin removed (upstream's
-    /// `agtermApp.applyRemoteLayout`).
+    /// `agtermApp.applyRemoteLayout`). A new layout from the origin is newer than a swap made here.
     pub(crate) fn apply_remote_layout(&mut self, layout: &PresentationLayout, id: Uuid) {
+        self.remote.viewer.swapped_here.remove(&id);
+        self.follow_remote_layout(layout, id, true);
+    }
+
+    /// Applies the layout cached for session `id`, in the order here when the user swapped the panes after that layout
+    /// came.
+    pub(super) fn apply_cached_layout(&mut self, layout: &PresentationLayout, id: Uuid) {
+        let order = !self.remote.viewer.swapped_here.contains(&id);
+        self.follow_remote_layout(layout, id, order);
+    }
+
+    fn follow_remote_layout(&mut self, layout: &PresentationLayout, id: Uuid, order: bool) {
         let removed = self
             .library_mut()
             .store_for_session_mut(id)
-            .map(|store| store.apply_remote_layout(layout, id))
+            .map(|store| store.follow_remote_layout(layout, id, order))
             .unwrap_or_default();
         for local in removed {
             self.close_removed_remote_pane(local, id);

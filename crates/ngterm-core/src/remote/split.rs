@@ -359,7 +359,7 @@ impl Core {
         self.grant_remote_pane_spawn(pane);
         self.remote.viewer.split_layouts.insert(pane, id);
         if let Some(layout) = layout {
-            self.apply_remote_layout(&layout, id);
+            self.apply_cached_layout(&layout, id);
         }
         Ok(true)
     }
@@ -369,9 +369,11 @@ impl Core {
     fn reconcile_split_layouts(&mut self) {
         for (pane, id) in std::mem::take(&mut self.remote.viewer.split_layouts) {
             let Some(session) = self.library().held_session(id) else {
+                self.remote.viewer.swapped_here.remove(&id);
                 continue;
             };
             if role_of(session, pane).is_none() {
+                self.remote.viewer.swapped_here.remove(&id);
                 continue;
             }
             let realized = |slot: &crate::model::SurfaceSlot| slot.get().is_some_and(ngterm_host::Surface::is_realized);
@@ -390,8 +392,9 @@ impl Core {
                     .then(|| layout.clone())
             });
             if let Some(layout) = layout {
-                self.apply_remote_layout(&layout, id);
+                self.apply_cached_layout(&layout, id);
             }
+            self.remote.viewer.swapped_here.remove(&id);
         }
     }
 
