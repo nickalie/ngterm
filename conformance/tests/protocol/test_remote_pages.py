@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from agterm_conformance.loopback import serve
-from agterm_conformance.match import assert_absent, assert_ok, assert_subset, find_session, session_ids
+from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session, session_ids
 from agterm_conformance.plugin import Ctl
 
 # the loopback machine's sshd is POSIX only
@@ -52,8 +52,12 @@ def _attach(viewer, host, sid):
 
 
 def _follows(tree, sid):
-    (left,) = [surface for surface in find_session(tree, sid)["surfaces"] if surface["kind"] == "left"]
+    """The origin hands `sid`'s pages over: its pane follows the viewer's lead and the viewer's presenter stream has
+    reached it. The lead alone can read back before the stream does, and a page opened then stays on the origin."""
+    session = find_session(tree, sid)
+    (left,) = [surface for surface in session["surfaces"] if surface["kind"] == "left"]
     assert left.get("lead") == "follower", left
+    assert (session.get("presenters") or {}).get("presenter") is True, session.get("presenters")
     return True
 
 
@@ -300,4 +304,147 @@ def test_a_log_page_follows_on_the_presenting_machine_which_runs_the_origins_tex
         assert_subset(shown["text"], {"following": False, "wrap": True})
     finally:
         assert_ok(remote_viewer.request("session.close", local))
+        assert_ok(origin.request("session.close", sid))
+
+
+DIFF = """\
+--- a/notes.txt
++++ b/notes.txt
+@@ -1,3 +1,3 @@
+ one
+-two
++TWO
+ three
+@@ -10,3 +10,3 @@
+ ten
+-eleven
++ELEVEN
+ twelve
+"""
+
+
+def _presented(origin, viewer, host):
+    """An origin session whose pane follows `viewer`, which attached it: `(origin id, the viewer's row)`."""
+    before = set(session_ids(origin.tree()))
+    sid = _origin_session(origin)
+    assert_ok(origin.request("session.select", sorted(before)[0]))
+    local = _attach(viewer, host, sid)
+    origin.wait_tree(lambda tree: _follows(tree, sid))
+    return sid, local
+
+
+def _replica(viewer, local, expected):
+    """The replica page in the viewer's row `local` once it has loaded and its `text` holds `expected`."""
+
+    def shown(tree):
+        pages = find_session(tree, local).get("htmlOverlays") or []
+        if len(pages) != 1 or pages[0]["state"] != "loaded" or not pages[0].get("replica"):
+            return False
+        return all(pages[0].get("text", {}).get(key) == value for key, value in expected.items())
+
+    shown.__qualname__ = f"the replica in {local} reads {expected}"
+    (page,) = find_session(viewer.wait_tree(shown), local)["htmlOverlays"]
+    return page
+
+
+def _until_loaded(ctl, cmd, sid, **args):
+    """A step goes to the page's renderer, which answers `page not loaded` until it is up."""
+    return ctl.wait_response(cmd, sid, lambda response: response.ok or response.error != "page not loaded", **args)
+
+
+@pytest.mark.since("0.42.1")
+@POSIX_SSHD
+@pytest.mark.requires("live-sessions", reason="the origin's session must be Live to attach from another machine")
+@pytest.mark.covers("session.overlay.open", "session.overlay.changes", "field:tree.session.htmlOverlays")
+def test_a_diff_page_on_the_presenting_machine_steps_between_its_changes_for_the_origin(remote_origin, remote_viewer):
+    """`session.overlay.changes` on the origin steps the diff page another machine presents, answers with that
+    machine's count, and the origin's tree shows the change it reached right after (#978)."""
+    origin = Ctl(remote_origin.instance)
+    sid, local = _presented(origin, remote_viewer, remote_origin.host)
+    try:
+        diff = origin.instance.root / "remote-change.diff"
+        diff.write_text(DIFF)
+        assert_ok(origin.request("session.overlay.open", sid, textFile=str(diff)))
+        _replica(remote_viewer, local, {})
+        first = assert_ok(_until_loaded(origin, "session.overlay.changes", sid, to="next"))
+        assert first == {"id": sid, "text": "1 of 2"}
+        assert assert_ok(origin.request("session.overlay.changes", sid, to="next")) == {"id": sid, "text": "2 of 2"}
+        assert find_session(origin.tree(), sid)["htmlOverlays"][0]["text"]["changes"] == {"count": 2, "current": 2}
+        assert assert_ok(origin.request("session.overlay.changes", sid, to="prev")) == {"id": sid, "text": "1 of 2"}
+    finally:
+        assert_ok(remote_viewer.request("session.close", local))
+        assert_ok(origin.request("session.close", sid))
+
+
+@pytest.mark.since("0.42.1")
+@POSIX_SSHD
+@pytest.mark.requires("live-sessions", reason="the origin's session must be Live to attach from another machine")
+@pytest.mark.covers(
+    "session.overlay.follow",
+    "session.overlay.wrap",
+    "session.overlay.search",
+    "field:tree.session.htmlOverlays",
+)
+def test_text_actions_on_a_presenters_replica_answer_as_on_a_page_of_its_own(remote_origin, remote_viewer):
+    """On the presenting machine, follow, wrap and search aimed at its replica of an origin's log page answer as on a
+    log page of its own, and the origin's tree shows what they left; follow on a replica of a plain text page is
+    refused as on a plain text page of its own (#978)."""
+    origin = Ctl(remote_origin.instance)
+    viewer = remote_viewer
+    sid, local = _presented(origin, viewer, remote_origin.host)
+    try:
+        log = origin.instance.root / "replica-app.log"
+        log.write_text("one\ntwo\nthree\n")
+        assert_ok(origin.request("session.overlay.open", sid, textFile=str(log), followFile=True, tail=50))
+        _replica(viewer, local, {"following": True, "lines": 3})
+
+        assert assert_ok(viewer.request("session.overlay.follow", local, mode="off")) == {"id": local, "text": "paused"}
+        assert assert_ok(viewer.request("session.overlay.wrap", local, mode="on")) == {"id": local, "text": "wrapped"}
+        assert_ok(viewer.request("session.overlay.search", local, text="two"))
+        reply = assert_ok(_until_loaded(viewer, "session.overlay.search", local, to="next"))
+        assert reply == {"id": local, "text": "1 of 1"}
+        assert_error(viewer.request("session.overlay.changes", local, to="next"), "no diff page")
+        search = {"query": "two", "matches": 1, "current": 1}
+        _origin_text(origin, sid, {"following": False, "wrap": True, "search": search})
+
+        assert_ok(origin.request("session.overlay.close", sid))
+        plain = origin.instance.root / "replica-notes.txt"
+        plain.write_text("one\ntwo\n")
+        assert_ok(origin.request("session.overlay.open", sid, textFile=str(plain)))
+        _replica(viewer, local, {"file": str(plain)})
+        assert_error(viewer.request("session.overlay.follow", local, mode="on"), "no log page")
+    finally:
+        assert_ok(viewer.request("session.close", local))
+        assert_ok(origin.request("session.close", sid))
+
+
+@pytest.mark.since("0.42.1")
+@POSIX_SSHD
+@pytest.mark.requires("live-sessions", reason="the origin's session must be Live to attach from another machine")
+@pytest.mark.covers("live.attach", "session.overlay.open", "field:tree.session.htmlOverlays")
+def test_a_log_page_offered_again_to_a_presenter_keeps_its_following_query_and_wrap(remote_origin, remote_viewer):
+    """A log page the origin offers again, to the presenter that attaches the session after its last one left, opens
+    there with the following, the query and the wrap it had (#978)."""
+    origin = Ctl(remote_origin.instance)
+    viewer = remote_viewer
+    sid, local = _presented(origin, viewer, remote_origin.host)
+    again = None
+    try:
+        log = origin.instance.root / "offered-app.log"
+        log.write_text("one\ntwo\nthree\n")
+        assert_ok(origin.request("session.overlay.open", sid, textFile=str(log), followFile=True, tail=50))
+        _replica(viewer, local, {"following": True})
+        assert assert_ok(origin.request("session.overlay.follow", sid, mode="off")) == {"id": sid, "text": "paused"}
+        assert assert_ok(origin.request("session.overlay.wrap", sid, mode="on")) == {"id": sid, "text": "wrapped"}
+        assert_ok(origin.request("session.overlay.search", sid, text="two"))
+
+        assert_ok(viewer.request("session.close", local))
+        local = None
+        again = _attach(viewer, remote_origin.host, sid)
+        page = _replica(viewer, again, {"following": False, "wrap": True})
+        assert page["text"]["search"]["query"] == "two", page
+    finally:
+        for row in (local, again):
+            if row is not None:
+                assert_ok(viewer.request("session.close", row))
         assert_ok(origin.request("session.close", sid))
