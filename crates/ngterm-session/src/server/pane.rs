@@ -839,7 +839,9 @@ impl Pane {
         let replies = self.core.replies_target(&state);
         self.release(state);
         #[cfg(test)]
-        tests::AFTER_RELEASE.with(|hook| hook.take().map(|hook| hook(&self.core)));
+        if let Some(hook) = tests::AFTER_RELEASE.with(std::cell::Cell::take) {
+            hook(&self.core);
+        }
         if let Some(target) = replies {
             self.core.await_replies_written(target);
         }
