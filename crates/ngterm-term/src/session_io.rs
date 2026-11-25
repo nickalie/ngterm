@@ -230,6 +230,8 @@ pub(crate) struct Live {
     pause: ReadPause,
     resumed: (Mutex<()>, Condvar),
     leaving: AtomicBool,
+    /// The connection ended without the session's exit and no attach found it again: the session was lost.
+    session_lost: AtomicBool,
     /// The most input bytes queued before [`Live::input`] refuses more.
     write_limit: usize,
     /// The delegated requests the frontend has been asked, by their read id.
@@ -249,6 +251,7 @@ impl Live {
             pause,
             resumed: (Mutex::new(()), Condvar::new()),
             leaving: AtomicBool::new(false),
+            session_lost: AtomicBool::new(false),
             write_limit,
             pending: Mutex::new(HashMap::new()),
             next_read: AtomicU64::new(0),
@@ -422,6 +425,11 @@ impl Live {
 
     fn leaving(&self) -> bool {
         self.leaving.load(Ordering::Acquire)
+    }
+
+    /// Whether the session was lost rather than its program ending ([`crate::Pane::session_lost`]).
+    pub(crate) fn session_lost(&self) -> bool {
+        self.session_lost.load(Ordering::Acquire)
     }
 
     /// Send on `writer` (connection `connection`) from now on; a pane that left detaches it at once.
@@ -615,7 +623,10 @@ impl Reader {
                     match self.reattach(&session, role) {
                         Ok(Some(next)) => attachment = next,
                         Ok(None) => return,
-                        Err(refusal) => return self.fail(&refusal),
+                        Err(refusal) => {
+                            self.live.session_lost.store(true, Ordering::Release);
+                            return self.fail(&refusal);
+                        }
                     }
                 }
             }

@@ -157,7 +157,7 @@ fn catalog_session(session: &Session, endpoint: &ControlLiveEndpoint) -> Catalog
             endpoint: endpoint.clone(),
         });
     let has_split = session.split.exists && session.split_pane_identity.is_some();
-    let panes = if page.is_some() || session.content() == SessionContent::Page {
+    let panes = if session.ended || page.is_some() || session.content() == SessionContent::Page {
         Vec::new()
     } else {
         std::iter::once(session.pane_identity)
@@ -181,7 +181,11 @@ fn catalog_session(session: &Session, endpoint: &ControlLiveEndpoint) -> Catalog
         },
         axis: has_split.then(|| session.split.axis.wire_name().to_owned()),
         shown: has_split && session.split.shown,
-        lifecycle: Lifecycle::Live,
+        lifecycle: if session.ended {
+            Lifecycle::Ended
+        } else {
+            Lifecycle::Live
+        },
         scratch: None,
         page,
         custom_name: Some(session.custom_name.clone().unwrap_or_default()),

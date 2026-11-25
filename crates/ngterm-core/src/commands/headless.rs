@@ -70,6 +70,14 @@ pub(crate) fn window_refusal(core: &Core, request: &Request) -> Option<ControlEr
     })
 }
 
+/// A split or a companion of a session marked ended (upstream's `splitSession`, `createCompanion`).
+pub(crate) fn refuse_ended(session: Option<&crate::model::Session>) -> Result<(), ControlError> {
+    if session.is_some_and(|session| session.ended) {
+        return Err(ControlError::rejected("session has ended"));
+    }
+    Ok(())
+}
+
 /// A `--wait` session or companion on a headless origin, which runs no window to hold the pane in (upstream's
 /// `createSession`, `createCompanion`); checked after the command's own validation.
 pub(crate) fn refuse_wait(core: &Core, cmd: SessionCmd, wait: Option<bool>) -> Result<(), ControlError> {

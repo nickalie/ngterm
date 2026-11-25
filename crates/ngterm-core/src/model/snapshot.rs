@@ -243,6 +243,7 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         collapsed: (!session.companion.expanded).then_some(true),
         pages: session_pages(session),
         content: None,
+        ended: session.ended.then_some(true),
     }
 }
 
@@ -312,6 +313,7 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool, h
         ..SessionSeed::default()
     });
     session.companion.expanded = !snapshot.collapsed.unwrap_or(false);
+    session.ended = snapshot.ended.unwrap_or(false);
     session.split.shown = snapshot.is_split.unwrap_or(false);
     session.split.exists = has_split;
     session.split.axis = if has_split {

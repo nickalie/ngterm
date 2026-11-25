@@ -70,6 +70,8 @@ pub struct PaneEnvironment {
 struct Ran {
     command: bool,
     wait: bool,
+    /// The live session was lost rather than its program ending ([`Pane::session_lost`]).
+    lost: bool,
 }
 
 /// One pane's terminal, shared by the registry and the [`Surface`] in the pane's slot.
@@ -227,11 +229,11 @@ pub struct PaneSpec {
 
 impl PaneSpec {
     /// The panes of `session` in window `window`'s `store`: its primary, and its split while it has one (shown or
-    /// not: a hidden split keeps its terminal, as in a window); none for a page companion.
+    /// not: a hidden split keeps its terminal, as in a window); none for a page companion or an ended session.
     #[must_use]
     pub fn of_session(window: Uuid, store: &AppStore, session: &Session) -> Vec<Self> {
-        // a page companion has no terminal
-        if session.content() != ngterm_core::model::SessionContent::Terminal {
+        // a page companion has no terminal, and an ended session's are gone
+        if session.ended || session.content() != ngterm_core::model::SessionContent::Terminal {
             return Vec::new();
         }
         let Some(workspace) = store
@@ -321,6 +323,8 @@ pub struct Panes {
     drain: DrainPoster,
     cells: HashMap<Key, Rc<Cell_>>,
     specs: HashMap<Key, PaneSpec>,
+    /// The terminals that did not start since the last sync, reported to the core as lost.
+    failed: RefCell<Vec<Key>>,
 }
 
 impl Panes {
@@ -331,6 +335,7 @@ impl Panes {
             drain,
             cells: HashMap::new(),
             specs: HashMap::new(),
+            failed: RefCell::new(Vec::new()),
         }
     }
 
@@ -349,7 +354,7 @@ impl Panes {
     /// down, the ones it lays out mounted, every session woken, and the seeds granted handed to their terminals.
     /// Whether the model changed (a replacement dropped), which the caller settles.
     pub fn sync(&mut self, core: &mut Core) -> bool {
-        let changed = self.replace(core);
+        let mut changed = self.replace(core);
         let wanted = layout(core);
         let held: std::collections::HashSet<Uuid> = core
             .library()
@@ -385,6 +390,14 @@ impl Panes {
         for grant in core.take_spawn_grants() {
             let PaneSpawn { session, token, seed } = grant;
             self.launch_seeded(&session, &token, &seed);
+        }
+        let failed = std::mem::take(&mut *self.failed.borrow_mut());
+        if !failed.is_empty() {
+            for key in failed {
+                changed |= core.pane_lost(key.session, &key.token);
+            }
+            // a session the failures ended lays out no pane any more
+            self.retain(&layout(core), &held);
         }
         changed
     }
@@ -460,6 +473,7 @@ impl Panes {
         cell.ran.set(Ran {
             command: launch.command.is_some(),
             wait: launch.wait_after_command,
+            lost: false,
         });
         cell.live.set(live);
         let config = self.pane_config(session, cell);
@@ -468,7 +482,13 @@ impl Panes {
                 *cell.pane.borrow_mut() = Some(Rc::new(pane));
                 tracing::info!(%session, token = cell.token, live, "headless terminal started");
             }
-            Err(error) => tracing::error!(%session, token = cell.token, %error, "a headless terminal did not start"),
+            Err(error) => {
+                tracing::error!(%session, token = cell.token, %error, "a headless terminal did not start");
+                self.failed.borrow_mut().push(Key {
+                    session,
+                    token: cell.token.clone(),
+                });
+            }
         }
     }
 
@@ -564,7 +584,10 @@ impl Panes {
         let Some(pane) = cell.pane.borrow().clone() else {
             return Vec::new();
         };
-        let ran = cell.ran.get();
+        let ran = Ran {
+            lost: pane.session_lost(),
+            ..cell.ran.get()
+        };
         let events = pane.take_events();
         for event in &events {
             match event {
@@ -633,6 +656,9 @@ pub enum Report {
     },
     /// The program ended: the pane closes by its role.
     Exited,
+    /// The live session was lost, not ended by its program: the core keeps the session as ended when it was the last
+    /// pane ([`Core::pane_lost`]).
+    Lost,
     /// A held command ended (a `--wait` Live pane, a remote replica's ssh): the core decides what stays.
     Held,
 }
@@ -649,6 +675,7 @@ fn report(event: &PaneEvent, ran: Ran, hostname: &str) -> Option<Report> {
             title: title.clone(),
             body: body.clone(),
         }),
+        PaneEvent::Exited(_) if ran.lost => Some(Report::Lost),
         PaneEvent::Exited(ExitStatus { held: true, .. }) if ran.command && ran.wait => Some(Report::Held),
         PaneEvent::Exited(_) => Some(Report::Exited),
         _ => None,

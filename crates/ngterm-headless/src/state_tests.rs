@@ -805,6 +805,34 @@ fn focus_timers_and_notification_effects_are_drained_without_a_display() {
 }
 
 #[cfg(unix)]
+/// Upstream's `PaneObserver.settle`: a replacement that cannot start leaves the session ended.
+#[test]
+fn a_terminal_that_cannot_start_leaves_its_session_ended() {
+    let (mut state, _, session) = fixture();
+    let window = state.core.library().active_window_id().unwrap();
+    let config = ngterm_core::ghostty_config::GhosttyConfig::default();
+    state.panes = Panes::new(
+        PaneEnvironment {
+            socket: "private.sock".into(),
+            program_version: "test".into(),
+            host: ngterm_term::Host::new(&config, Some("/bin/sh".into()), None, None),
+            config,
+            // a terminal of no cells cannot be made
+            grid: (0, 0),
+            hostname: "box".into(),
+        },
+        Arc::new(|_, _| {}),
+    );
+    state.land();
+    let found = state.core.library().store(window).unwrap().session(session).unwrap();
+    assert!(found.ended, "the session stays, ended");
+    assert_eq!(state.terminals(), 0, "an ended session mounts no terminal");
+    let tree = state.handle_request(&request(Command::Tree, None, json!({})));
+    let node = &tree.response.result.unwrap()["tree"]["workspaces"][0]["sessions"][0];
+    assert_eq!(node["ended"], json!(true));
+    state.teardown();
+}
+
 #[test]
 fn land_and_drain_deliver_real_terminal_reports_then_remove_closed_panes() {
     let (mut state, _, session) = fixture();

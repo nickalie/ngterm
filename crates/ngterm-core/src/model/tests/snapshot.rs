@@ -707,3 +707,15 @@ fn backgrounds_round_trip_without_the_scratch_override() {
     assert_eq!(session.pane_backgrounds.left, Some(color("#111111")));
     assert_eq!(session.pane_backgrounds.scratch, None);
 }
+
+/// Upstream's `Snapshot.ended`: written only when true, and restored.
+#[test]
+fn an_ended_session_round_trips_and_a_live_one_writes_no_key() {
+    let (mut store, _, session) = store_with("/tmp");
+    assert_eq!(store.snapshot().workspaces[0].sessions[0].ended, None);
+    assert!(store.mark_session_ended(session));
+    let snapshot = store.snapshot();
+    assert_eq!(snapshot.workspaces[0].sessions[0].ended, Some(true));
+    assert!(first(&restored(&snapshot, true)).ended);
+    assert!(first(&restored(&snapshot, false)).ended);
+}

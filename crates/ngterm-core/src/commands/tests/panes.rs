@@ -880,3 +880,43 @@ fn scratch_pwd_changes_only_its_own_directory_and_a_departed_scratch_cannot_repo
     assert!(!fixture.core.report_pane(id, "S", &PaneReport::Pwd("/old".into())));
     assert_eq!(session(&fixture, id).scratch_cwd, None);
 }
+
+/// Upstream's `aLostSplitCollapsesToTheLivePrimary`, `aLostLastPaneLeavesTheSessionEnded` and
+/// `anEndedSessionIsSkippedAndCannotGrowASplit` (`PaneObserverTests`), with the companion refusal beside it.
+#[test]
+fn a_session_whose_last_pane_is_lost_stays_ended_and_refuses_a_split_and_a_companion() {
+    let (mut fixture, id) = split_fixture();
+    assert!(fixture.core.pane_lost(id, "L"));
+    assert!(!session(&fixture, id).ended, "the split pane lives on");
+    assert_eq!(session(&fixture, id).pane_role_for_token("R"), Some(StatusPane::Left));
+    assert!(node(&mut fixture, id).get("ended").is_none());
+
+    assert!(fixture.core.pane_lost(id, "R"));
+    let ended = session(&fixture, id);
+    assert!(ended.ended);
+    assert!(!ended.surface.is_present());
+    assert_eq!(node(&mut fixture, id)["ended"], json!(true));
+    assert!(!fixture.core.pane_lost(id, "R"), "an ended session has no pane to lose");
+
+    let refused = failure("session has ended");
+    assert_eq!(
+        fixture.session(SessionCmd::Split, Some(&wire(id)), args(|a| a.mode = Some("on".into()))),
+        refused
+    );
+    assert_eq!(
+        fixture.session(SessionCmd::CompanionNew, Some(&wire(id)), Args::default()),
+        refused
+    );
+}
+
+#[test]
+fn a_lost_scratch_closes_the_scratch_alone() {
+    let mut fixture = Fixture::new(1);
+    let id = fixture.sessions[0];
+    install(&mut fixture, id, StatusPane::Left, "L");
+    install(&mut fixture, id, StatusPane::Scratch, "S");
+    assert!(fixture.core.pane_lost(id, "S"));
+    let found = session(&fixture, id);
+    assert!(!found.scratch_surface.is_present());
+    assert!(!found.ended);
+}

@@ -67,6 +67,34 @@ impl Core {
         true
     }
 
+    /// The live session of the pane carrying `token` was lost, or its terminal could not start, rather than its shell
+    /// exiting (upstream's `PaneObserver.settle`): beside a live pane of the session it ends that pane alone, as an
+    /// exit does; as the session's last pane it marks the session ended ([`AppStore::mark_session_ended`]), never
+    /// closing or respawning it. The scratch's closes the scratch. Whether it changed anything.
+    ///
+    /// [`AppStore::mark_session_ended`]: crate::model::AppStore::mark_session_ended
+    pub fn pane_lost(&mut self, session: Uuid, token: &str) -> bool {
+        if self.live.claimed_exits.contains(token) {
+            return self.pane_exited(session, token);
+        }
+        let Some(found) = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+        else {
+            return false;
+        };
+        let last = !(found.surface.is_present() && found.split_surface.is_present());
+        match found.pane_role_for_token(token) {
+            Some(StatusPane::Left | StatusPane::Right) if last => self
+                .library_mut()
+                .store_for_session_mut(session)
+                .is_some_and(|store| store.mark_session_ended(session)),
+            Some(_) => self.pane_exited(session, token),
+            None => false,
+        }
+    }
+
     /// Runs the exit of session `session`'s pane `role` (left or right) at `now`: [`AppStore::close_primary_pane_at`]
     /// or [`AppStore::close_split_pane_at`]. A respawned primary keeps its identity but runs a new shell (a new
     /// live-session daemon under the same name), so the old one's lead state and finalize mark are dropped.
@@ -210,6 +238,7 @@ fn split(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         })
         .transpose()?;
     let (store, id) = session_store(core, target, args.window.as_deref())?;
+    super::headless::refuse_ended(store.session(id))?;
     let mode = ToggleMode::parse(args.mode.as_deref()).ok_or_else(|| {
         ControlError::rejected(format!(
             "invalid split mode: {}",

@@ -321,6 +321,9 @@ pub struct SessionSnapshot {
     /// no pane; an unknown value reads as a terminal.
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub content: Option<SessionContentSnapshot>,
+    /// Written only when true ([`crate::model::Session::ended`]).
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub ended: Option<bool>,
 }
 
 /// A persisted session's content beside a terminal.

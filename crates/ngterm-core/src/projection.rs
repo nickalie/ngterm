@@ -178,6 +178,7 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
     node.tint_on = session.tint.map(|tint| tint.parts().wire_names());
     node.parent = session.parent_id().map(uuid_string);
     node.content = (session.content() == SessionContent::Page).then(|| "page".to_owned());
+    node.ended = session.ended.then_some(true);
     node.backed_by_live = Some(all_panes_backed(session));
     node.surfaces = Some(surface_nodes(session));
     node.realized = Some(session.surface.get().is_some_and(ngterm_host::Surface::is_realized));

@@ -13,10 +13,12 @@ fn exit(held: bool) -> PaneEvent {
 const SHELL: Ran = Ran {
     command: false,
     wait: false,
+    lost: false,
 };
 const HELD_COMMAND: Ran = Ran {
     command: true,
     wait: true,
+    lost: false,
 };
 
 #[test]
@@ -58,6 +60,52 @@ fn an_exit_closes_the_pane_unless_a_held_command_ended() {
     assert_eq!(report(&exit(true), SHELL, "box"), Some(Report::Exited));
     assert_eq!(report(&exit(true), HELD_COMMAND, "box"), Some(Report::Held));
     assert_eq!(report(&exit(false), HELD_COMMAND, "box"), Some(Report::Exited));
+}
+
+#[test]
+fn an_exit_after_the_live_session_was_lost_reports_the_loss() {
+    let lost = |ran: Ran| Ran { lost: true, ..ran };
+    assert_eq!(report(&exit(false), lost(SHELL), "box"), Some(Report::Lost));
+    assert_eq!(report(&exit(true), lost(HELD_COMMAND), "box"), Some(Report::Lost));
+}
+
+#[test]
+fn a_lost_pane_beside_a_live_one_closes_alone_and_the_last_one_ends_the_session() {
+    let (mut core, session, primary, split) = split_core();
+    assert!(core.pane_lost(session, &primary));
+    let window = core.library().active_window_id().unwrap();
+    let found = core.library().store(window).unwrap().session(session).unwrap();
+    assert!(!found.ended);
+    assert_eq!(
+        role(&core, session, &split),
+        Some(StatusPane::Left),
+        "the split survivor is the primary"
+    );
+    assert!(core.pane_lost(session, &split));
+    let found = core.library().store(window).unwrap().session(session).unwrap();
+    assert!(found.ended, "the session stays, ended");
+    assert!(!found.surface.is_present(), "its terminals are gone");
+    assert!(layout(&core).is_empty(), "an ended session lays out no pane");
+    assert!(
+        !core.pane_lost(session, &split),
+        "a pane of an ended session is gone already"
+    );
+}
+
+#[test]
+fn a_parent_whose_last_pane_is_lost_ends_rather_than_respawning() {
+    let (mut core, session, primary, split) = split_core();
+    let window = core.library().active_window_id().unwrap();
+    let store = core.library_mut().store_mut(window).unwrap();
+    store
+        .add_companion(session, ngterm_core::model::CompanionOptions::default(), "/home/u")
+        .unwrap();
+    store.close_split_pane(session);
+    assert_eq!(role(&core, session, &split), None);
+    assert!(core.pane_lost(session, &primary));
+    let found = core.library().store(window).unwrap().session(session).unwrap();
+    assert!(found.ended);
+    assert_eq!(found.primary_respawns(), 0);
 }
 
 #[test]

@@ -597,6 +597,32 @@ fn a_live_pane_ends_when_its_session_is_gone() -> TestResult {
     // the session's end closes the pane: a live pane's attach is never waited for
     let status = exit_of(&pane);
     assert!(!status.held, "{status:?}");
+    assert!(
+        !pane.session_lost(),
+        "a killed session's program ended: the session was not lost"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_live_pane_whose_server_dies_ends_with_its_session_lost() -> TestResult {
+    let live = Live::new()?;
+    let configuration = live.configuration()?;
+    let pane = live.pane(&configuration)?;
+    wait_frame(&pane, prompt_painted);
+    let server = ngterm_session::client::Client::new(&live.socket_directory)
+        .api()?
+        .ok_or("no session server answers")?
+        .welcome
+        .pid;
+    let killed = std::process::Command::new("kill")
+        .args(["-KILL", &server.to_string()])
+        .status()?;
+    assert!(killed.success());
+    let status = exit_of(&pane);
+    assert!(status.code != 0 && !status.held, "{status:?}");
+    assert!(pane.session_lost());
     Ok(())
 }
 

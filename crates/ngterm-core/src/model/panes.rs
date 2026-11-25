@@ -310,6 +310,21 @@ impl AppStore {
         self.save();
     }
 
+    /// Keeps session `id`, whose last pane's live session was lost, as ended rather than closing it (upstream's
+    /// `markSessionEnded`): its pane terminals go, and the row stays, listing no pane, until `session.close` removes
+    /// it. False when it is gone or ended already.
+    pub fn mark_session_ended(&mut self, id: Uuid) -> bool {
+        let Some(session) = self.session_mut(id).filter(|session| !session.ended) else {
+            return false;
+        };
+        session.ended = true;
+        session.surface.teardown();
+        session.split_surface.teardown();
+        self.schedule_tree_changed();
+        self.save();
+        true
+    }
+
     /// Shows or hides the scratch terminal; its terminal stays alive while hidden. `emit` false is for a respawn whose
     /// shown state ends where it started (upstream's `toggleScratch`). Not persisted.
     pub fn toggle_scratch(&mut self, id: Uuid, emit: bool) {

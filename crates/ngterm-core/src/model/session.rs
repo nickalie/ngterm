@@ -189,6 +189,10 @@ enum FollowMark {
 /// One session. Its id is stable for its life and across a relaunch; its pane identities name the panes' processes
 /// (and their live-session daemons) and follow a pane through a swap or a promotion.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent session flags (restored, ended, scratch shown, flagged), each its own state"
+)]
 pub struct Session {
     /// Resolved profiles belong to the pane, not to the current app-wide default.
     pub shell_profile: Option<crate::shell_profiles::ShellProfile>,
@@ -253,6 +257,9 @@ pub struct Session {
     /// Whether a restore rebuilt the session rather than a fresh create; gates re-running the creation command.
     /// Never persisted.
     pub was_restored: bool,
+    /// A headless origin's session left with no live pane after its live session was lost, rather than its shell
+    /// exiting: it stays in the catalog, its panes gone, until `session.close` removes it. Persisted.
+    pub ended: bool,
     /// Whether the scratch terminal is shown. Ephemeral.
     pub scratch_active: bool,
     /// What the next scratch terminal runs instead of a login shell (`session.scratch --command`); the frontend takes
@@ -364,6 +371,7 @@ impl Session {
             split_launch: PaneLaunch::default(),
             font_size: None,
             was_restored: false,
+            ended: false,
             scratch_active: false,
             scratch_command: None,
             shell_profile: None,

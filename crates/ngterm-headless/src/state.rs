@@ -282,6 +282,7 @@ impl HeadlessState {
                 Report::Pane(report) => self.core.report_pane(session, token, &report),
                 Report::Notification { title, body } => self.core.terminal_notification(session, token, &title, &body),
                 Report::Exited => self.core.pane_exited(session, token),
+                Report::Lost => self.core.pane_lost(session, token),
                 Report::Held => self.core.pane_held(session, token),
             };
         }

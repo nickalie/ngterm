@@ -112,6 +112,7 @@ fn new(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     super::headless::refuse_wait(core, SessionCmd::CompanionNew, args.wait)?;
     let home = core.library().home().to_owned();
     let (store, id) = session_store(core, target, args.window.as_deref())?;
+    super::headless::refuse_ended(store.session(id))?;
     let companion = store
         .add_companion(id, options, &home)
         .map_err(|refusal| match refusal {

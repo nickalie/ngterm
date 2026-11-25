@@ -3,11 +3,14 @@ its connection as a stream of the snapshot and then each change, a structural co
 once and answers a receipt, and `catalog.op` reads those receipts and fences an id it has not seen. An app with
 windows refuses all of it (test_remote_window.py)."""
 
+import os
+import signal
 import time
 
 import pytest
 from agterm_conformance.client import NoResponse
 from agterm_conformance.match import assert_error, assert_ok, find_session
+from agterm_conformance.impls import base
 from agterm_conformance.plugin import Ctl
 
 pytestmark = [
@@ -132,4 +135,41 @@ def test_a_lookup_fences_an_unseen_id_and_a_changed_target_is_refused(remote_ori
     assert_error(stale, "the session's panes changed; take the catalog again")
     assert stale.result["receipt"]["outcome"] == "refused", stale.raw
     assert find_session(origin.tree(), sid).get("hasSplit") is not True
+    assert_ok(origin.request("session.close", sid))
+
+
+def _session_servers(instance):
+    """The pids of the session servers of `instance`'s live namespace."""
+    server = instance.vocabulary.server
+    return [
+        pid for pid, name, _, words in base._processes()
+        if base.program_name(name) == server and base.serves_namespace(words, instance.live_dir, server)
+    ]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="kills the session server with SIGKILL")
+@pytest.mark.covers("catalog.subscribe", "session.new", "session.split", "field:tree.session.ended",
+                    streams=("catalog.subscribe",))
+def test_a_session_whose_live_session_is_lost_stays_ended(remote_origin):
+    """Upstream's `aLostLastPaneLeavesTheSessionEnded` and `anEndedSessionIsSkippedAndCannotGrowASplit`: a session
+    whose last pane's live session is lost, not ended by its shell, stays in the tree and the catalog marked ended with
+    no pane, refuses a split, and leaves with its close. Here the instance's session server dies with its sessions."""
+    origin = Ctl(remote_origin.instance)
+    sid = assert_ok(origin.request("session.new"))["id"]
+    deadline = time.monotonic() + 30
+    while not (servers := _session_servers(remote_origin.instance)) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert servers, "no session server runs the origin's sessions"
+    for pid in servers:
+        os.kill(pid, signal.SIGKILL)
+    deadline = time.monotonic() + 30
+    while not find_session(origin.tree(), sid).get("ended") and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert find_session(origin.tree(), sid).get("ended") is True
+    with origin.stream("catalog.subscribe") as stream:
+        assert stream.reply.ok, stream.reply.raw
+        stream.send({"kind": "hello", "hello": {"version": 1}})
+        entry = _entry(_frame(stream, "snapshot")["snapshot"], sid)
+        assert entry["lifecycle"] == "ended" and entry["panes"] == [], entry
+    assert_error(origin.request("session.split", sid, mode="on"), "session has ended")
     assert_ok(origin.request("session.close", sid))

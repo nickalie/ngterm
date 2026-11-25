@@ -413,3 +413,26 @@ fn a_stalled_stream_is_closed_and_the_others_keep_their_deltas() {
     assert!(!healthy.shut.get());
     assert_eq!(healthy.deltas().len(), 1);
 }
+
+/// Upstream's `catalogWorkspaces`: an ended session stays in the catalog marked ended and lists no pane.
+#[test]
+fn an_ended_session_is_published_ended_with_no_pane() {
+    let mut fixture = served(0);
+    let session = fixture.sessions[0];
+    let stream = subscribed(&mut fixture, false);
+    assert!(fixture.store_mut().unwrap().mark_session_ended(session));
+    let _ = fixture.core.commit();
+    let changed: Vec<_> = stream
+        .deltas()
+        .into_iter()
+        .filter_map(|(_, change)| match change {
+            CatalogChange::SessionChanged(fields) => Some(fields.lifecycle),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(changed, [frames::Lifecycle::Ended]);
+    let late = subscribed(&mut fixture, false);
+    let ended = entry(&late.snapshot(), session);
+    assert_eq!(ended.fields.lifecycle, frames::Lifecycle::Ended);
+    assert!(ended.panes.is_empty());
+}
