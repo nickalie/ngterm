@@ -8,6 +8,7 @@ and every forward takes a port of its own.
 
 A top-level page session (`session.page`) of the origin attaches as a top-level row with its group (#930)."""
 
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlsplit
 
@@ -44,9 +45,12 @@ def _origin_session(origin):
     return sid
 
 
-def _attach(viewer, host, sid):
-    """`live attach HOST ID` on the viewer: the local row's id, once its pane reads back."""
+def _attach(viewer, host, sid, rows=None):
+    """`live attach HOST ID` on the viewer: the local row's id, once its pane reads back. `rows` gets the id before the
+    wait, so that a caller can close a row whose pane never reads back."""
     local = assert_ok(viewer.request("live.attach", sid, host=host))["id"]
+    if rows is not None:
+        rows.append(local)
     viewer.wait_tree(lambda tree: find_session(tree, local).get("realized"))
     return local
 
@@ -323,14 +327,22 @@ DIFF = """\
 """
 
 
+@contextmanager
 def _presented(origin, viewer, host):
-    """An origin session whose pane follows `viewer`, which attached it: `(origin id, the viewer's row)`."""
+    """An origin session whose pane follows `viewer`, which attached it: `(origin id, the viewer's open rows)`, the
+    first row the attached one. All close at the end, also when the attach or the wait for the lead fails."""
     before = set(session_ids(origin.tree()))
     sid = _origin_session(origin)
-    assert_ok(origin.request("session.select", sorted(before)[0]))
-    local = _attach(viewer, host, sid)
-    origin.wait_tree(lambda tree: _follows(tree, sid))
-    return sid, local
+    rows = []
+    try:
+        assert_ok(origin.request("session.select", sorted(before)[0]))
+        _attach(viewer, host, sid, rows)
+        origin.wait_tree(lambda tree: _follows(tree, sid))
+        yield sid, rows
+    finally:
+        for row in rows:
+            assert_ok(viewer.request("session.close", row))
+        assert_ok(origin.request("session.close", sid))
 
 
 def _replica(viewer, local, expected):
@@ -360,8 +372,8 @@ def test_a_diff_page_on_the_presenting_machine_steps_between_its_changes_for_the
     """`session.overlay.changes` on the origin steps the diff page another machine presents, answers with that
     machine's count, and the origin's tree shows the change it reached right after (#978)."""
     origin = Ctl(remote_origin.instance)
-    sid, local = _presented(origin, remote_viewer, remote_origin.host)
-    try:
+    with _presented(origin, remote_viewer, remote_origin.host) as (sid, rows):
+        local = rows[0]
         diff = origin.instance.root / "remote-change.diff"
         diff.write_text(DIFF)
         assert_ok(origin.request("session.overlay.open", sid, textFile=str(diff)))
@@ -371,9 +383,6 @@ def test_a_diff_page_on_the_presenting_machine_steps_between_its_changes_for_the
         assert assert_ok(origin.request("session.overlay.changes", sid, to="next")) == {"id": sid, "text": "2 of 2"}
         assert find_session(origin.tree(), sid)["htmlOverlays"][0]["text"]["changes"] == {"count": 2, "current": 2}
         assert assert_ok(origin.request("session.overlay.changes", sid, to="prev")) == {"id": sid, "text": "1 of 2"}
-    finally:
-        assert_ok(remote_viewer.request("session.close", local))
-        assert_ok(origin.request("session.close", sid))
 
 
 @pytest.mark.since("0.42.1")
@@ -391,8 +400,8 @@ def test_text_actions_on_a_presenters_replica_answer_as_on_a_page_of_its_own(rem
     refused as on a plain text page of its own (#978)."""
     origin = Ctl(remote_origin.instance)
     viewer = remote_viewer
-    sid, local = _presented(origin, viewer, remote_origin.host)
-    try:
+    with _presented(origin, viewer, remote_origin.host) as (sid, rows):
+        local = rows[0]
         log = origin.instance.root / "replica-app.log"
         log.write_text("one\ntwo\nthree\n")
         assert_ok(origin.request("session.overlay.open", sid, textFile=str(log), followFile=True, tail=50))
@@ -413,9 +422,6 @@ def test_text_actions_on_a_presenters_replica_answer_as_on_a_page_of_its_own(rem
         assert_ok(origin.request("session.overlay.open", sid, textFile=str(plain)))
         _replica(viewer, local, {"file": str(plain)})
         assert_error(viewer.request("session.overlay.follow", local, mode="on"), "no log page")
-    finally:
-        assert_ok(viewer.request("session.close", local))
-        assert_ok(origin.request("session.close", sid))
 
 
 @pytest.mark.since("0.42.1")
@@ -427,24 +433,16 @@ def test_a_log_page_offered_again_to_a_presenter_keeps_its_following_query_and_w
     there with the following, the query and the wrap it had (#978)."""
     origin = Ctl(remote_origin.instance)
     viewer = remote_viewer
-    sid, local = _presented(origin, viewer, remote_origin.host)
-    again = None
-    try:
+    with _presented(origin, viewer, remote_origin.host) as (sid, rows):
         log = origin.instance.root / "offered-app.log"
         log.write_text("one\ntwo\nthree\n")
         assert_ok(origin.request("session.overlay.open", sid, textFile=str(log), followFile=True, tail=50))
-        _replica(viewer, local, {"following": True})
+        _replica(viewer, rows[0], {"following": True})
         assert assert_ok(origin.request("session.overlay.follow", sid, mode="off")) == {"id": sid, "text": "paused"}
         assert assert_ok(origin.request("session.overlay.wrap", sid, mode="on")) == {"id": sid, "text": "wrapped"}
         assert_ok(origin.request("session.overlay.search", sid, text="two"))
 
-        assert_ok(viewer.request("session.close", local))
-        local = None
-        again = _attach(viewer, remote_origin.host, sid)
+        assert_ok(viewer.request("session.close", rows.pop()))
+        again = _attach(viewer, remote_origin.host, sid, rows)
         page = _replica(viewer, again, {"following": False, "wrap": True})
         assert page["text"]["search"]["query"] == "two", page
-    finally:
-        for row in (local, again):
-            if row is not None:
-                assert_ok(viewer.request("session.close", row))
-        assert_ok(origin.request("session.close", sid))
