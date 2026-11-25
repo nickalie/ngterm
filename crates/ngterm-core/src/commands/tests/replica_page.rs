@@ -2322,7 +2322,8 @@ fn a_panicking_text_step_answers_the_origin_and_runs_the_queue_behind_it() {
     let command =
         serde_json::from_value(json!({"page": ORIGIN, "seq": 1, "action": "changes", "step": "next"})).unwrap();
     let panics: crate::dispatch::Resume = Box::new(|_| std::panic::resume_unwind(Box::new(())));
-    let cmd = ngterm_proto::Command::Session(SessionCmd::OverlayChanges);
+    let action = crate::remote::remote_text::TextPageAction::of(&command).unwrap();
+    let cmd = crate::remote::replica_page::text_action_command(&action);
     let (_, step) =
         crate::remote::replica_page::text_step(replica.local(), replica.id(), command, cmd, Duration::ZERO, panics);
     let step = Dispatched::Pending {
@@ -2345,26 +2346,62 @@ fn a_panicking_text_step_answers_the_origin_and_runs_the_queue_behind_it() {
     assert!(replica.session().overlay.page().unwrap().text_wrap);
 }
 
-/// Each part of an origin text action, its first one included, answers a panic as a panicking handler does, named by
-/// the action's own control command, and passes any other answer through.
+/// A text action whose first part panics answers the origin `ok:false` named by its own control command, and the
+/// actions queued behind it still run.
 #[test]
-fn a_panicking_part_of_a_text_action_answers_its_own_command_as_panicked() {
-    use crate::commands::ToggleMode;
-    use crate::remote::remote_text::TextPageAction;
-    use crate::remote::replica_page::{guarded, text_action_command};
-    let cmd = text_action_command(&TextPageAction::Wrap(ToggleMode::On));
-    let panicked = guarded(cmd, || std::panic::resume_unwind(Box::new(())));
-    let Dispatched::Done(response) = panicked else {
-        panic!("a panic answers at once");
-    };
+fn a_text_action_whose_first_part_panics_answers_the_origin_and_runs_the_queue_behind_it() {
+    let mut replica = Replica::new();
+    replica.request(text_page("/src/a.diff", None));
+    text_command(&mut replica, 1, &json!({"action": "changes", "step": "next"}));
+    replica.viewer.fixture.core.remote.viewer.pages.panic_next_text_action = true;
+    text_command(&mut replica, 2, &json!({"action": "search", "query": "x"}));
+    text_command(&mut replica, 3, &json!({"action": "wrap", "toggle": "on"}));
+    answer_change_steps(&replica, TextChanges { count: 1, current: 1 });
+    run_text_steps(&mut replica);
+    let answered = results(&replica);
     assert_eq!(
-        (response.ok, response.error.as_deref()),
-        (false, Some("internal error handling session.overlay.wrap"))
+        answered
+            .iter()
+            .map(|result| (result["seq"].clone(), result["ok"].clone()))
+            .collect::<Vec<_>>(),
+        [
+            (json!(1), json!(true)),
+            (json!(2), json!(false)),
+            (json!(3), json!(true))
+        ]
     );
-    let passed = guarded(cmd, || {
-        Dispatched::done(Ok(ngterm_proto::result::ControlResult::default()))
+    assert_eq!(answered[1]["error"], "internal error handling session.overlay.search");
+    assert!(replica.session().overlay.page().unwrap().text_wrap);
+}
+
+/// Each origin text action is named by the control command it runs here.
+#[test]
+fn each_text_action_is_named_by_its_own_control_command() {
+    use crate::remote::remote_text::TextPageAction;
+    let named = [
+        json!({"action": "follow", "toggle": "on"}),
+        json!({"action": "wrap", "toggle": "on"}),
+        json!({"action": "search", "query": "x"}),
+        json!({"action": "changes", "step": "next"}),
+    ]
+    .map(|fields| {
+        let mut command = json!({"page": ORIGIN, "seq": 1});
+        command
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let action = TextPageAction::of(&serde_json::from_value(command).unwrap()).unwrap();
+        crate::remote::replica_page::text_action_command(&action).to_string()
     });
-    assert!(matches!(passed, Dispatched::Done(response) if response.ok));
+    assert_eq!(
+        named,
+        [
+            "session.overlay.follow",
+            "session.overlay.wrap",
+            "session.overlay.search",
+            "session.overlay.changes"
+        ]
+    );
 }
 
 type Tailed = Rc<RefCell<Option<Result<Option<crate::bounded_file::TailRead>, ChannelFailure>>>>;

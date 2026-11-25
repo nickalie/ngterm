@@ -302,6 +302,9 @@ pub(crate) struct ReplicaPages {
     launches: u64,
     /// The steps of origin text actions that wait on the page's renderer, for the frontend's main loop.
     text_steps: Vec<(Duration, Resume)>,
+    /// Makes the first part of the next origin text action panic, for the tests of its answer.
+    #[cfg(test)]
+    pub(crate) panic_next_text_action: bool,
 }
 
 impl ReplicaPages {
@@ -1018,7 +1021,14 @@ impl Core {
                 continue;
             };
             let cmd = text_action_command(&action);
-            match guarded(cmd, || local_text_action(self, session, pane, action)) {
+            let first = || {
+                #[cfg(test)]
+                if std::mem::take(&mut self.remote.viewer.pages.panic_next_text_action) {
+                    panic::resume_unwind(Box::new(()));
+                }
+                local_text_action(self, session, pane, action)
+            };
+            match guarded(cmd, first) {
                 Dispatched::Done(response) => self.answer_text_action(local, session, &command, &response),
                 Dispatched::Pending { after, resume } => {
                     let step = text_step(local, session, command, cmd, after, resume);
