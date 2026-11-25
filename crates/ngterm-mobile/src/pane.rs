@@ -159,7 +159,7 @@ pub(crate) fn config(size: GridSize, wake: Wake) -> PaneConfig {
     config.kitty_image_limit = 0;
     // keys and pastes reach the origin's program, not a pseudoconsole on this device
     config.legacy_keys = false;
-    config.paste_through_bridge = true;
+    config.bridge_osc_input = true;
     config.wake = Some(wake);
     config
 }

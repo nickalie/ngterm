@@ -141,8 +141,10 @@ pub(crate) struct Peer {
     pub nonce: Option<String>,
     pub(crate) pastes: VecDeque<(String, Vec<crate::ClipboardContent>, Instant)>,
     pub(crate) next_id: u64,
-    /// [`crate::PaneConfig::paste_through_bridge`].
-    pub(crate) paste_through_bridge: bool,
+    /// [`crate::PaneConfig::bridge_osc_input`].
+    pub(crate) osc_input: bool,
+    /// The origin reads envelopes framed as an APC ([`Message::ApcInput`]), which a pseudoconsole passes.
+    pub(crate) apc_input: bool,
 }
 #[derive(Clone, Copy)]
 pub(crate) struct PasteOptions<'a> {
@@ -156,8 +158,39 @@ impl Peer {
     pub(crate) fn expecting(config: &crate::PaneConfig) -> Self {
         Self {
             expected_nonce: config.attach_bridge.clone(),
-            paste_through_bridge: config.paste_through_bridge,
+            osc_input: config.bridge_osc_input,
             ..Self::default()
+        }
+    }
+
+    /// Takes the connection's handshake (its Hello, then whether the origin reads APC envelopes); whether the envelope
+    /// is another message of the connection.
+    fn handshake(&mut self, nonce: &str, message: &Message) -> bool {
+        if self.expected_nonce.as_deref() != Some(nonce) {
+            return false;
+        }
+        match message {
+            Message::Hello => {
+                self.pastes.clear();
+                self.nonce = Some(nonce.to_owned());
+                self.apc_input = false;
+                false
+            }
+            _ if self.nonce.as_deref() != Some(nonce) => false,
+            Message::ApcInput => {
+                self.apc_input = true;
+                false
+            }
+            _ => true,
+        }
+    }
+
+    /// An envelope as the origin's input reads it: an APC when the origin takes one, else the OSC.
+    fn encode(apc_input: bool, envelope: &Envelope) -> Vec<u8> {
+        if apc_input {
+            envelope.encode_apc()
+        } else {
+            envelope.encode()
         }
     }
 
@@ -173,7 +206,7 @@ impl Peer {
             allow_unsafe,
             lazy,
         } = options;
-        let Some(nonce) = self.nonce.clone().filter(|_| self.paste_through_bridge) else {
+        let Some(nonce) = self.nonce.clone().filter(|_| self.apc_input || self.osc_input) else {
             return Ok(false);
         };
         self.next_id += 1;
@@ -186,7 +219,7 @@ impl Peer {
         } else {
             None
         };
-        let bytes = Envelope {
+        let envelope = Envelope {
             version: VERSION,
             nonce,
             message: Message::Paste(wire::ClipboardPaste {
@@ -206,8 +239,8 @@ impl Peer {
                 selection: selection.into(),
                 allow_unsafe,
             }),
-        }
-        .encode();
+        };
+        let bytes = Self::encode(self.apc_input, &envelope);
         if bytes.len() > ngterm_core::attach_bridge::LIMIT {
             return Err(crate::PaneError::Backpressure);
         }
@@ -273,17 +306,10 @@ impl Worker {
             .bridge
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if peer.expected_nonce.as_ref() != Some(&envelope.nonce) {
+        if !peer.handshake(&envelope.nonce, &envelope.message) {
             return true;
         }
-        if matches!(envelope.message, Message::Hello) {
-            peer.pastes.clear();
-            peer.nonce = Some(envelope.nonce);
-            return true;
-        }
-        if peer.nonce.as_ref() != Some(&envelope.nonce) {
-            return true;
-        }
+        let apc_input = peer.apc_input;
         let (id, epoch, request) = match envelope.message {
             Message::Request { id, epoch, request } => (id, epoch, request),
             Message::Role(report) => {
@@ -322,7 +348,7 @@ impl Worker {
             nonce: envelope.nonce,
             message: Message::Reply { id, epoch, reply },
         };
-        let bytes = envelope.encode();
+        let bytes = Peer::encode(apc_input, &envelope);
         let status = if bytes.len() > ngterm_core::attach_bridge::LIMIT {
             Some(wire::ClipboardStatus::InvalidData)
         } else if self.shared.bridge_input(&bytes).is_err() {
@@ -345,7 +371,7 @@ impl Worker {
                 },
             };
             envelope.message = Message::Reply { id, epoch, reply };
-            self.shared.push_reply(&envelope.encode());
+            self.shared.push_reply(&Peer::encode(apc_input, &envelope));
         }
         true
     }
