@@ -52,14 +52,9 @@ internal final class ExportKeyTests: XCTestCase {
         return app
     }
 
-    // swipes Settings' form up until `element` is on screen
     @MainActor
     private func scroll(to element: XCUIElement, in app: XCUIApplication) {
-        let form = app.collectionViews["settings-form"]
-        for _ in 0..<Self.swipes where !(element.exists && element.isHittable) {
-            form.swipeUp()
-        }
-        XCTAssertTrue(element.isHittable, "\(element) never came into view")
+        FormScroll.scroll(to: element, in: app.collectionViews["settings-form"], swipes: Self.swipes)
     }
 
     // Settings' Export private key of the app's one key, tapped

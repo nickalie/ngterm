@@ -211,18 +211,9 @@ internal final class NotificationsOnAMachineTests: XCTestCase {
         FakeApp.expectGone(app.navigationBars["Settings"], "Settings")
     }
 
-    // swipes the form until `element` is on screen (SettingsTests')
     @MainActor
     private func scroll(to element: XCUIElement, in app: XCUIApplication) {
-        let form = app.collectionViews["settings-form"]
-        for _ in 0..<12 where !(element.exists && element.isHittable) {
-            if element.exists, element.frame.midY < form.frame.midY {
-                form.swipeDown()
-            } else {
-                form.swipeUp()
-            }
-        }
-        XCTAssertTrue(element.isHittable, "\(element) never came into view")
+        FormScroll.scroll(to: element, in: app.collectionViews["settings-form"], swipes: 12)
     }
 
     // presses the switch in `row` until it reads `value` (SettingsTests' flip says why a press)
