@@ -728,6 +728,56 @@ fn closing_a_remote_split_swapped_here_closes_the_same_pane_on_the_origin() {
 }
 
 #[test]
+fn a_swap_made_here_before_the_new_split_is_realized_survives_the_cached_layout() {
+    let target = Uuid::from_u128(2);
+    let mut remote = Remote::new();
+    remote.script([
+        result(&json!({"ok": true})),
+        Remote::listing(&[remote.origin_pane, target]),
+    ]);
+    let split_surface = |realized| Box::new(FakeSurface::new(wire(remote.pane)).with_realized(realized));
+    let unrealized = split_surface(false);
+    let realized = split_surface(true);
+    let session = remote.fixture.store_mut().unwrap().session_mut(remote.row).unwrap();
+    let primary = session.pane_identity;
+    session.split_surface.replace(unrealized);
+    remote.fixture.core.apply_remote_layout(
+        &PresentationLayout {
+            panes: vec![remote.origin_pane, target],
+            primary: remote.origin_pane,
+            axis: Some("vertical".to_owned()),
+            shown: true,
+        },
+        remote.row,
+    );
+    remote.request();
+    remote.spawn();
+    let session = remote.fixture.store_mut().unwrap().session_mut(remote.row).unwrap();
+    session.split_surface.replace(realized);
+    let reply = remote
+        .fixture
+        .session(SessionCmd::Swap, Some(&wire(remote.row)), args(|_| {}));
+    assert!(reply.ok);
+    remote.fixture.core.remote_tick(Instant::now());
+    let session = remote.fixture.store().session(remote.row).unwrap();
+    assert_eq!(session.pane_identity, remote.pane);
+    assert_eq!(session.split_pane_identity, Some(primary));
+    remote.runner.calls.lock().unwrap().clear();
+    remote.script([result(&json!({"ok": true})), result(&json!({"ok": true}))]);
+    let reply = remote
+        .fixture
+        .session(SessionCmd::SplitClose, Some(&wire(remote.row)), args(|_| {}));
+    assert!(reply.ok);
+    assert_eq!(
+        remote.origin_lines(2),
+        [
+            origin_line(&["session", "swap", "--target", "origin-session"]),
+            origin_line(&["session", "split", "close", "--target", "origin-session"]),
+        ]
+    );
+}
+
+#[test]
 fn showing_a_hidden_remote_split_shows_it_on_the_origin_with_its_axis() {
     let mut remote = Remote::attached(Uuid::from_u128(2));
     remote

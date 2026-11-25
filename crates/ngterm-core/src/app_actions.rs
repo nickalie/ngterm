@@ -221,7 +221,7 @@ impl Core {
             (PaletteCommand::ClearFlagged, _) => store.clear_flags(),
             (PaletteCommand::ClearFocus, _) => store.clear_focus(),
             (PaletteCommand::SwapPanes, Some(session)) => {
-                if store.swap_panes(session).is_ok() {
+                if self.swap_panes_here(session).is_ok() {
                     self.request_pane_focus(session);
                 }
             }

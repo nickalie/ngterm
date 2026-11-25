@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::frames::PresentationLayout;
 use crate::Core;
-use crate::model::{AppStore, Session, SplitAxis, StatusPane};
+use crate::model::{AppStore, Session, SplitAxis, StatusPane, SwapRefusal};
 
 fn realized(slot: &crate::model::SurfaceSlot) -> bool {
     slot.get().is_some_and(Surface::is_realized)
@@ -130,6 +130,21 @@ fn replicas_follow(session: &Session, layout: &PresentationLayout) -> Option<boo
 }
 
 impl Core {
+    /// Swaps session `id`'s panes for the user. A layout cached for a pane still to be realized is older than this
+    /// swap, so it is dropped: applied later, it would swap the panes back.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, with nothing changed.
+    pub(crate) fn swap_panes_here(&mut self, id: Uuid) -> Result<(), SwapRefusal> {
+        self.library_mut()
+            .store_for_session_mut(id)
+            .ok_or(SwapRefusal::NoSession)?
+            .swap_panes(id)?;
+        self.remote.viewer.split_layouts.retain(|_, session| *session != id);
+        Ok(())
+    }
+
     /// Applies the origin's layout to session `id`'s replicas and closes each one the origin removed (upstream's
     /// `agtermApp.applyRemoteLayout`).
     pub(crate) fn apply_remote_layout(&mut self, layout: &PresentationLayout, id: Uuid) {

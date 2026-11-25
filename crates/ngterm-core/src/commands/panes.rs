@@ -251,11 +251,7 @@ pub(crate) fn begin_swap(core: &mut Core, request: &Request) -> Dispatched {
 }
 
 fn swap_step(core: &mut Core, id: Uuid, attempt: u32) -> Dispatched {
-    let refusal = match core.library_mut().store_for_session_mut(id) {
-        Some(store) => store.swap_panes(id).err(),
-        None => Some(SwapRefusal::NoSession),
-    };
-    match refusal {
+    match core.swap_panes_here(id).err() {
         None => {
             // the terminals traded slots, so a delivered banner's pane identity names the other one now: withdraw them
             // (upstream's swap handler calls `clearDelivered`); the badge stays
