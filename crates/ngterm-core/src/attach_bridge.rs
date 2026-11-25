@@ -1,6 +1,7 @@
 //! Private attach-bridge envelopes on designated attach panes: clipboard delegation, and the role reports of an attach
 //! from a Windows origin. The attach relay suppresses this
-//! reserved OSC on every program-output path before injecting its own envelopes.
+//! reserved OSC on every program-output path before injecting its own envelopes. A viewer frames its envelopes to the
+//! origin as an APC instead once the origin says it reads one ([`Message::ApcInput`]); a viewer never reads an APC one.
 use crate::clipboard_wire::{ClipboardPaste, DelegatedReply, DelegatedRequest};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,9 @@ pub const VERSION: u32 = 1;
 pub const VARIABLE: &str = "NGTERM_ATTACH_BRIDGE";
 pub const PREFIX: &[u8] = b"\x1b]777;ngterm-attach;";
 pub const BODY_PREFIX: &[u8] = b"777;ngterm-attach;";
+/// The same envelope framed as an APC, as a viewer sends one to an origin that reads it ([`Message::ApcInput`]): a
+/// Windows pseudoconsole drops every OSC from its input but passes an APC.
+pub const APC_PREFIX: &[u8] = b"\x1b_777;ngterm-attach;";
 pub const LIMIT: usize = 64 * 1024 * 1024;
 /// Raw contents budget after two base64 layers, reserving space for metadata and MIME names.
 pub const DATA_LIMIT: usize = (LIMIT - 64 * 1024) * 9 / 16;
@@ -70,14 +74,25 @@ pub enum Message {
     /// A managed attach's role report, the text of its role title: `ConPTY` sends only the last title of a frame, so a
     /// title the snapshot's own title follows never reaches a viewer of a Windows origin.
     Role(String),
+    /// The origin's attach client also reads the viewer's envelopes framed as an APC ([`APC_PREFIX`]). It follows the
+    /// Hello; a viewer too old to know it drops it as an envelope it cannot decode, and keeps the OSC.
+    ApcInput,
 }
 impl Envelope {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
+        self.framed(PREFIX)
+    }
+    /// The envelope framed as an APC ([`APC_PREFIX`]); the body is the OSC's, so [`Envelope::decode`] reads both.
+    #[must_use]
+    pub fn encode_apc(&self) -> Vec<u8> {
+        self.framed(APC_PREFIX)
+    }
+    fn framed(&self, prefix: &[u8]) -> Vec<u8> {
         let Ok(json) = serde_json::to_vec(self) else {
             return Vec::new();
         };
-        [PREFIX, STANDARD.encode(json).as_bytes(), b"\x1b\\"].concat()
+        [prefix, STANDARD.encode(json).as_bytes(), b"\x1b\\"].concat()
     }
     #[must_use]
     pub fn decode(body: &[u8]) -> Option<Self> {
@@ -311,6 +326,10 @@ mod tests {
             let mut decoder = Decoder::default();
             assert!(matches!(decoder.feed(&bytes).as_slice(), [Part::Bytes(bytes)] if bytes == b"after"));
         }
+        let unknown = STANDARD.encode(br#"{"version":1,"nonce":"connection","message":"FromANewerPeer"}"#);
+        let bytes = [PREFIX, unknown.as_bytes(), b"\x1b\\after"].concat();
+        let mut decoder = Decoder::default();
+        assert!(matches!(decoder.feed(&bytes).as_slice(), [Part::Bytes(bytes)] if bytes == b"after"));
         let mut decoder = Decoder::default();
         let unsupported = Envelope {
             version: VERSION + 1,
@@ -318,5 +337,20 @@ mod tests {
             message: Message::Hello,
         };
         assert!(decoder.feed(&unsupported.encode()).is_empty());
+    }
+
+    #[test]
+    fn an_apc_envelope_has_the_osc_body_and_the_viewers_decoder_leaves_it_as_bytes() {
+        let envelope = Envelope {
+            version: VERSION,
+            nonce: "connection".into(),
+            message: Message::ApcInput,
+        };
+        let apc = envelope.encode_apc();
+        assert!(apc.starts_with(APC_PREFIX) && apc.ends_with(b"\x1b\\"));
+        assert_eq!(apc[2..], envelope.encode()[2..]);
+        assert_eq!(Envelope::decode(&apc[2..apc.len() - 2]), Some(envelope));
+        let mut decoder = Decoder::default();
+        assert!(matches!(decoder.feed(&apc).as_slice(), [Part::Bytes(bytes)] if *bytes == apc));
     }
 }
