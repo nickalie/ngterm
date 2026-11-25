@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     ClipboardContent, ClipboardLocation, ClipboardPermissionScope, ClipboardWriteResult, PasteSource, WriteCompletion,
 };
-use ngterm_core::attach_bridge::{Decoder, Envelope, Message, PREFIX, Part, VERSION};
+use ngterm_core::attach_bridge::{APC_PREFIX, Decoder, Envelope, Message, PREFIX, Part, VERSION};
 use ngterm_core::clipboard_wire::{ClipboardStatus, DelegatedReply, DelegatedRequest};
 
 fn envelope(nonce: &str, message: Message) -> Envelope {
@@ -13,15 +13,21 @@ fn envelope(nonce: &str, message: Message) -> Envelope {
     }
 }
 fn peer() -> Fixture {
-    peer_pasting(true)
+    peer_framing(true, false)
 }
-fn peer_pasting(paste_through_bridge: bool) -> Fixture {
+/// A viewer whose input carries an OSC or not (`osc_input`), of an origin that reads APC envelopes or not.
+fn peer_framing(osc_input: bool, apc_origin: bool) -> Fixture {
     let fixture = stream(PaneConfig {
         attach_bridge: Some("connection".into()),
-        paste_through_bridge,
+        bridge_osc_input: osc_input,
         ..PaneConfig::new(SIZE)
     });
     fixture.feed.deliver(&envelope("connection", Message::Hello).encode());
+    if apc_origin {
+        fixture
+            .feed
+            .deliver(&envelope("connection", Message::ApcInput).encode());
+    }
     fixture.feed.deliver(b"ready");
     fixture.screen_until("ready");
     fixture
@@ -41,6 +47,24 @@ fn outgoing(fixture: &Fixture) -> Envelope {
             if let Part::Envelope(envelope) = part {
                 return envelope;
             }
+        }
+    }
+}
+/// The next envelope the viewer sends framed as an APC, with no OSC envelope before it.
+fn outgoing_apc(fixture: &Fixture) -> Envelope {
+    let deadline = Instant::now() + DEADLINE;
+    let mut sent = Vec::new();
+    loop {
+        if let Some(start) = sent.windows(APC_PREFIX.len()).position(|window| window == APC_PREFIX)
+            && let Some(end) = sent[start..].windows(2).position(|window| window == b"\x1b\\")
+        {
+            assert!(!sent.windows(PREFIX.len()).any(|window| window == PREFIX), "{sent:?}");
+            return Envelope::decode(&sent[start + 2..start + end]).unwrap();
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "no APC envelope: {sent:?}");
+        if let Ok(Some(Outgoing::Bytes(bytes))) = fixture.out.next(Some(left)) {
+            sent.extend(bytes);
         }
     }
 }
@@ -354,9 +378,9 @@ fn a_bridge_role_is_only_a_role_report_of_the_bridges_connection() {
 }
 
 #[test]
-fn a_viewer_that_pastes_past_the_bridge_sends_the_program_plain_bracketed_pastes() {
-    assert_eq!(PaneConfig::new(SIZE).paste_through_bridge, !cfg!(windows));
-    let fixture = peer_pasting(false);
+fn a_viewer_without_osc_input_of_an_origin_without_apc_sends_plain_bracketed_pastes() {
+    assert_eq!(PaneConfig::new(SIZE).bridge_osc_input, !cfg!(windows));
+    let fixture = peer_framing(false, false);
     fixture.feed.deliver(b"\x1b[?2004h\x1b[5n");
     fixture.sent_until(b"\x1b[0n");
     for (text, source) in [
@@ -388,6 +412,139 @@ fn a_viewer_that_pastes_through_the_bridge_sends_the_paste_in_an_envelope() {
         panic!("expected paste")
     };
     assert_eq!(paste.contents[0].data, b"clipboard");
+}
+
+#[test]
+fn a_viewer_of_an_origin_that_reads_apc_frames_pastes_and_replies_as_apc() {
+    for osc_input in [false, true] {
+        let fixture = peer_framing(osc_input, true);
+        fixture.feed.deliver(b"\x1b[?2004h\x1b[5n");
+        fixture.sent_until(b"\x1b[0n");
+        fixture
+            .pane
+            .paste("clipboard", PasteSource::Clipboard, ClipboardLocation::Standard, true)
+            .unwrap();
+        let Message::Paste(paste) = outgoing_apc(&fixture).message else {
+            panic!("expected paste")
+        };
+        assert_eq!(paste.contents[0].data, b"clipboard");
+        request(&fixture, 3, clipboard_write("c", false));
+        let PaneEvent::ClipboardWrite(write) = fixture.event(|event| matches!(event, PaneEvent::ClipboardWrite(_)))
+        else {
+            unreachable!()
+        };
+        fixture.pane.answer_clipboard_write(
+            write.id,
+            WriteCompletion {
+                status: ClipboardWriteResult::Success,
+                remember: false,
+            },
+        );
+        assert!(matches!(
+            outgoing_apc(&fixture).message,
+            Message::Reply {
+                id: 3,
+                reply: DelegatedReply::ClipboardWrite {
+                    status: ClipboardStatus::Success,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn only_the_bridges_connection_turns_apc_on_and_a_new_hello_turns_it_off() {
+    let fixture = peer_framing(false, false);
+    fixture.feed.deliver(b"\x1b[?2004h");
+    fixture.feed.deliver(&envelope("forged", Message::ApcInput).encode());
+    fixture.feed.deliver(&envelope("connection", Message::Hello).encode());
+    fixture.feed.deliver(b"ready-1");
+    fixture.screen_until("ready-1");
+    fixture
+        .pane
+        .paste("first", PasteSource::Clipboard, ClipboardLocation::Standard, true)
+        .unwrap();
+    fixture.sent_until(b"\x1b[200~first\x1b[201~");
+    fixture
+        .feed
+        .deliver(&envelope("connection", Message::ApcInput).encode());
+    fixture.feed.deliver(b"ready-2");
+    fixture.screen_until("ready-2");
+    fixture
+        .pane
+        .paste("second", PasteSource::Clipboard, ClipboardLocation::Standard, true)
+        .unwrap();
+    assert!(matches!(outgoing_apc(&fixture).message, Message::Paste(_)));
+    // a reattach to an origin that does not say it reads APC
+    fixture.feed.deliver(&envelope("connection", Message::Hello).encode());
+    fixture.feed.deliver(b"ready-3");
+    fixture.screen_until("ready-3");
+    fixture
+        .pane
+        .paste("third", PasteSource::Clipboard, ClipboardLocation::Standard, true)
+        .unwrap();
+    fixture.sent_until(b"\x1b[200~third\x1b[201~");
+}
+
+#[cfg(feature = "local")]
+#[test]
+fn an_origins_delegated_clipboard_write_completes_through_the_viewers_apc_reply() {
+    use ngterm_session::attach_tty::{
+        input::{InputParser, Token},
+        owner::{Effects, Outgoing as RelayOutgoing, Relay},
+    };
+    let fixture = stream(PaneConfig {
+        attach_bridge: Some("connection".into()),
+        bridge_osc_input: false,
+        ..PaneConfig::new(SIZE)
+    });
+    let mut relay = Relay::new(None, ngterm_session::protocol::GridSize { cols: 20, rows: 4 }, None);
+    relay.enable_bridge(Some("connection".into()));
+    let now = Instant::now();
+    let mut fx = Effects::default();
+    relay.start(false, now, &mut fx);
+    relay.delegated(
+        ngterm_session::client::Delegated {
+            id: 9,
+            epoch: 8,
+            native_alias: None,
+            request: clipboard_write("c", false),
+        },
+        now,
+        &mut fx,
+    );
+    fixture.feed.deliver(&fx.stdout);
+    let PaneEvent::ClipboardWrite(write) = fixture.event(|event| matches!(event, PaneEvent::ClipboardWrite(_))) else {
+        unreachable!()
+    };
+    fixture.pane.answer_clipboard_write(
+        write.id,
+        WriteCompletion {
+            status: ClipboardWriteResult::Success,
+            remember: false,
+        },
+    );
+    let reply = outgoing_apc(&fixture);
+    // what a pseudoconsole hands the origin's attach client: the APC, as sent
+    let mut parser = InputParser::new(true);
+    let tokens = parser.feed(&reply.encode_apc());
+    let [Token::Answer(answer)] = tokens.as_slice() else {
+        panic!("{tokens:?}")
+    };
+    fx = Effects::default();
+    relay.answer(answer.clone(), now, &mut fx);
+    assert!(matches!(
+        fx.outgoing.as_slice(),
+        [RelayOutgoing::Answer(
+            _,
+            DelegatedReply::ClipboardWrite {
+                status: ClipboardStatus::Success,
+                ..
+            }
+        )]
+    ));
 }
 
 #[test]

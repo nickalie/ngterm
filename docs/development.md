@@ -738,9 +738,13 @@ of a session on a Windows origin (a desktop on any OS, Android, iOS) does the sa
 runs the attach in a ConPTY too (`ngterm_core::remote::origin::needs_legacy_keys`). A desktop viewer's overlay that
 runs a job of a Windows origin (a replica overlay) does the same, for the same reason.
 
-A Windows desktop's remote pane pastes the plain paste bytes, not the attach bridge's OSC 777 envelope
-(`PaneConfig::paste_through_bridge`): its `ngtermctl viewer-run` and ssh run in a ConPTY, which drops the envelope.
-The origin then gets no one-shot clipboard-read grant after a paste.
+A Windows desktop's remote pane runs `ngtermctl viewer-run` and ssh in a ConPTY. ConPTY drops every OSC from its
+input, the attach bridge's OSC 777 envelopes too, but passes an APC. The origin's attach client reads an envelope
+framed either way, and says so after its Hello (`Message::ApcInput`). A viewer then frames its envelopes (pastes,
+clipboard replies) as an APC. An older origin does not say so, and its viewers keep the OSC. A Windows viewer of such
+an origin pastes the plain paste bytes (`PaneConfig::bridge_osc_input`), so the origin gets no one-shot
+clipboard-read grant after a paste. Its replies still get lost: a clipboard write that the origin's program delegates
+to it waits the full 30 s.
 
 Live CMD adds an OSC 7 directory report to `PROMPT`, preserving the inherited or profile-defined prompt text.
 Replacing `PROMPT` inside CMD replaces that integration too. This reports the directory at each prompt; it does
