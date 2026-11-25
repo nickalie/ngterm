@@ -94,3 +94,21 @@ fn a_filename_paste_reports_when_the_program_has_closed_its_pty() {
     };
     assert_eq!(error, "the pane's pty is closed");
 }
+
+#[test]
+fn a_clipboard_bitmap_uploads_as_png_and_other_images_as_they_are() {
+    let pixels = image::RgbImage::from_raw(2, 1, vec![200, 40, 40, 10, 220, 30]).unwrap();
+    let mut bmp = Vec::new();
+    pixels
+        .write_to(&mut std::io::Cursor::new(&mut bmp), image::ImageFormat::Bmp)
+        .unwrap();
+    let (extension, png) = upload_form(gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Bmp, bmp));
+    assert_eq!(extension, "png");
+    let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap();
+    assert_eq!(decoded.to_rgb8(), pixels);
+
+    let jpeg = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Jpeg, vec![0xff, 0xd8, 0xff]);
+    assert_eq!(upload_form(jpeg), ("jpg", vec![0xff, 0xd8, 0xff]));
+    let broken = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Bmp, b"BM".to_vec());
+    assert_eq!(upload_form(broken), ("bmp", b"BM".to_vec()));
+}

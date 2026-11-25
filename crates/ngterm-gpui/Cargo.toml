@@ -33,7 +33,8 @@ fancy-regex.workspace = true
 futures-lite.workspace = true
 futures-util.workspace = true
 gpui-kit.workspace = true
-image.workspace = true
+# `bmp`: a Windows clipboard image (CF_DIB) is uploaded as PNG for a remote paste
+image = { workspace = true, features = ["bmp"] }
 notify.workspace = true
 # text watermarks are written as PNG files the terminals' `background-image` reads
 png.workspace = true

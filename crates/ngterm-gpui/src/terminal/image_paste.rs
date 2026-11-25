@@ -28,9 +28,10 @@ pub(super) fn start(shared: &Shared, host: &str, item: &ClipboardItem, cx: &mut 
     };
     let pane = Rc::downgrade(&pane);
     let host = host.to_owned();
-    let upload = cx
-        .background_executor()
-        .spawn(async move { ngterm_core::remote::clipboard::upload(&host, image.format.extension(), &image.bytes) });
+    let upload = cx.background_executor().spawn(async move {
+        let (extension, bytes) = upload_form(image);
+        ngterm_core::remote::clipboard::upload(&host, extension, &bytes)
+    });
     cx.spawn(async move |this, cx| {
         let result = upload.await;
         let _ = this.update(cx, |this, cx| {
@@ -50,6 +51,26 @@ pub(super) fn start(shared: &Shared, host: &str, item: &ClipboardItem, cx: &mut 
     })
     .detach();
     true
+}
+
+/// What an upload sends: a bitmap (Windows' `CF_DIB` clipboard image) as PNG, which agents read and BMP they may not;
+/// another format, or a bitmap that does not decode, as it is.
+fn upload_form(image: gpui_kit::Image) -> (&'static str, Vec<u8>) {
+    if image.format == gpui_kit::ImageFormat::Bmp
+        && let Some(png) = bmp_to_png(&image.bytes)
+    {
+        return ("png", png);
+    }
+    (image.format.extension(), image.bytes)
+}
+
+fn bmp_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Bmp).ok()?;
+    let mut png = Vec::new();
+    decoded
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some(png)
 }
 
 /// A generated path is inserted text: Kitty paste-event mode must not replace it with a clipboard request.
