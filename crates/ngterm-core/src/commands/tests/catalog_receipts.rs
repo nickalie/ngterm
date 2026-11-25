@@ -1018,6 +1018,21 @@ fn the_quit_save_fails_when_the_waiting_table_cannot_be_written() {
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
 }
 
+/// A full window write that lands ends the table's wait: the table is then written alone, so a window write that
+/// fails after it does not keep the table off the disk.
+#[test]
+fn a_landed_window_write_lets_the_waiting_table_be_written_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, file) = unsaved_receipt(dir.path());
+    assert!(core.save_windows());
+    block_window(&file);
+    assert!(core.save_waiting_operations());
+    assert_eq!(
+        on_disk(dir.path()).receipt("ws").map(|r| r.outcome.clone()),
+        Some(outcome::APPLIED.to_owned())
+    );
+}
+
 /// A table that failed alone, its windows landed, is retried alone on each commit and lands once it can be written:
 /// no commit writes the windows again for it.
 #[test]

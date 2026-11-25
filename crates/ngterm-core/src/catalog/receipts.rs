@@ -171,19 +171,29 @@ impl Core {
     /// Writes the open windows, then the table: upstream saves both in one store write, so an entry never reaches the
     /// disk before the model change it vouches for. Whether both landed.
     fn save_operations(&mut self) -> bool {
-        let windows = self
-            .persistence
-            .as_mut()
-            .is_none_or(|persistence| persistence.save_all_checked(&self.library));
+        let windows = self.save_windows();
         let Some(served) = self.catalog.served.as_mut() else {
             return false;
         };
-        served.windows_unsaved = !windows;
         if !windows {
+            served.windows_unsaved = true;
             served.unsaved = true;
             return false;
         }
         served.save()
+    }
+
+    /// Writes every open window and the index; whether all landed. A full write that landed ends the table's wait for
+    /// its windows.
+    pub(crate) fn save_windows(&mut self) -> bool {
+        let windows = self
+            .persistence
+            .as_mut()
+            .is_none_or(|persistence| persistence.save_all_checked(&self.library));
+        if let Some(served) = self.catalog.served.as_mut().filter(|_| windows) {
+            served.windows_unsaved = false;
+        }
+        windows
     }
 
     /// Records `unknown` for each abandoned operation and writes the table: its command may have changed the model, so

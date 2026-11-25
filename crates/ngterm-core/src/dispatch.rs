@@ -750,18 +750,15 @@ impl Core {
     }
 
     /// The quit path: makes every pending close final, then writes every open window and the index (upstream's
-    /// `applicationWillTerminate` save), and the catalog's operation table if it waits for its windows. Whether every
-    /// write landed.
+    /// `applicationWillTerminate` save), and the catalog's operation table if it is unsaved, after its windows when it
+    /// waits for them. Whether every write landed.
     pub fn save_all(&mut self) -> bool {
         self.cancel_all_modals();
         self.library.finalize_all_pending_closes();
         self.library.is_terminating = true;
         self.settle_all_operations();
         let _ = self.commit();
-        let windows = self
-            .persistence
-            .as_mut()
-            .is_none_or(|persistence| persistence.save_all_checked(&self.library));
+        let windows = self.save_windows();
         let operations = self.save_waiting_operations();
         windows && operations
     }
