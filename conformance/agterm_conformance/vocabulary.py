@@ -25,7 +25,7 @@ from agterm_conformance import transport
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from agterm_conformance.live_client import PipedProcess
+    from agterm_conformance.piped_process import PipedProcess
     from agterm_conformance.pty_process import PtyProcess
 
 # How long the Rust build's session server outlives its last client and session (`IDLE_GRACE`,

@@ -4,7 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from agterm_conformance.live_client import GONE_GUARD, WINDOWS_GONE_GUARD, PipedProcess, leading_client
+from agterm_conformance.live_client import GONE_GUARD, WINDOWS_GONE_GUARD, leading_client
+from agterm_conformance.piped_process import PipedProcess
 from agterm_conformance.wait import wait_until
 from agterm_conformance.pty_process import PtyProcess
 

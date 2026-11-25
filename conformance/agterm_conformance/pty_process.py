@@ -14,7 +14,7 @@ from types import TracebackType
 from typing import Self
 
 from agterm_conformance import llvm_profiles
-from agterm_conformance.live_client import KEPT_OUTPUT, STOP_TIMEOUT
+from agterm_conformance.piped_process import KEPT_OUTPUT, STOP_TIMEOUT
 
 
 class PtyProcess:
