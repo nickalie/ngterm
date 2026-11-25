@@ -47,14 +47,16 @@ impl Relay {
             return;
         }
         self.bridge_hello_sent = true;
-        fx.stdout.extend(
-            Envelope {
-                version: VERSION,
-                nonce: nonce.clone(),
-                message: Message::Hello,
-            }
-            .encode(),
-        );
+        for message in [Message::Hello, Message::ApcInput] {
+            fx.stdout.extend(
+                Envelope {
+                    version: VERSION,
+                    nonce: nonce.clone(),
+                    message,
+                }
+                .encode(),
+            );
+        }
     }
     pub(super) fn bridge_request(&mut self, nonce: String, request: Delegated, now: Instant, fx: &mut Effects) {
         if self.bridge_pending.is_some() {

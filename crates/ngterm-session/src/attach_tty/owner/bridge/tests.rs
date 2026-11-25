@@ -30,13 +30,19 @@ fn negotiation_is_immediate_and_requests_preserve_consent_without_the_native_ali
     let mut fx = Effects::default();
     relay.start(true, now, &mut fx);
     let mut decoder = ngterm_core::attach_bridge::Decoder::default();
-    assert!(matches!(
-        decoder.feed(&fx.stdout).first(),
-        Some(ngterm_core::attach_bridge::Part::Envelope(Envelope {
-            message: Message::Hello,
-            ..
-        }))
-    ));
+    let messages: Vec<_> = decoder
+        .feed(&fx.stdout)
+        .into_iter()
+        .filter_map(|part| match part {
+            ngterm_core::attach_bridge::Part::Envelope(envelope) => Some(envelope.message),
+            ngterm_core::attach_bridge::Part::Bytes(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        messages,
+        [Message::Hello, Message::ApcInput],
+        "the Hello says APC envelopes are read"
+    );
     fx = Effects::default();
     let expected = request(1).request;
     relay.delegated(request(1), now, &mut fx);

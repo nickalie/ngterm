@@ -6,13 +6,12 @@
 //!
 //! Recognized, as Ghostty and xterm send them (`ctlseqs`): DA1's answer `CSI ? … c` (the client's fence), OSC 10, 11
 //! and 12 and OSC 4 colours (`rgb:r/g/b` with 1 to 4 hex digits per channel, or `#` hex), an OSC 52 clipboard's
-//! base64, native OSC 5522 packets and private attach bridge envelopes, `CSI ? 997 ; 1|2 n` (dark or light),
-//! the cell size `CSI 6 ; h ; w t`, and Kitty graphics answers (`ESC _ G … ESC \`). Dropped: other OSC, DCS, SOS, PM
-//! and APC strings, DA2 and DA3
-//! answers (`CSI > … c`, `CSI = … c`), DSR answers and reports (`CSI … n`), DECRPM (`CSI … $ y`), the Kitty keyboard
-//! flags (`CSI ? … u`) and every other `t` report (`CSI 48 ; … t`). Keys, mouse and focus reports pass (a CPR-shaped
-//! `CSI … R` is a function key: the outer terminal is never asked for the cursor), and so does a bracketed paste,
-//! whole and unparsed, up to its end.
+//! base64, native OSC 5522 packets and private attach bridge envelopes (as an OSC or an APC), `CSI ? 997 ; 1|2 n`
+//! (dark or light), the cell size `CSI 6 ; h ; w t`, and Kitty graphics answers (`ESC _ G … ESC \`). Dropped: other
+//! OSC, DCS, SOS, PM and APC strings, DA2 and DA3 answers (`CSI > … c`, `CSI = … c`), DSR answers and reports
+//! (`CSI … n`), DECRPM (`CSI … $ y`), the Kitty keyboard flags (`CSI ? … u`) and every other `t` report
+//! (`CSI 48 ; … t`). Keys, mouse and focus reports pass (a CPR-shaped `CSI … R` is a function key: the outer terminal
+//! is never asked for the cursor), and so does a bracketed paste, whole and unparsed, up to its end.
 //!
 //! A sequence cut at the end of a read, a lone ESC included, is held for the next one; [`InputParser::flush`] gives it
 //! up once the input stays quiet, for as long as [`InputParser::held`] says it may be waiting (the attach loop's
@@ -40,7 +39,8 @@
 //! Ctrl+\ still detaches, Enter still reaches the program. Collected clipboard bytes are never replayed as keys.
 //!
 //! Native OSC 5522 packets and private attach bridge envelopes are framed once the complete prefix
-//! (`ESC ] 5522 ;` or `ESC ] 777 ; ngterm-attach ;`) arrives, including unsolicited and late packets.
+//! (`ESC ] 5522 ;`, `ESC ] 777 ; ngterm-attach ;`, or the envelope's APC `ESC _ 777 ; ngterm-attach ;`, which a
+//! Windows pseudoconsole passes where it drops the OSC) arrives, including unsolicited and late packets.
 //! Shorter prefixes remain ordinary cut sequences with the quiet timeout above. A malformed or oversized
 //! native/bridge frame produces no answer; a malformed OSC 52 frame still completes its asked read with `None`.
 //!
@@ -131,9 +131,9 @@ pub enum Held {
     Key,
     /// A CSI without a private prefix: a key's (an arrow with modifiers, a function key) or an answer's.
     Csi,
-    /// What the outer terminal's answers start with: an OSC with a number, a Kitty graphics APC (`ESC _ G`), a DCS as
-    /// a report starts (a digit, `>` or `!`), or a CSI with a `?`, `>` or `=` prefix. Typed, it is Escape or an Alt
-    /// chord followed by more keys, so it is an answer only while one is due.
+    /// What the outer terminal's answers start with: an OSC with a number, a Kitty graphics APC (`ESC _ G`) or a bridge
+    /// envelope's APC (`ESC _` and a digit), a DCS as a report starts (a digit, `>` or `!`), or a CSI with a `?`, `>` or
+    /// `=` prefix. Typed, it is Escape or an Alt chord followed by more keys, so it is an answer only while one is due.
     Answer,
 }
 
@@ -227,7 +227,7 @@ impl InputParser {
             [] | [_] => Held::Key,
             [b'[', b'?' | b'>' | b'=', ..]
             | [b']', b'0'..=b'9', ..]
-            | [b'_', b'G', ..]
+            | [b'_', b'G' | b'0'..=b'9', ..]
             | [b'P', b'0'..=b'9' | b'>' | b'!', ..] => Held::Answer,
             [b'[', ..] => Held::Csi,
             _ => Held::Key,
@@ -289,8 +289,13 @@ impl InputParser {
     }
 
     fn begin_clipboard(&mut self, bytes: &[u8]) -> Option<usize> {
-        let (content, consumed, native) = if bytes.starts_with(ngterm_core::attach_bridge::PREFIX) {
-            let prefix = ngterm_core::attach_bridge::PREFIX;
+        let bridge = [
+            ngterm_core::attach_bridge::PREFIX,
+            ngterm_core::attach_bridge::APC_PREFIX,
+        ]
+        .into_iter()
+        .find(|prefix| bytes.starts_with(prefix));
+        let (content, consumed, native) = if let Some(prefix) = bridge {
             (prefix[2..prefix.len() - 1].to_vec(), prefix.len() - 1, true)
         } else if bytes.starts_with(b"\x1b]5522;") {
             (b"5522".to_vec(), 6, true)

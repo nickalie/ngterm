@@ -131,6 +131,7 @@ fn a_cut_answer_waits_longer_and_is_dropped_while_one_is_due() {
         b"\x1b]4;17;rgb:",
         b"\x1b[?62;2",
         b"\x1b_Gi=1;O",
+        b"\x1b_777;ngterm-at",
         b"\x1bP>|gh",
     ] {
         let mut parser = InputParser::new(true);
@@ -190,6 +191,33 @@ fn a_clipboard_answer_keeps_its_framing_wherever_it_is_cut_while_one_is_due() {
     assert_eq!(parser.held(), None);
     assert_eq!(parser.feed(b"OPz\r"), [input(b"\x1bOPz\r")]);
     assert_eq!(parser.feed(b"\x1b]52;c;aGVs\x1c"), [Token::Detach]);
+}
+
+#[test]
+fn a_bridge_envelope_is_read_as_an_osc_or_an_apc_wherever_it_is_cut() {
+    use ngterm_core::attach_bridge::{Envelope, Message, VERSION};
+    let envelope = Envelope {
+        version: VERSION,
+        nonce: "connection".into(),
+        message: Message::Hello,
+    };
+    for framed in [envelope.encode(), envelope.encode_apc()] {
+        let whole = [b"x".as_slice(), &framed, b"y"].concat();
+        for cut in 1..whole.len() {
+            let mut parser = InputParser::new(true);
+            let mut tokens = parser.feed(&whole[..cut]);
+            tokens.extend(parser.feed(&whole[cut..]));
+            assert!(!parser.holding(), "cut at {cut}");
+            assert_eq!(
+                tokens,
+                [input(b"x"), answer(Answer::Bridge(envelope.clone())), input(b"y")],
+                "cut at {cut}"
+            );
+        }
+    }
+    // another APC is still dropped, a Kitty graphics answer still read
+    let mut parser = InputParser::new(true);
+    assert_eq!(parser.feed(b"\x1b_778;ngterm-attach;e30=\x1b\\z"), [input(b"z")]);
 }
 
 #[test]
