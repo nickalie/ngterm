@@ -369,11 +369,9 @@ impl Core {
     fn reconcile_split_layouts(&mut self) {
         for (pane, id) in std::mem::take(&mut self.remote.viewer.split_layouts) {
             let Some(session) = self.library().held_session(id) else {
-                self.remote.viewer.swapped_here.remove(&id);
                 continue;
             };
             if role_of(session, pane).is_none() {
-                self.remote.viewer.swapped_here.remove(&id);
                 continue;
             }
             let realized = |slot: &crate::model::SurfaceSlot| slot.get().is_some_and(ngterm_host::Surface::is_realized);
@@ -394,8 +392,11 @@ impl Core {
             if let Some(layout) = layout {
                 self.apply_cached_layout(&layout, id);
             }
-            self.remote.viewer.swapped_here.remove(&id);
         }
+        let viewer = &mut self.remote.viewer;
+        viewer
+            .swapped_here
+            .retain(|id| viewer.split_layouts.values().any(|session| session == id));
     }
 
     /// The viewer pane closed while its origin split was on its way: once the origin made the split, it closes there

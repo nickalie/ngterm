@@ -17,13 +17,8 @@ fn realized(slot: &crate::model::SurfaceSlot) -> bool {
 impl AppStore {
     /// Applies `layout` to session `id`'s existing replicas (upstream's `applyRemoteLayout`): only when both panes here
     /// are realized replicas of exactly the origin's two panes does it swap, set the axis and show or hide the split.
-    /// The local identities a removal frame now lets close.
-    pub fn apply_remote_layout(&mut self, layout: &PresentationLayout, id: Uuid) -> Vec<Uuid> {
-        self.follow_remote_layout(layout, id, true)
-    }
-
-    /// [`Self::apply_remote_layout`]; with `order` false, the panes keep their order here and only the axis, the
-    /// visibility and the removals follow `layout`.
+    /// With `order` false, the panes keep their order here and only the axis, the visibility and the removals follow
+    /// `layout`. The local identities a removal frame now lets close.
     fn follow_remote_layout(&mut self, layout: &PresentationLayout, id: Uuid, order: bool) -> Vec<Uuid> {
         if !layout.is_valid() {
             return Vec::new();
@@ -296,7 +291,7 @@ mod tests {
         session.split.focused = false;
         session.split.ratio = Some(0.35);
         let swapped = layout(vec![a.origin_b, a.origin_a], a.origin_b, Some("horizontal"), false);
-        assert!(a.store.apply_remote_layout(&swapped, a.id).is_empty());
+        assert!(a.store.follow_remote_layout(&swapped, a.id, true).is_empty());
         let session = a.store.session(a.id).unwrap();
         assert_eq!(session.pane_identity, split);
         assert_eq!(session.split_pane_identity, Some(primary));
@@ -306,7 +301,7 @@ mod tests {
         assert!(!session.split.shown);
         assert!(session.split.exists);
         let removal = layout(vec![a.origin_b], a.origin_b, None, false);
-        assert_eq!(a.store.apply_remote_layout(&removal, a.id), [primary]);
+        assert_eq!(a.store.follow_remote_layout(&removal, a.id, true), [primary]);
     }
 
     #[test]
@@ -314,7 +309,7 @@ mod tests {
         let mut a = attached();
         a.store.close_split(a.id);
         let both = layout(vec![a.origin_a, a.origin_b], a.origin_a, Some("horizontal"), true);
-        assert!(a.store.apply_remote_layout(&both, a.id).is_empty());
+        assert!(a.store.follow_remote_layout(&both, a.id, true).is_empty());
         let session = a.store.session(a.id).unwrap();
         assert!(!session.split.exists);
         assert_eq!(session.split_pane_identity, None);
@@ -335,14 +330,14 @@ mod tests {
             let session = a.store.session(a.id).unwrap();
             let (local, primary, axis) = (session.split_pane_identity, session.pane_identity, session.split.axis);
             let swapped = layout(vec![a.origin_b, a.origin_a], a.origin_b, Some("horizontal"), false);
-            assert!(a.store.apply_remote_layout(&swapped, a.id).is_empty());
+            assert!(a.store.follow_remote_layout(&swapped, a.id, true).is_empty());
             let session = a.store.session(a.id).unwrap();
             assert_eq!(session.split_pane_identity, local);
             assert_eq!(session.pane_identity, primary);
             assert!(session.split.shown);
             assert_eq!(session.split.axis, axis);
             let removed = layout(vec![a.origin_b], a.origin_b, None, false);
-            a.store.apply_remote_layout(&removed, a.id);
+            a.store.follow_remote_layout(&removed, a.id, true);
             assert_eq!(
                 a.store.can_close_removed_remote_pane(primary, a.id),
                 !pending,
@@ -360,7 +355,7 @@ mod tests {
         session.split_surface.replace(fake(split, false));
         a.store.set_split_visibility(a.id, false, None);
         let shown = layout(vec![a.origin_a, a.origin_b], a.origin_a, Some("vertical"), true);
-        a.store.apply_remote_layout(&shown, a.id);
+        a.store.follow_remote_layout(&shown, a.id, true);
         assert!(!a.store.session(a.id).unwrap().split.shown);
     }
 
@@ -416,17 +411,17 @@ mod tests {
     fn an_invalid_layout_cannot_replace_the_last_confirmed_layout() {
         let mut a = attached();
         let good = layout(vec![a.origin_a, a.origin_b], a.origin_a, Some("vertical"), true);
-        a.store.apply_remote_layout(&good, a.id);
+        a.store.follow_remote_layout(&good, a.id, true);
         assert!(
             a.store
-                .apply_remote_layout(&PresentationLayout::invalid(), a.id)
+                .follow_remote_layout(&PresentationLayout::invalid(), a.id, true)
                 .is_empty()
         );
         assert_eq!(
             a.store.session(a.id).unwrap().remote_presentation().unwrap().layout,
             Some(good.clone())
         );
-        assert!(a.store.apply_remote_layout(&good, Uuid::new_v4()).is_empty());
+        assert!(a.store.follow_remote_layout(&good, Uuid::new_v4(), true).is_empty());
         let missing = Uuid::new_v4();
         assert!(!a.store.can_close_removed_remote_pane(missing, missing));
         a.store.remote_pane_held(missing, missing);
@@ -472,5 +467,47 @@ mod tests {
         assert!(core.library().held_session(id).is_some());
         assert!(!core.remote_pane_held(id, "bad token"));
         assert!(!core.remote_pane_held(Uuid::new_v4(), &crate::pane_env::uuid_string(primary)));
+    }
+
+    fn swapped_here_with_a_cached_origin_swap(split_realized: bool) -> (Core, Uuid, Uuid, Uuid) {
+        let mut a = attached();
+        let cached = layout(vec![a.origin_b, a.origin_a], a.origin_b, Some("horizontal"), true);
+        let session = a.store.session_mut(a.id).unwrap();
+        let (primary, split) = (session.pane_identity, session.split_pane_identity.unwrap());
+        session.split_surface.replace(fake(split, split_realized));
+        session.remote_presentation.as_mut().unwrap().layout = Some(cached);
+        let (mut core, id) = core_with(a);
+        core.remote.viewer.swapped_here.insert(id);
+        (core, id, primary, split)
+    }
+
+    fn assert_order_kept_with_origin_axis(core: &Core, id: Uuid, primary: Uuid, split: Uuid) {
+        let row = core.library().held_session(id).unwrap();
+        assert_eq!((row.pane_identity, row.split_pane_identity), (primary, Some(split)));
+        assert_eq!(row.split.axis, SplitAxis::TopBottom);
+        assert!(core.remote.viewer.swapped_here.is_empty());
+    }
+
+    #[test]
+    fn a_swap_here_holds_for_every_pending_entry_of_its_session() {
+        let (mut core, id, primary, split) = swapped_here_with_a_cached_origin_swap(true);
+        core.remote.viewer.split_layouts.extend([(primary, id), (split, id)]);
+        core.advance_remote_splits();
+        assert_order_kept_with_origin_axis(&core, id, primary, split);
+    }
+
+    #[test]
+    fn a_dropped_entry_keeps_the_swap_mark_for_an_entry_still_pending() {
+        let (mut core, id, primary, split) = swapped_here_with_a_cached_origin_swap(false);
+        core.remote
+            .viewer
+            .split_layouts
+            .extend([(Uuid::new_v4(), id), (primary, id)]);
+        core.advance_remote_splits();
+        assert!(core.remote.viewer.swapped_here.contains(&id));
+        let row = core.library_mut().held_session_mut(id).unwrap();
+        row.split_surface.replace(fake(split, true));
+        core.advance_remote_splits();
+        assert_order_kept_with_origin_axis(&core, id, primary, split);
     }
 }
