@@ -710,6 +710,9 @@ fn the_catalog_id_and_its_receipts_outlive_a_restart() {
         saved.trim().eq_ignore_ascii_case(&catalog_id),
         "{saved} != {catalog_id}"
     );
+    // the log appends, so the first launch's markers would end the second launch's wait for its panes at once
+    let log = fixture.root.path().join("state/ngterm.log");
+    std::fs::rename(&log, log.with_extension("log.first")).unwrap();
 
     let mut child = fixture.start(&["--skip-agent-setup"], &[]).unwrap();
     drop(ready(&fixture, &mut child).unwrap());
