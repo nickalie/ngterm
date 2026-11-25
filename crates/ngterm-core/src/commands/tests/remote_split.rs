@@ -858,6 +858,26 @@ fn the_origin_answer_to_the_split_keeps_a_swap_here_when_the_origin_already_had_
 }
 
 #[test]
+fn the_origin_answer_to_the_split_keeps_a_swap_here_when_it_comes_after_the_realization() {
+    let (mut remote, target, primary) = swappable_before_the_reconcile("horizontal");
+    swap_here(&mut remote, &SwapFrom::Command);
+    remote.fixture.core.apply_remote_layout(
+        &PresentationLayout {
+            panes: vec![remote.origin_pane, target],
+            primary: remote.origin_pane,
+            axis: Some("vertical".to_owned()),
+            shown: true,
+        },
+        remote.row,
+    );
+    remote.fixture.core.remote_tick(Instant::now());
+    let session = remote.fixture.store().session(remote.row).unwrap();
+    assert_eq!(session.pane_identity, remote.pane);
+    assert_eq!(session.split_pane_identity, Some(primary));
+    assert_eq!(session.split.axis, crate::model::SplitAxis::LeftRight);
+}
+
+#[test]
 fn an_origin_layout_that_comes_after_a_swap_here_is_applied_at_the_reconcile() {
     let (remote, primary) = swap_then_origin_layouts("horizontal", &["vertical", "horizontal"]);
     let session = remote.fixture.store().session(remote.row).unwrap();

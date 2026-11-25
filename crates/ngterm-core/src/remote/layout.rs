@@ -174,7 +174,7 @@ impl Core {
         if !(answer && self.layout_has_the_order_before_the_swap(layout, id)) {
             self.remote.viewer.swapped_here.remove(&id);
         }
-        self.follow_remote_layout(layout, id, true);
+        self.apply_cached_layout(layout, id);
     }
 
     fn layout_has_the_order_before_the_swap(&self, layout: &PresentationLayout, id: Uuid) -> bool {
