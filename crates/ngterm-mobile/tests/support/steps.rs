@@ -249,7 +249,7 @@ fn foreground(world: &World, session: &str) -> Option<Vec<String>> {
 }
 
 /// The tree node whose `id` is `session`, anywhere under `node`.
-fn find_session<'a>(node: &'a serde_json::Value, session: &str, found: &mut Option<&'a serde_json::Value>) {
+pub(crate) fn find_session<'a>(node: &'a serde_json::Value, session: &str, found: &mut Option<&'a serde_json::Value>) {
     match node {
         serde_json::Value::Object(map) => {
             if map

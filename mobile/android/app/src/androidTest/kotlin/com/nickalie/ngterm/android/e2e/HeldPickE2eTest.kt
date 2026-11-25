@@ -1,11 +1,11 @@
 package com.nickalie.ngterm.android.e2e
 
-import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.e2e.PickDriving.leaveTheSessionView
 import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.CONNECT_WAIT_MS
 import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.MACHINE
 import org.junit.Rule
@@ -54,13 +54,6 @@ class HeldPickE2eTest {
             compose.onAllNodesWithText(session)[0].performClick()
             awaitTerminal(SessionPickE2eTest.PICKED_BETA)
         }
-
-    // Back from a session's view, when it shows: the bar's destinations are under it
-    private fun SessionLinkDriver.leaveTheSessionView() {
-        val back = compose.onAllNodesWithContentDescription(text(R.string.action_back))
-        if (back.fetchSemanticsNodes().isNotEmpty()) back[0].performClick()
-        compose.waitForIdle()
-    }
 
     private companion object {
         const val PROMPT = "QaHeldPick"

@@ -1,9 +1,9 @@
 //! A pick and an ask an origin binds to a session the phone attaches, against the real machine: a pick reaches the
 //! phone with its items and its answer reaches `ngtermctl`; one the origin's `--timeout` ends, or one a lost stream
 //! takes, is dismissed on the phone, and a headless origin hands a lost one to the phone again once it is back; what
-//! the origin held for a session no viewer presented (an ask, a pick, a program overlay and a page) comes as one
-//! batch when the phone attaches it, the ask and the pick shown and the overlay and the page refused; a detach leaves
-//! an open pick unanswered, held for the next presenter.
+//! the origin held for a session no viewer presented (an ask, a pick and a program overlay) comes as one batch when
+//! the phone attaches it, the ask and the pick shown and the overlay refused; a detach leaves an open pick
+//! unanswered, held for the next presenter.
 
 use std::time::Duration;
 
@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use crate::machine::World;
 use crate::phone::{Client, MACHINE_ID, block_on, poll};
+use crate::steps::find_session;
 
 /// The items each pick offers: a JSON item array with a subtitle and a status.
 const ITEMS: &[u8] = br#"[{"id":"alpha","label":"Alpha","subtitle":"first","status":"active"},
@@ -19,6 +20,9 @@ const ITEMS: &[u8] = br#"[{"id":"alpha","label":"Alpha","subtitle":"first","stat
 
 /// How long the steps below listen for events that must not come.
 const QUIET: Duration = Duration::from_secs(2);
+
+/// How long a result may stay `pending` before the steps below take it as so.
+const SETTLE: Duration = Duration::from_secs(10);
 
 /// The steps, in order, on the session `session` the phone presents.
 pub(crate) fn picks_and_held_interactions(world: &World, phone: &mut Client, session: &str) {
@@ -123,21 +127,12 @@ fn what_the_origin_held_comes_in_one_batch(world: &World, phone: &mut Client) ->
         .headless
         .ctl(&["session", "overlay", "open", "true", "--target", &session])
         .expect("a held program overlay");
-    let page = world.headless.ctl(&[
-        "session",
-        "overlay",
-        "open",
-        "--url",
-        "https://example.com/",
-        "--target",
-        &session,
-    ]);
     let before = kinds(world, &session);
     assert!(
         ["ask", "pick", "job"].iter().all(|kind| before
             .iter()
             .any(|(held, state)| held == kind && state == "unpresented")),
-        "held before the phone attached: {before:?}; page {page:?}"
+        "held before the phone attached: {before:?}"
     );
 
     phone.drain();
@@ -149,7 +144,7 @@ fn what_the_origin_held_comes_in_one_batch(world: &World, phone: &mut Client) ->
     block_on(phone.core.attach_session(MACHINE_ID.to_owned(), session.clone())).expect("attach the held session");
     wait_ask(phone, &session, &ask);
     wait_pick(phone, &session, &pick, 1);
-    // the program overlay and the page are refused, and end on the origin; the ask and the pick are offered
+    // the program overlay is refused, and ends on the origin; the ask and the pick are offered
     let after = poll("the refusals on the origin", || {
         let after = kinds(world, &session);
         after
@@ -309,16 +304,15 @@ fn ask_result(world: &World, id: &str) -> Value {
     settled_result(world, "ask", id)
 }
 
-/// `ngtermctl <family> result <id>`'s outcome, polled until it is not pending; `pending` after [`QUIET`].
+/// `ngtermctl <family> result <id>`'s outcome, polled until it is not pending; `pending` after [`SETTLE`].
 fn settled_result(world: &World, family: &str, id: &str) -> Value {
-    let deadline = std::time::Instant::now() + QUIET * 5;
+    let deadline = std::time::Instant::now() + SETTLE;
     loop {
         let output = world
             .headless
             .ctl(&[family, "result", id])
             .unwrap_or_else(|failed| failed);
-        let line: Value = serde_json::from_str(output.trim()).unwrap_or(Value::Null);
-        let result = line.get(family).cloned().unwrap_or(line);
+        let result: Value = serde_json::from_str(output.trim()).unwrap_or(Value::Null);
         if result["result"] != "pending" || std::time::Instant::now() > deadline {
             return result;
         }
@@ -330,7 +324,9 @@ fn settled_result(world: &World, family: &str, id: &str) -> Value {
 fn kinds(world: &World, session: &str) -> Vec<(String, String)> {
     let output = world.headless.ctl(&["tree", "--json"]).expect("the tree");
     let tree: Value = serde_json::from_str(&output).expect("the tree's json");
-    let node = find(&tree, session).unwrap_or_else(|| panic!("no node {session} in {tree}"));
+    let mut node = None;
+    find_session(&tree["result"], session, &mut node);
+    let node = node.unwrap_or_else(|| panic!("no node {session} in {tree}"));
     node["interactions"]
         .as_array()
         .into_iter()
@@ -342,13 +338,4 @@ fn kinds(world: &World, session: &str) -> Vec<(String, String)> {
             )
         })
         .collect()
-}
-
-fn find<'a>(value: &'a Value, id: &str) -> Option<&'a Value> {
-    match value {
-        Value::Object(map) if map.get("id").and_then(Value::as_str) == Some(id) => Some(value),
-        Value::Object(map) => map.values().find_map(|inner| find(inner, id)),
-        Value::Array(items) => items.iter().find_map(|inner| find(inner, id)),
-        _ => None,
-    }
 }

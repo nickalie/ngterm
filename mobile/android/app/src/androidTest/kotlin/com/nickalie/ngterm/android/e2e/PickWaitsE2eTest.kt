@@ -35,8 +35,8 @@ class PickWaitsE2eTest {
             runWithHelpers(SCRIPT)
 
             awaitText("QaFirstAsk")
-            // the pick opened two seconds after the ask: it waits under the ask's sheet
-            Thread.sleep(PICK_OPENED_MS)
+            // the pick opens after the ask: it waits under the ask's sheet
+            awaitTerminal("pick-open")
             assertNotShown("QaSecondPick")
             screenshot("ask-before-pick")
             compose.onNodeWithText("Proceed").performClick()
@@ -61,15 +61,15 @@ class PickWaitsE2eTest {
         }
 
     private companion object {
-        const val PICK_OPENED_MS = 6_000L
-
-        // the script opens its pick 15 s after it printed its marker; the phone looks 10 s after that
+        // the script opens its pick 15 s after it printed its marker; the phone looks 10 s after that. No signal
+        // reaches the phone while the session is off screen, so this step relies on that margin.
         const val OFF_SCREEN_MS = 25_000L
 
         const val SCRIPT =
             "ngtermctl ask QaFirstAsk --button qaok=Proceed --target \"\$NGTERM_SESSION_ID\" >qa-ask.json &\n" +
                 "sleep 2\n" +
-                "p --prompt QaSecondPick >qa-pick.json &\n" +
+                "k=\$(p --prompt QaSecondPick --no-block | u); m pick open\n" +
+                "w pick \"\$k\" qa-pick.json '\"result\":\"\\(picked\\|cancelled\\)'\n" +
                 "wait\n" +
                 "grep -q qaok qa-ask.json && grep -q '\"beta\"' qa-pick.json && m answered both\n" +
                 "sleep 15\n" +

@@ -54,7 +54,10 @@ class HeldAskAndDetachE2eTest {
 
             // the next pick opens while the session is attached and off screen; the phone then detaches it
             leaveTheSessionView()
-            Thread.sleep(DETACH_PICK_OPENED_MS)
+            openFromSessions(session)
+            awaitTerminal("answered-held")
+            awaitTerminal("detach-open")
+            leaveTheSessionView()
             assertNotShown("QaDetach")
             compose.onAllNodes(more(linked))[0].performClick()
             awaitText(text(R.string.machine_sessions_detach))
@@ -73,7 +76,6 @@ class HeldAskAndDetachE2eTest {
 
             leaveTheSessionView()
             openFromSessions(session)
-            awaitTerminal("answered-held")
             awaitTerminal("answered-detach")
         }
 
@@ -86,14 +88,12 @@ class HeldAskAndDetachE2eTest {
     }
 
     private companion object {
-        // the script opens the detach pick 10 s after the held ones are answered; the phone looks 20 s after that
-        const val DETACH_PICK_OPENED_MS = 20_000L
-
         // a person reads the list before opening the session again
         const val DETACH_SETTLE_MS = 5_000L
 
         // makes [name], which no viewer presents, opens an ask and a pick on it, and prints how each was answered;
-        // then opens a third pick on it once the phone has left it; each wait ends on an outcome, never on "pending"
+        // then opens a third pick on it once the phone has left it (the 10 s are its time to leave) and prints that
+        // it is open; each wait ends on an outcome, never on "pending"
         fun script(name: String): String =
             "id=\$(ngtermctl session new --no-select --name $name)\n" +
                 "a=\$(ngtermctl ask QaHeldAsk --no-block --button qaok=Proceed --target \"\$id\" | u)\n" +
@@ -103,6 +103,7 @@ class HeldAskAndDetachE2eTest {
                 "grep -q '\"beta\"' qa-pick.json && m answered held\n" +
                 "sleep 10\n" +
                 "l=\$(ngtermctl pick --no-block --prompt QaDetach --session \"\$id\" <qa-items.json | u)\n" +
+                "m detach open\n" +
                 "w pick \"\$l\" qa-last.json '\"result\":\"\\(picked\\|cancelled\\)'\n" +
                 "grep -q '\"gamma\"' qa-last.json && m answered detach\n" +
                 "sleep 300\n"

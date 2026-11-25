@@ -38,7 +38,7 @@
 //! A fourth test binds picks and asks to a session the phone presents ([`picks`]): each reaches the phone and its
 //! answer reaches `ngtermctl`, the origin's `--timeout` and a lost stream take one down, the headless origin hands a
 //! lost pick over again, what it held for a session no viewer presented comes as one batch (the ask and the pick
-//! shown, a program overlay and a page refused), and a detach leaves an open pick unanswered.
+//! shown, a program overlay refused), and a detach leaves an open pick unanswered.
 //!
 //! Without `sshd` a test skips with a reason, unless `CI` is set: there it fails.
 //!
