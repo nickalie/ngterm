@@ -32,7 +32,7 @@ const EMPTY_ANSWER: &str = "empty answer";
 /// A file read answered as a log tail (upstream's refusal).
 const NOT_A_FILE: &str = "not a file answer";
 /// A log tail answered as a file read (upstream's refusal).
-const NOT_A_LOG: &str = "not a log answer";
+pub(crate) const NOT_A_LOG: &str = "not a log answer";
 
 /// Bounds the inbound lines a channel holds (upstream's `RemotePagePermits`): the reader takes one per line and stops
 /// at the bound, a line gives its permit back once handled, and a file chunk only once it is consumed.

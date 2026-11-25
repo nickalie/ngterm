@@ -370,7 +370,9 @@ and how this build does it where the OS matters:
 - Text, log and diff pages wrap long lines (v0.42): the bar's Wrap button, `w`, or `session overlay wrap
   on|off|toggle`; per page, off at open and never saved, read back as tree `text.wrap`.
 - On a session presented on another machine (v0.41), image, Markdown and text pages open on the presenter, its
-  viewer listing `page.content`; a log page stays a local one.
+  viewer listing `page.content`. A log page (v0.42.1) opens there too when the viewer lists `page.text`, and follows
+  its file over the page's channel; the origin's `session overlay follow|wrap|search|changes` on such a page run on
+  the presenter. For a presenter that does not list `page.text`, a log page stays a local one.
 - Forwarded clicks (v0.42): a Ctrl/Super-click on a bare, relative or `file://` path in a pane attached from another
   machine goes to that machine as `link.click` while this one presents the session; the origin resolves it with the
   pane's directory and opens only a page, here. A refusal (`link.refused`, or a reason found here) shows a HUD that

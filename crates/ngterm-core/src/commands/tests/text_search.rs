@@ -211,8 +211,9 @@ fn the_pages_own_field_writes_the_model() {
     );
 }
 
-/// Upstream's `aSearchAddressesOnlyALocalTextPage` and `aTextPageNodeReportsItsSearch`: a markdown page, a replica
-/// and a program are refused, and a query never lands on a page that is not a text page.
+/// Upstream's `aSearchAddressesOnlyALocalTextPage` and `aTextPageNodeReportsItsSearch`: a markdown page, a replica of
+/// another kind and a program are refused, a text replica searches, and a query never lands on a page that is not a
+/// text page.
 #[test]
 fn a_search_addresses_only_a_local_text_page() {
     let (mut f, _) = fixture();

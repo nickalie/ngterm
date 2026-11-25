@@ -146,8 +146,8 @@ fn a_pane_wrap_reaches_that_panes_page() {
     assert_eq!(wrap(&mut f, &wire(id), mode("on")), failure("no overlay"));
 }
 
-/// Upstream's `wrapRefusesEverythingButATextPage`: an empty slot, a Markdown page, a page shown for another machine
-/// and a program are refused, and a wrap never lands on a page that is not a text page.
+/// Upstream's `wrapRefusesEverythingButATextPage`: an empty slot, a Markdown page and a program are refused, and a
+/// wrap never lands on a page that is not a text page.
 #[test]
 fn a_wrap_addresses_only_a_local_text_page() {
     let mut f = fixture();

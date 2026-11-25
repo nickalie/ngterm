@@ -2309,6 +2309,41 @@ fn a_queued_text_action_never_reaches_a_page_that_replaced_its_own() {
     assert_eq!(results(&replica).len(), 2, "the running step still answers");
 }
 
+/// A text action whose waiting step panics answers the origin `ok:false` as a panicking handler does, and the actions
+/// queued behind it still run.
+#[test]
+fn a_panicking_text_step_answers_the_origin_and_runs_the_queue_behind_it() {
+    let mut replica = Replica::new();
+    replica.request(text_page("/src/a.diff", None));
+    text_command(&mut replica, 1, &json!({"action": "changes", "step": "next"}));
+    text_command(&mut replica, 2, &json!({"action": "wrap", "toggle": "on"}));
+    let core = &mut replica.viewer.fixture.core;
+    assert_eq!(core.take_replica_text_steps().len(), 1);
+    let command =
+        serde_json::from_value(json!({"page": ORIGIN, "seq": 1, "action": "changes", "step": "next"})).unwrap();
+    let panics: crate::dispatch::Resume = Box::new(|_| std::panic::resume_unwind(Box::new(())));
+    let (_, step) =
+        crate::remote::replica_page::text_step(replica.local(), replica.id(), command, Duration::ZERO, panics);
+    let step = Dispatched::Pending {
+        after: Duration::ZERO,
+        resume: step,
+    };
+    let response = step.finish_now(&mut replica.viewer.fixture.core);
+    replica.commit();
+    let error = "internal error handling session.overlay.changes";
+    assert_eq!(response.error.as_deref(), Some(error));
+    let answered = results(&replica);
+    assert_eq!(
+        answered
+            .iter()
+            .map(|result| (result["seq"].clone(), result["ok"].clone()))
+            .collect::<Vec<_>>(),
+        [(json!(1), json!(false)), (json!(2), json!(true))]
+    );
+    assert_eq!(answered[0]["error"], error);
+    assert!(replica.session().overlay.page().unwrap().text_wrap);
+}
+
 type Tailed = Rc<RefCell<Option<Result<Option<crate::bounded_file::TailRead>, ChannelFailure>>>>;
 
 fn log_tail(replica: &mut Replica, stamp: Option<crate::bounded_file::FileStamp>) -> Tailed {

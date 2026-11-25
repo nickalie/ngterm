@@ -36,11 +36,13 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ngterm_proto::Response;
+use ngterm_proto::command::SessionCmd;
+use ngterm_proto::{Command, Response};
 
 use uuid::Uuid;
 
@@ -49,10 +51,11 @@ use super::frames::{
     PresentationPageResult, PresentationPageSource, PresentationPageState,
 };
 use super::hub::PAGE_DETACHED_KIND;
-use super::page_channel::{ChannelEvent, ChannelFailure, ChannelLink, Permits, Pull, ReplicaChannel, RequestId};
+use super::page_channel::{
+    ChannelEvent, ChannelFailure, ChannelLink, NOT_A_LOG, Permits, Pull, ReplicaChannel, RequestId,
+};
 use super::page_tunnel::{READY_LINE, TunnelPlan, forward_port};
 use super::remote_text::{self, TextPageAction};
-use crate::Core;
 use crate::bounded_file::{FileStamp, TailRead};
 use crate::commands::overlay_text::local_text_action;
 use crate::dispatch::{Dispatched, Resume};
@@ -60,6 +63,7 @@ use crate::html::image_page::{self, ImagePixels};
 use crate::html::{HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlReloadTarget, HtmlSource, ReplicaContent, errors};
 use crate::model::{HtmlPageSlot, OverlayPane};
 use crate::pane_env::uuid_string;
+use crate::{ControlError, Core};
 
 #[cfg(test)]
 #[path = "replica_page_tests.rs"]
@@ -79,8 +83,6 @@ const NO_HELPER: &str = "no page helper";
 const ROW_LEFT: &str = "the session's row on the presenting machine closed";
 /// The MIME type of an answer that named none.
 const OCTET_STREAM: &str = "application/octet-stream";
-/// A log tail that ended with no head (upstream's refusal of an answer that is not a log's).
-const NOT_A_LOG_ANSWER: &str = "not a log answer";
 /// The most a log tail's answer carries: the tail window and the byte before it.
 const MAX_LOG_TAIL: usize = crate::html::text_page::MAX_TAIL_BYTES + 1;
 
@@ -210,7 +212,7 @@ impl LogFetch {
                 offset,
                 stamp,
             })),
-            None => Err(ChannelFailure::Refused(NOT_A_LOG_ANSWER.to_owned())),
+            None => Err(ChannelFailure::Refused(NOT_A_LOG.to_owned())),
         });
         (answer, read)
     }
@@ -1416,26 +1418,42 @@ impl Core {
 }
 
 /// One step of origin text action `command` on page `local`, which answers the origin once the action answers here and
-/// then runs the page's next queued action.
-fn text_step(
+/// then runs the page's next queued action. A panicking step answers `ok:false` as a handler's panic does.
+pub(crate) fn text_step(
     local: Uuid,
     session: Uuid,
     command: PresentationPageCommand,
     after: Duration,
     resume: Resume,
 ) -> (Duration, Resume) {
-    let step: Resume = Box::new(move |core: &mut Core| match resume(core) {
-        Dispatched::Done(response) => {
-            core.answer_text_action(local, session, &command, &response);
-            core.run_text_actions(local);
-            Dispatched::Done(response)
-        }
-        Dispatched::Pending { after, resume } => {
-            let (after, resume) = text_step(local, session, command, after, resume);
-            Dispatched::Pending { after, resume }
-        }
+    let step: Resume = Box::new(move |core: &mut Core| {
+        let response = match panic::catch_unwind(AssertUnwindSafe(|| resume(core))) {
+            Ok(Dispatched::Pending { after, resume }) => {
+                let (after, resume) = text_step(local, session, command, after, resume);
+                return Dispatched::Pending { after, resume };
+            }
+            Ok(Dispatched::Done(response)) => response,
+            Err(_) => {
+                let cmd = text_action_command(command.action);
+                tracing::error!(%cmd, "an origin text action panicked in a deferred step");
+                Response::from(ControlError::HandlerPanicked(cmd))
+            }
+        };
+        core.answer_text_action(local, session, &command, &response);
+        core.run_text_actions(local);
+        Dispatched::Done(response)
     });
     (after, step)
+}
+
+/// The control command an origin text action runs here.
+fn text_action_command(action: PresentationPageAction) -> Command {
+    Command::Session(match action {
+        PresentationPageAction::Follow => SessionCmd::OverlayFollow,
+        PresentationPageAction::Wrap => SessionCmd::OverlayWrap,
+        PresentationPageAction::Changes => SessionCmd::OverlayChanges,
+        _ => SessionCmd::OverlaySearch,
+    })
 }
 
 /// Why `navigation` cannot run on `page`, `None` when it can: a file page shown for another machine has no file here

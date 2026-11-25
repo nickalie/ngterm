@@ -57,7 +57,7 @@ impl HtmlOverlayCommandFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextLogFollowFailure {
     Page(HtmlOverlayCommandFailure),
-    /// The page is shown here for another machine, which alone follows its file.
+    /// The page is shown here for another machine and is no text page.
     Replica,
     NotLog,
 }
@@ -106,7 +106,7 @@ impl TextSearchFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextChangesFailure {
     Page(HtmlOverlayCommandFailure),
-    /// The slot holds a page that is not a plain local diff page.
+    /// The slot holds no plain diff page, here or shown here for another machine.
     NotDiff,
     /// The slot is the presenting machine's, which alone shows the page.
     Remote,

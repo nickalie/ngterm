@@ -24,8 +24,9 @@
 //! "On screen" is the page's `on_screen` as the registry applies it: the page's deck slot is in the window's tree and
 //! not hidden (a hidden slot, a session in another tab or a pending close, a page moved out are all off screen). The
 //! ticks run, one per [`LogFollower::interval`], only while the page follows and is on screen; they end when the page
-//! leaves the screen or closes ([`TextPage::stop`]). The page's reads run on the background executor and land on the
-//! main thread, which the app hands this module at its start ([`init`]).
+//! leaves the screen or closes ([`TextPage::stop`]). The page's reads run off the main thread ([`Reads::off_main`]: on
+//! the background executor for a local file, on a thread of their own for a replica) and land on the main thread,
+//! which the app hands this module at its start ([`init`]).
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
@@ -795,7 +796,7 @@ impl TextPage {
         }
     }
 
-    /// Runs `read` on the background executor and lands it here; with no app (the unit tests), in place.
+    /// Runs `read` off the main thread ([`Reads::off_main`]) and lands it here; with no app (the unit tests), in place.
     fn run_read(&self, read: LogRead) {
         let Some(app) = app() else {
             // the unit tests: in place, where a replica's read would wait for this thread's own main loop
@@ -1256,8 +1257,8 @@ mod tests {
     }
 
     /// Upstream's `TextPageBridge(for:reads:)` on a replica: a text page shown here for another machine runs the bridge,
-    /// so Find reaches its field as a local page's, and reads its text from that machine, which answers nothing once its
-    /// way there is gone; a replica of another kind has no bridge.
+    /// so Find reaches its field as a local page's; with no app its read of that machine's text fails at once instead
+    /// of waiting on its own thread; a replica of another kind has no bridge.
     #[test]
     fn a_text_replica_runs_the_bridge_and_reads_from_its_origin() {
         let replica = |content| {
