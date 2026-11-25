@@ -130,6 +130,16 @@ fn replicas_follow(session: &Session, layout: &PresentationLayout) -> Option<boo
     (wanted == have).then(|| binding.local_pane(layout.primary) == Some(split))
 }
 
+fn has_unbound_split(session: &Session) -> bool {
+    let Some(binding) = session.remote_presentation().map(|state| &state.binding) else {
+        return false;
+    };
+    session.split.exists
+        && [Some(session.pane_identity), session.split_pane_identity]
+            .into_iter()
+            .any(|pane| pane.is_none_or(|pane| binding.remote_pane(pane).is_none()))
+}
+
 impl Core {
     /// Swaps session `id`'s panes for the user. The swap is newer than the order of a layout cached for a pane still
     /// to be realized, so that layout's reconcile keeps the panes in their order here.
@@ -142,11 +152,17 @@ impl Core {
             .store_for_session_mut(id)
             .ok_or(SwapRefusal::NoSession)?
             .swap_panes(id)?;
-        let viewer = &mut self.remote.viewer;
-        if viewer.split_layouts.values().any(|session| *session == id) {
-            viewer.swapped_here.insert(id);
+        if self.cached_layout_pending(id) {
+            self.remote.viewer.swapped_here.insert(id);
         }
         Ok(())
+    }
+
+    /// Whether a layout cached for session `id` is still to be reconciled: a bound pane waits for its realization, or
+    /// a split pane waits for its origin pane.
+    pub(super) fn cached_layout_pending(&self, id: Uuid) -> bool {
+        self.remote.viewer.split_layouts.values().any(|session| *session == id)
+            || self.library().held_session(id).is_some_and(has_unbound_split)
     }
 
     /// Applies the origin's layout to session `id`'s replicas and closes each one the origin removed (upstream's
@@ -509,5 +525,34 @@ mod tests {
         row.split_surface.replace(fake(split, true));
         core.advance_remote_splits();
         assert_order_kept_with_origin_axis(&core, id, primary, split);
+    }
+
+    #[test]
+    fn a_swap_here_before_the_split_binds_keeps_its_order_at_the_reconcile() {
+        let mut a = attached();
+        let session = a.store.session(a.id).unwrap();
+        let (primary, split) = (session.pane_identity, session.split_pane_identity.unwrap());
+        let daemons = HashMap::from([(primary, daemon_name(a.origin_a))]);
+        a.store
+            .bind_remote(RemoteBinding::new("ORIGIN", daemons, Some(1), None), a.id);
+        let cached = layout(vec![a.origin_a, a.origin_b], a.origin_a, Some("horizontal"), true);
+        a.store
+            .session_mut(a.id)
+            .unwrap()
+            .remote_presentation
+            .as_mut()
+            .unwrap()
+            .layout = Some(cached);
+        let origin_b = a.origin_b;
+        let (mut core, id) = core_with(a);
+        core.swap_panes_here(id).unwrap();
+        core.advance_remote_splits();
+        assert!(core.remote.viewer.swapped_here.contains(&id));
+        let row = core.library_mut().held_session_mut(id).unwrap();
+        let state = row.remote_presentation.as_mut().unwrap();
+        state.binding.insert_pane(split, daemon_name(origin_b));
+        core.remote.viewer.split_layouts.insert(split, id);
+        core.advance_remote_splits();
+        assert_order_kept_with_origin_axis(&core, id, split, primary);
     }
 }

@@ -393,10 +393,8 @@ impl Core {
                 self.apply_cached_layout(&layout, id);
             }
         }
-        let viewer = &mut self.remote.viewer;
-        viewer
-            .swapped_here
-            .retain(|id| viewer.split_layouts.values().any(|session| session == id));
+        let marks = std::mem::take(&mut self.remote.viewer.swapped_here);
+        self.remote.viewer.swapped_here = marks.into_iter().filter(|id| self.cached_layout_pending(*id)).collect();
     }
 
     /// The viewer pane closed while its origin split was on its way: once the origin made the split, it closes there
