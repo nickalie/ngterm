@@ -408,14 +408,19 @@ impl Core {
         }
     }
 
-    /// Wait until the helper wrote the replies made ready so far (the batch it is writing, and the next one when
-    /// replies wait), so a client's input queued next reaches the program after them, as a terminal writes its reports
-    /// and its user's keys into one stream. Not while a handoff holds the helper, nor once the program ended.
-    /// Returns whether there were replies to wait for.
-    fn await_replies_written(&self) -> bool {
-        let mut state = self.lock();
+    /// The count of written batches that takes the replies made ready so far (the batch the helper is writing, and
+    /// the next one when replies wait); `None` when none wait. Under the pane's lock, so the helper cannot write them
+    /// before they are counted.
+    fn replies_target(&self, state: &State) -> Option<u64> {
         let target = state.hold.batches_written + u64::from(state.hold.helper_busy) + u64::from(self.outlet.ready());
-        let waited = target > state.hold.batches_written;
+        (target > state.hold.batches_written).then_some(target)
+    }
+
+    /// Wait until the helper wrote `target` batches ([`Core::replies_target`]), so a client's input queued next reaches
+    /// the program after them, as a terminal writes its reports and its user's keys into one stream. Not while a
+    /// handoff holds the helper, nor once the program ended.
+    fn await_replies_written(&self, target: u64) {
+        let mut state = self.lock();
         while state.hold.batches_written < target && !state.hold.frozen && state.exit.is_none() {
             self.timer.notify_all();
             state = self
@@ -423,7 +428,6 @@ impl Core {
                 .wait_timeout(state, REPLIES_WRITTEN_POLL)
                 .map_or_else(|poisoned| poisoned.into_inner().0, |(guard, _)| guard);
         }
-        waited
     }
 
     /// Whether the PTY's reads, paused for output held behind a waiting read, are to go on now (the pause is
@@ -828,13 +832,18 @@ impl Pane {
     /// for a Kitty barrier, else after the helper wrote those ready, through the PTY's admission rules. Lets go of
     /// the pane's lock.
     fn send_input(&self, state: MutexGuard<'_, State>, data: &[u8]) -> Result<(), WriteError> {
-        let held = self.core.hold_input(&state, data);
-        self.release(state);
-        if !held {
-            let after_replies = self.core.await_replies_written();
-            self.write_after(data, after_replies)?;
+        if self.core.hold_input(&state, data) {
+            self.release(state);
+            return Ok(());
         }
-        Ok(())
+        let replies = self.core.replies_target(&state);
+        self.release(state);
+        #[cfg(test)]
+        tests::AFTER_RELEASE.with(|hook| hook.take().map(|hook| hook(&self.core)));
+        if let Some(target) = replies {
+            self.core.await_replies_written(target);
+        }
+        self.write_after(data, replies.is_some())
     }
 
     /// Queue `data` through the PTY's admission rules; while the replies written just before it fill the input
@@ -2094,6 +2103,70 @@ mod tests {
     fn a_pre_epoch_clock_reads_as_zero() {
         assert_eq!(unix_seconds(SystemTime::UNIX_EPOCH), 0);
         assert_eq!(unix_seconds(SystemTime::UNIX_EPOCH + Duration::from_secs(5)), 5);
+    }
+
+    /// A test's hook on a moment of the pane's code.
+    type Hook = Box<dyn FnOnce(&Core)>;
+
+    thread_local! {
+        /// Runs once in [`Pane::send_input`] on this thread, after it let go of the pane's lock.
+        pub(super) static AFTER_RELEASE: std::cell::Cell<Option<Hook>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Input too large to fit beside the replies made ready before it waits for the program to read them, also when
+    /// the helper writes those replies before the input looks for them.
+    #[cfg(unix)]
+    #[test]
+    fn input_waits_for_the_replies_the_helper_wrote_before_it_looked() {
+        const REPLY: usize = 64 * 1024;
+        const PATIENCE: Duration = Duration::from_secs(10);
+        let dir = tempfile::tempdir().unwrap();
+        let read = dir.path().join("read");
+        let total = REPLY + ngterm_pty::DEFAULT_INPUT_LIMIT;
+        // a reply past the tty's buffer stays queued in the actor until the program reads, a second after "armed"
+        let script = format!(
+            "stty raw -echo; printf 'armed\\r\\n'; sleep 1; head -c {total} > '{}'; sleep 10",
+            read.display()
+        );
+        let spec = SessionSpec {
+            argv: vec!["/bin/sh".to_owned(), "-c".to_owned(), script],
+            env: std::env::vars().filter(|(key, _)| key == "PATH").collect(),
+            cwd: None,
+            tracked_env: Vec::new(),
+        };
+        let config = PaneConfig::new("drain", dir.path(), spec, GridSize { cols: 80, rows: 24 });
+        let (pane, creator) = Pane::spawn(config).unwrap();
+        let deadline = Instant::now() + PATIENCE;
+        while !pane
+            .observe(|terminal, revision| crate::server::api::read_screen(terminal, revision, true))
+            .and_then(Result::ok)
+            .is_some_and(|screen| screen.text.contains("armed"))
+        {
+            assert!(Instant::now() < deadline, "the program never armed");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let written = {
+            let state = pane.core.lock();
+            pane.core.outlet.push(&vec![b'R'; REPLY]);
+            state.hold.batches_written
+        };
+        AFTER_RELEASE.with(|hook| {
+            hook.set(Some(Box::new(move |core: &Core| {
+                let mut state = core.lock();
+                while state.hold.batches_written == written {
+                    state = core.changed.wait(state).unwrap();
+                }
+            })));
+        });
+        let input = vec![b'P'; ngterm_pty::DEFAULT_INPUT_LIMIT];
+        assert_eq!(pane.input(creator.subscription.id(), &input), Ok(true));
+        while std::fs::metadata(&read).map_or(0, |meta| meta.len()) < total as u64 {
+            assert!(
+                Instant::now() < deadline + PATIENCE,
+                "the program read less than the reply and the input"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
