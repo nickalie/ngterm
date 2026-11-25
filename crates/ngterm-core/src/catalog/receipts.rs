@@ -178,6 +178,7 @@ impl Core {
         let Some(served) = self.catalog.served.as_mut() else {
             return false;
         };
+        served.windows_unsaved = !windows;
         if !windows {
             served.unsaved = true;
             return false;
@@ -187,8 +188,8 @@ impl Core {
 
     /// Records `unknown` for each abandoned operation and writes the table: its command may have changed the model, so
     /// no later window write may leave the id to be fenced. Call it before each window write and before a receipt goes
-    /// into the table. An unsaved table may hold a receipt whose windows did not land, so then it writes the windows
-    /// first.
+    /// into the table. A table that waits for its windows is written after them; one whose windows landed is written
+    /// alone.
     pub(crate) fn settle_dropped_operations(&mut self) {
         self.settle_operations(false);
     }
@@ -210,20 +211,24 @@ impl Core {
             let unknown = operations::receipt(&op_id, served.hub.epoch(), outcome::UNKNOWN);
             served.table.record(unknown, &position);
         }
-        if served.unsaved {
+        if served.windows_unsaved {
             self.save_operations();
-        } else if recorded {
+        } else if served.unsaved || recorded {
             served.save();
         }
     }
 
-    /// Writes a table that waits for its windows, the windows first; whether no table waits now. True without a
+    /// Writes an unsaved table, after its windows when it waits for them; whether no table waits now. True without a
     /// served catalog.
     pub(crate) fn save_waiting_operations(&mut self) -> bool {
-        if self.catalog.served.as_ref().is_some_and(|served| served.unsaved) {
-            self.save_operations();
+        let Some(served) = self.catalog.served.as_mut() else {
+            return true;
+        };
+        if served.windows_unsaved {
+            self.save_operations()
+        } else {
+            !served.unsaved || served.save()
         }
-        self.catalog.served.as_ref().is_none_or(|served| !served.unsaved)
     }
 
     /// Whether the id's command runs now.

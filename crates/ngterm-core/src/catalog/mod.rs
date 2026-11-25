@@ -87,6 +87,8 @@ pub(crate) struct Served {
     table_path: Option<PathBuf>,
     /// The last write of the table failed: no entry is handed out as a receipt until one lands.
     pub(crate) unsaved: bool,
+    /// The last write of the windows before the table failed: the table waits for them, so a retry writes both.
+    pub(crate) windows_unsaved: bool,
     /// The ids of the commands that have not answered yet, running or abandoned: kept out of [`Self::table`], so no
     /// write vouches for one before it lands.
     pub(crate) running: receipts::RunningOperations,
@@ -202,6 +204,7 @@ impl Core {
             table,
             table_path,
             unsaved: false,
+            windows_unsaved: false,
             running: receipts::RunningOperations::default(),
         });
         self.refresh_catalog();

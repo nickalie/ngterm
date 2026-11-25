@@ -1018,6 +1018,39 @@ fn the_quit_save_fails_when_the_waiting_table_cannot_be_written() {
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
 }
 
+/// A table that failed alone, its windows landed, is retried alone on each commit and lands once it can be written:
+/// no commit writes the windows again for it.
+#[test]
+fn a_commit_retries_a_failed_table_without_writing_the_windows_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut core, file) = persistent_served(dir.path());
+    let table = dir.path().join(OPERATIONS_FILE_NAME);
+    block_window(&table);
+    let epoch = core.remote.respawns.epoch().to_owned();
+    let reply = core.dispatch(&Request {
+        cmd: Command::Workspace(WorkspaceCmd::New),
+        target: None,
+        args: Some(args(|a| {
+            a.name = Some("dev".to_owned());
+            a.op_id = Some("ws".to_owned());
+            a.epoch = Some(epoch);
+        })),
+    });
+    assert!(!reply.ok, "{reply:?}");
+    let _ = core.commit();
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"dev\""));
+    std::fs::write(&file, "untouched").unwrap();
+    let _ = core.commit();
+    assert!(table.is_dir());
+    std::fs::remove_dir_all(&table).unwrap();
+    let _ = core.commit();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "untouched");
+    assert_eq!(
+        on_disk(dir.path()).receipt("ws").map(|r| r.outcome.clone()),
+        Some(outcome::APPLIED.to_owned())
+    );
+}
+
 /// Upstream's `theTableIsSavedAndRestoredWithTheStore` and the restart's `adopt`: an operation applied in the last run
 /// is answered after a restart at revision 0 of the new epoch, and a malformed table starts empty.
 #[test]
