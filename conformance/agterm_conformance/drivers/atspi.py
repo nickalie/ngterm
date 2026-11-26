@@ -138,7 +138,7 @@ class AtspiDriver(Driver):
         if role in ('checkbox', 'radio'):
             value = int(state.contains(self.atspi.StateType.CHECKED) or state.contains(self.atspi.StateType.SELECTED))
         elif 'Text' in interfaces:
-            value = handle.get_text(0, -1)
+            value = self.atspi.Text.get_text(handle, 0, -1)
         elif 'Value' in interfaces:
             value = handle.get_current_value()
         if role == 'text' and 'EditableText' in interfaces:
