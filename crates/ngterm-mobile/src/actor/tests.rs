@@ -822,12 +822,12 @@ fn a_listing_read_on_a_replaced_connection_answers_but_is_neither_kept_nor_repor
 
     let transport = FakeTransport::new();
     let (sink, events) = recorder();
-    let state = super::State::new(
+    let state = std::rc::Rc::new(super::State::new(
         transport.clone(),
         Arc::clone(&sink) as Arc<dyn EventSink>,
         tokio::sync::mpsc::unbounded_channel().0,
         super::Wiring::detached(),
-    );
+    ));
     let machine = machine("m1", "box");
     let old = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
     let new = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
@@ -843,25 +843,13 @@ fn a_listing_read_on_a_replaced_connection_answers_but_is_neither_kept_nor_repor
         host: "m1".to_owned(),
     };
 
-    let overtaken = super::listed(
-        &state,
-        &on(&old),
-        "m1".to_owned(),
-        tree_of(&[(PARENT, None)]),
-        state.ticket(),
-    );
+    let overtaken = super::listed(&state, &on(&old), "m1", tree_of(&[(PARENT, None)]), state.ticket());
 
     assert_eq!(ids(&overtaken), [PARENT]);
     assert!(events.try_recv().is_err());
     assert!(state.listings.borrow().is_empty());
 
-    let current = super::listed(
-        &state,
-        &on(&new),
-        "m1".to_owned(),
-        tree_of(&[(OTHER, None)]),
-        state.ticket(),
-    );
+    let current = super::listed(&state, &on(&new), "m1", tree_of(&[(OTHER, None)]), state.ticket());
 
     assert_eq!(ids(&current), [OTHER]);
     let (_, sessions) = next_tree(&events);
@@ -874,12 +862,12 @@ fn a_listing_overtaken_by_a_later_one_is_neither_kept_nor_reported() {
 
     let transport = FakeTransport::new();
     let (sink, events) = recorder();
-    let state = super::State::new(
+    let state = std::rc::Rc::new(super::State::new(
         transport.clone(),
         Arc::clone(&sink) as Arc<dyn EventSink>,
         tokio::sync::mpsc::unbounded_channel().0,
         super::Wiring::detached(),
-    );
+    ));
     let machine = machine("m1", "box");
     let connection = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
     state.connections.borrow_mut().insert(
@@ -896,8 +884,8 @@ fn a_listing_overtaken_by_a_later_one_is_neither_kept_nor_reported() {
     let first = state.ticket();
     let second = state.ticket();
 
-    super::listed(&state, &on, "m1".to_owned(), tree_of(&[(OTHER, None)]), second);
-    let overtaken = super::listed(&state, &on, "m1".to_owned(), tree_of(&[(PARENT, None)]), first);
+    super::listed(&state, &on, "m1", tree_of(&[(OTHER, None)]), second);
+    let overtaken = super::listed(&state, &on, "m1", tree_of(&[(PARENT, None)]), first);
 
     assert_eq!(ids(&overtaken), [PARENT]);
     let (_, sessions) = next_tree(&events);

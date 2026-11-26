@@ -389,6 +389,8 @@ fn session(private: &str) -> RemoteSession {
         pane_count: 1,
         split_axis: None,
         peer: None,
+        ended: false,
+        page: Some(private.to_owned()),
     }
 }
 

@@ -1178,3 +1178,66 @@ fn a_session_link_of_either_app_has_the_form_whatever_it_names() {
         assert!(!is_session_link(&raw), "{raw}");
     }
 }
+
+// MARK: - rename
+
+#[test]
+fn a_rename_answer_that_is_no_reply_leaves_the_outcome_unknown() {
+    let result = RemoteCommandResult {
+        status: -1,
+        stdout: String::new(),
+        stderr: "Connection reset".to_owned(),
+    };
+    let failure = rename_failure(&result, HOST).expect("a failure");
+    assert!(
+        failure.contains("whether the session was renamed there is unknown"),
+        "{failure}"
+    );
+    let refused = RemoteCommandResult {
+        status: 1,
+        stdout: json!({"ok": false}).to_string(),
+        stderr: String::new(),
+    };
+    assert_eq!(
+        rename_failure(&refused, HOST).as_deref(),
+        Some("the remote command failed on box")
+    );
+    let done = RemoteCommandResult {
+        status: 0,
+        stdout: json!({"ok": true}).to_string(),
+        stderr: String::new(),
+    };
+    assert_eq!(rename_failure(&done, HOST), None);
+}
+
+#[tokio::test]
+async fn a_rename_of_an_id_that_is_not_one_token_runs_nothing() {
+    let transport = FakeTransport::default();
+    let connection = connected(&transport).await;
+    assert_eq!(
+        rename(&connection, HOST, ("a b", None), "x").await,
+        Err(INVALID_REMOTE_SESSION.to_owned())
+    );
+    assert!(commands(&transport).is_empty());
+}
+
+#[test]
+fn a_rename_reaches_the_session_whichever_app_listed_it() {
+    let mut tree: ControlRemoteTree = serde_json::from_value(json!({
+        "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
+        "sessions": [session(PARENT, "main", None, None)],
+        "beside": {
+            "endpoint": {"executable": "/agterm-session", "socketDirectory": "/tmp/zmx", "peer": "agterm"},
+            "sessions": [session(COMPANION, "theirs", None, None)],
+        },
+    }))
+    .unwrap();
+    renamed(&mut tree, COMPANION, "build");
+    renamed(&mut tree, PARENT, "work");
+    let names: Vec<&str> = tree
+        .apps()
+        .flat_map(|app| &app.sessions)
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names, ["work", "build"]);
+}

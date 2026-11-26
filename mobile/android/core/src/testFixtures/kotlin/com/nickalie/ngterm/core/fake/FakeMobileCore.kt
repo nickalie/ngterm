@@ -62,7 +62,8 @@ data class FakeCall(
  *   that has the copy right after its source (a session of its own in the source's directory, named as a created one;
  *   [MobileException.Remote] for a source the machine doesn't have);
  * - [endSession] ends a session of [sessions] whether listed or not ([MobileException.Remote] for one the machine
- *   doesn't have) and delivers a [MobileEvent.Tree] only when a listing is kept;
+ *   doesn't have) and delivers a [MobileEvent.Tree] only when a listing is kept; [renameSession] renames one the same
+ *   way;
  * - [attachSession] and [showPane] take only a session of the machine's last listing ([MobileException.NotListed]
  *   otherwise), not of [sessions]: seeding [sessions] without listing them is refused, as the real core refuses a
  *   session it has not listed;
@@ -368,6 +369,23 @@ class FakeMobileCore(
         val listing = listings[machineId] ?: return
         listings[machineId] =
             listing.filter { it.id != sessionId }.also { emit(MobileEvent.Tree(machineId, it, hints[machineId])) }
+    }
+
+    override suspend fun renameSession(
+        machineId: String,
+        sessionId: String,
+        name: String,
+    ) {
+        recordHeld("renameSession", machineId, sessionId, name)
+        val list = sessionsOf(machineId)
+        val at = list.indexOfFirst { it.id == sessionId }
+        if (at < 0) throw MobileException.Remote("no session $sessionId")
+        list[at] = list[at].copy(name = name)
+        val listing = listings[machineId] ?: return
+        listings[machineId] =
+            listing.map { if (it.id == sessionId) it.copy(name = name) else it }.also {
+                emit(MobileEvent.Tree(machineId, it, hints[machineId]))
+            }
     }
 
     override suspend fun attachSession(

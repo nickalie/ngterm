@@ -543,9 +543,24 @@ pub fn control_command<S: AsRef<str>>(
 /// `live` read as its `zmx`.
 #[must_use]
 pub fn control_tail<S: AsRef<str>>(form: impl Into<OriginForm>, arguments: &[S]) -> String {
+    control_tail_with_operands::<S, &str>(form, arguments, &[])
+}
+
+/// [`control_tail`] with `operands` after `--json --`, so user text that starts with `-` stays an operand (upstream's
+/// `controlCommand(arguments:operands:)`). The operands pass as they are, never read as `live` words.
+#[must_use]
+pub fn control_tail_with_operands<S: AsRef<str>, O: AsRef<str>>(
+    form: impl Into<OriginForm>,
+    arguments: &[S],
+    operands: &[O],
+) -> String {
     let form = form.into();
     let mut words = peer::cli_words(form.peer, arguments);
     words.push("--json".to_owned());
+    if !operands.is_empty() {
+        words.push("--".to_owned());
+        words.extend(operands.iter().map(|operand| operand.as_ref().to_owned()));
+    }
     if form.shell == OriginShell::Windows && !form.is_agterm() {
         return windows_cli_tail(&words);
     }
@@ -556,6 +571,18 @@ pub fn control_tail<S: AsRef<str>>(form: impl Into<OriginForm>, arguments: &[S])
         shell_quoted_line(&words)
     );
     ["/bin/sh", "-c", chain.as_str()].map(account_shell_quoted).join(" ")
+}
+
+/// The remote command of a viewer's catalog stream: `ngtermctl catalog subscribe` through [`remote_cli_chain`], run
+/// with `exec` so the far shell does not linger between ssh and the bridge, or a Windows origin's form. Only
+/// `ngterm-headless` serves it, so there is no agterm form.
+#[must_use]
+pub fn catalog_tail(shell: OriginShell) -> String {
+    let words = ["catalog", "subscribe"];
+    if shell == OriginShell::Windows {
+        return windows_cli_tail(&words);
+    }
+    remote_cli_chain(&format!("exec {REMOTE_CLI} {}", shell_quoted_line(&words)))
 }
 
 /// `value` quoted as one word that sh, zsh, tcsh and fish all read alike (upstream's `accountShellQuoted`): an
@@ -852,6 +879,55 @@ mod tests {
                 joined(plain_prefix(), want)
             );
         }
+    }
+
+    /// The words a tail hands the installed CLI, run through `/bin/sh` as a far login shell would.
+    #[cfg(unix)]
+    fn cli_words_of(tail: &str) -> String {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = "#!/bin/sh\nfor word in \"$@\"; do printf '[%s]' \"$word\"; done\n";
+        ngterm_host::fakes::write_executable(&bin.join("ngtermctl"), script).unwrap();
+        let ran = Command::new("/bin/sh")
+            .args(["-c", tail])
+            .env_clear()
+            .env("HOME", home.path())
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+        String::from_utf8_lossy(&ran.stdout).into_owned()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn operands_follow_the_json_flag_after_a_double_dash_with_their_words_intact() {
+        let tail = control_tail_with_operands(
+            OriginShell::Posix,
+            &["session", "rename", "--target", "S1"],
+            &["-x 'y'\\"],
+        );
+        assert_eq!(
+            cli_words_of(&tail),
+            "[session][rename][--target][S1][--json][--][-x 'y'\\]"
+        );
+        let none: [&str; 0] = [];
+        assert_eq!(
+            control_tail_with_operands(OriginShell::Posix, &["restore", "mode"], &none),
+            control_tail(OriginShell::Posix, &["restore", "mode"])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_catalog_tail_reaches_the_installed_cli_subscribe_bridge() {
+        assert_eq!(cli_words_of(&catalog_tail(OriginShell::Posix)), "[catalog][subscribe]");
+        assert!(catalog_tail(OriginShell::Posix).contains("exec ngtermctl"));
+        assert_eq!(
+            catalog_tail(OriginShell::Windows),
+            windows_cli_tail(&["catalog", "subscribe"])
+        );
     }
 
     /// The present tail hands the far CLI the session as one word, whatever it holds. Unix only: the far side's shell

@@ -111,6 +111,14 @@ pub enum MobileEvent {
         /// (desktop's words). `None` for every other listing, an agterm in that mode with no session yet included.
         hint: Option<String>,
     },
+    /// The catalog stream of a headless machine (`ngterm-headless`) changed state. Once its snapshot arrives, the
+    /// machine's [`MobileEvent::Tree`] follows its catalog live: its workspaces' order and names, ended sessions and
+    /// page rows included, and the last rows stay while the stream is down. Never sent for a machine with windows,
+    /// whose list stays its listing.
+    Catalog {
+        machine_id: String,
+        state: crate::catalog::CatalogState,
+    },
     /// An attached session's presentation stream changed state ([`MobileCore::attach_session`]). Leaving `Connected`
     /// is followed by what that takes away: the open asks dismissed, the context, status and HUD cleared.
     SessionConnection {
@@ -505,7 +513,9 @@ impl MobileCore {
     ///
     /// [`MobileError::NotConnected`], [`MobileError::Remote`] with why it was not created (the machine runs no live
     /// sessions, its ngterm is too old, it refused) or was created but not attachable in time, or
-    /// [`MobileError::Stopped`].
+    /// [`MobileError::Stopped`]. On a headless machine whose catalog is up, it is sent under an operation id and
+    /// answered once the catalog shows the session attachable; a reply lost on the way is asked about once, and an
+    /// outcome still unknown is the error.
     pub async fn create_session(&self, machine_id: String, name: Option<String>) -> Result<RemoteSession, MobileError> {
         let (reply, answer) = oneshot::channel();
         self.actor.post(Command::CreateSession {
@@ -543,12 +553,37 @@ impl MobileCore {
     ///
     /// # Errors
     ///
-    /// [`MobileError::NotConnected`], [`MobileError::Remote`] with why it did not end, or [`MobileError::Stopped`].
+    /// [`MobileError::NotConnected`], [`MobileError::Remote`] with why it did not end (or, on a headless machine whose
+    /// catalog is up, why its outcome is unknown), or [`MobileError::Stopped`].
     pub async fn end_session(&self, machine_id: String, session_id: String) -> Result<(), MobileError> {
         let (reply, answer) = oneshot::channel();
         self.actor.post(Command::EndSession {
             machine_id,
             session_id,
+            reply,
+        })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// Rename Session: `machine_id` gives its session `session_id` the name `name`. On a headless machine whose catalog
+    /// is up, it is sent under an operation id and answered once the catalog shows it; elsewhere the machine's
+    /// listing, when one is kept, arrives with the new name as a [`MobileEvent::Tree`].
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::NotConnected`], [`MobileError::Remote`] with why it was not renamed or why its outcome is
+    /// unknown, or [`MobileError::Stopped`].
+    pub async fn rename_session(
+        &self,
+        machine_id: String,
+        session_id: String,
+        name: String,
+    ) -> Result<(), MobileError> {
+        let (reply, answer) = oneshot::channel();
+        self.actor.post(Command::RenameSession {
+            machine_id,
+            session_id,
+            name,
             reply,
         })?;
         answer.await.unwrap_or(Err(MobileError::Stopped))

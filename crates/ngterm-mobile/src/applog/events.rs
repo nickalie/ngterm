@@ -95,7 +95,8 @@ fn log(event: &MobileEvent) {
         | MobileEvent::HostKeyUnknown { .. }
         | MobileEvent::HostKeyChanged { .. }
         | MobileEvent::SignInRequested { .. }
-        | MobileEvent::Tree { .. } => machine(event),
+        | MobileEvent::Tree { .. }
+        | MobileEvent::Catalog { .. } => machine(event),
         MobileEvent::SessionConnection { .. }
         | MobileEvent::SessionLayout { .. }
         | MobileEvent::SessionMode { .. }
@@ -171,6 +172,13 @@ fn machine(event: &MobileEvent) {
             machine = machine_id.as_str(),
             sessions = sessions.len(),
             hint = hint.is_some()
+        ),
+        MobileEvent::Catalog { machine_id, state } => note!(
+            INFO,
+            tag::SESSIONS,
+            "catalog state reported",
+            machine = machine_id.as_str(),
+            state = state.class()
         ),
         _ => {}
     }

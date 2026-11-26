@@ -18,7 +18,8 @@
 //! Module map: [`api`] (the facade, its records, events and callback interfaces), [`actor`] (the thread, its runtime
 //! and commands), [`transport`] (the ssh seam, its channels, the russh transport and the scripted fake behind the
 //! `fakes` feature), [`keys`] (generating, importing and loading the app's ssh keys), [`sessions`] (a machine's session
-//! list, New Session and End Session), [`presentation`] (attached sessions' presentation streams and what they
+//! list, New Session, Rename Session and End Session), [`catalog`] (a headless machine's catalog, followed live, and the
+//! actions sent to it under an operation id), [`presentation`] (attached sessions' presentation streams and what they
 //! show), [`pane`] (shown panes: their attach, terminal, leadership, ends and clipboard reads), [`reconnect`] (keeping
 //! machines connected: lost connections, network changes, suspend and resume), [`rows`] (the packed row buffer a pane
 //! is drawn from), [`applog`] (the diagnostic log the core and the apps write, and the apps show and export), [`release`] (verifying a GitHub release's checksums for the Android app's self-update), [`chat`] (the agent chat view: what each pane runs, the chat channels of the panes shown as a chat,
@@ -49,6 +50,7 @@ uniffi::setup_scaffolding!();
 pub mod actor;
 pub mod api;
 pub mod applog;
+pub mod catalog;
 pub mod chat;
 pub mod keys;
 pub mod pane;

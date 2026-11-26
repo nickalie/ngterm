@@ -133,6 +133,28 @@ class FakeMobileCoreTest {
         }
 
     @Test
+    fun aRenameReachesTheSessionAndItsListing() =
+        runTest {
+            val events = mutableListOf<MobileEvent>()
+            val core = FakeMobileCore(sink = EventSinkOf(events))
+            core.connect(machine)
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"), fakeSession("s2"))
+            core.renameSession("m1", "s1", "unlisted")
+            assertEquals("unlisted", core.sessions.getValue("m1")[0].name)
+            assertTrue(events.filterIsInstance<MobileEvent.Tree>().isEmpty())
+            core.listSessions("m1")
+            events.clear()
+            core.renameSession("m1", "s2", "build")
+            assertEquals(
+                listOf(MobileEvent.Tree("m1", core.sessions.getValue("m1").toList(), null)),
+                events,
+            )
+            assertEquals(listOf("unlisted", "build"), core.listSessions("m1").map { it.name })
+            val error = runCatching { core.renameSession("m1", "nope", "x") }.exceptionOrNull()
+            assertTrue(error is MobileException.Remote)
+        }
+
+    @Test
     fun endingASessionTheMachineDoesNotHaveIsARemoteError() =
         runTest {
             val core = FakeMobileCore()

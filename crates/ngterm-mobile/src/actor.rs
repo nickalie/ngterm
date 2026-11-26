@@ -18,6 +18,10 @@
 //! A shown pane's chat ([`crate::chat`]) runs on the same connection too, learning each session's layout and its panes'
 //! agents from what the streams report; hiding the pane or detaching its session closes it.
 //!
+//! A headless machine's catalog ([`catalogs`]) is followed on its connection once a listing says the machine is
+//! headless: its rows replace the listing's, and New Session, Rename Session and End Session go to it under an operation
+//! id while its stream is up.
+//!
 //! A connection the core holds is watched: lost by itself, it is retried on the reconnect schedule as a connect
 //! attempt that waits first ([`crate::reconnect`]) until it is back or refused for good
 //! ([`crate::transport::TransportError::Refused`]), and the machine's sessions stay attached across it. Closing a
@@ -25,11 +29,14 @@
 //! suspending lets the streams' links write what they hold, then closes every connection but keeps the streams to start
 //! again on resume.
 
+mod catalogs;
 mod chats;
 mod inputs;
 
 #[cfg(test)]
 mod both_apps_tests;
+#[cfg(test)]
+mod catalog_tests;
 #[cfg(test)]
 mod chat_tests;
 #[cfg(test)]
@@ -57,9 +64,12 @@ use std::thread::{self, JoinHandle, ThreadId};
 use std::time::Duration;
 
 use ngterm_core::model::StatusKeystroke;
-use ngterm_core::remote::not_live;
+use ngterm_core::pane_env::uuid_string;
+use ngterm_core::remote::origin::OriginForm;
+use ngterm_core::remote::origin_replies::{NOT_ATTACHABLE, READY_BUDGET, SESSION_NOUN, unattached};
 use ngterm_core::remote::peer::origin_pane_identity as pane_identity;
-use ngterm_proto::{ControlRemoteTree, RemotePeer};
+use ngterm_core::remote::tree::{INVALID_REMOTE_SESSION, is_plain};
+use ngterm_proto::{ControlRemoteTree, ControlResult, RemotePeer, Response};
 use uuid::Uuid;
 
 use tokio::runtime::Builder;
@@ -71,6 +81,7 @@ use crate::api::{
     EventSink, Machine, MachineState, MobileError, MobileEvent, Pane, PaneSize, PaneSlot, UploadProgress,
 };
 use crate::applog::{self, tag};
+use crate::catalog::operations::{self, Operation, Settled};
 use crate::chat::input::{Action, AgentInputOutcome, InputTiming};
 use crate::chat::{AgentCommand, ChatEvent, ChatKey, Chats, UploadCancel};
 use crate::note;
@@ -118,6 +129,12 @@ pub(crate) enum Command {
     EndSession {
         machine_id: String,
         session_id: String,
+        reply: Reply,
+    },
+    RenameSession {
+        machine_id: String,
+        session_id: String,
+        name: String,
         reply: Reply,
     },
     AttachSession {
@@ -323,6 +340,8 @@ struct State<T: Transport> {
     chats: RefCell<Chats<T::Connection>>,
     /// The machines [`suspend`] set aside, to reconnect on [`resume`].
     suspended: RefCell<HashMap<String, SetAside>>,
+    /// The catalogs of the headless machines ([`catalogs`]).
+    catalogs: RefCell<HashMap<String, catalogs::Follow>>,
 }
 
 /// What the actor knows of a connected machine's sessions.
@@ -405,6 +424,7 @@ impl<T: Transport> State<T> {
             panes: RefCell::new(Panes::new(notes)),
             chats: RefCell::new(Chats::default()),
             suspended: RefCell::new(HashMap::new()),
+            catalogs: RefCell::new(HashMap::new()),
         }
     }
 
@@ -422,9 +442,17 @@ impl<T: Transport> State<T> {
     ) -> Option<R> {
         let listings = self.listings.borrow();
         let tree = listings.get(machine_id)?.tree.as_ref()?;
-        tree.apps()
-            .find(|app| app.sessions.iter().any(|listed| listed.id == session_id))
-            .map(read)
+        let app = tree
+            .apps()
+            .find(|app| app.sessions.iter().any(|listed| listed.id == session_id));
+        // a session the catalog brought before any listing showed it is the headless machine's own
+        app.or_else(|| {
+            let catalogs = self.catalogs.borrow();
+            let catalog = catalogs.get(machine_id)?.mirror.catalog()?;
+            crate::catalog::session(catalog, session_id)?;
+            tree.apps().find(|app| app.headless == Some(true))
+        })
+        .map(read)
     }
 
     /// The app that lists `session_id` on `machine_id`; `None` for a session the kept listing does not hold.
@@ -507,6 +535,7 @@ async fn run<T: Transport>(
             | Command::CreateSession { .. }
             | Command::DuplicateSession { .. }
             | Command::EndSession { .. }
+            | Command::RenameSession { .. }
             | Command::AttachSession { .. }
             | Command::DetachSession { .. }) => session_command(&state, command),
             Command::AnswerAsk {
@@ -545,6 +574,7 @@ async fn run<T: Transport>(
     }
     ticker.abort();
     pane_notes.abort();
+    state.catalogs.borrow_mut().clear();
     *state.presentations.borrow_mut() = Presentations::default();
     state.chats.borrow_mut().clear();
     // Nobody is left to tell: the panes' threads stop and their channels close.
@@ -596,6 +626,16 @@ fn session_command<T: Transport>(state: &Rc<State<T>>, command: Command) {
             let ended = end_session(state, link, id, session_id).await;
             note!(INFO, tag::SESSIONS, "end session", result = result_class(&ended));
             ended
+        }),
+        Command::RenameSession {
+            machine_id,
+            session_id,
+            name,
+            reply,
+        } => spawn_on_machine(state, machine_id, reply, |state, link, id| async move {
+            let renamed = rename_session(state, link, id, session_id, name).await;
+            note!(INFO, tag::SESSIONS, "rename session", result = result_class(&renamed));
+            renamed
         }),
         Command::AttachSession {
             machine_id,
@@ -841,6 +881,7 @@ fn connected<T: Transport>(state: &Rc<State<T>>, machine: Machine, connection: T
     let events = state.panes.borrow_mut().machine_up(&id, &connection);
     state.emit_all(events);
     state.chats.borrow_mut().machine_up(&id, &connection);
+    catalogs::start(state, &id);
 }
 
 /// Waits for `connection` to go; still the machine's then, it was lost, and the machine is reconnected.
@@ -861,6 +902,8 @@ async fn watch<T: Transport>(state: Rc<State<T>>, machine_id: String, connection
     state.panes.borrow_mut().machine_down(&machine_id);
     let events = state.chats.borrow_mut().machine_down(&machine_id);
     state.emit_all(events);
+    let lost = format!("the connection to {} was lost", shown_name(&link.machine));
+    catalogs::stop(&state, &machine_id, &lost);
     start_attempt(&state, link.machine, Vec::new(), Some(Retry::after_loss()));
 }
 
@@ -938,6 +981,7 @@ async fn suspend<T: Transport>(state: &State<T>) {
         state.presentations.borrow_mut().suspend_machine(&machine_id);
         state.panes.borrow_mut().machine_down(&machine_id);
         state.chats.borrow_mut().suspend_machine(&machine_id);
+        catalogs::stop(state, &machine_id, "the app is in the background");
         state.suspended.borrow_mut().insert(machine_id, machine);
     }
 }
@@ -979,6 +1023,7 @@ fn close<T: Transport>(state: &State<T>, machine_id: &str) {
     // a machine disconnected or edited may be another machine now: it is learned again
     state.origin_forms.borrow_mut().remove(machine_id);
     state.listings.borrow_mut().remove(machine_id);
+    catalogs::forget(state, machine_id);
     state.presentations.borrow_mut().forget_machine(machine_id);
     state.chats.borrow_mut().forget_machine(machine_id);
     let events = state.panes.borrow_mut().forget_machine(machine_id);
@@ -1047,18 +1092,21 @@ fn remote(reason: String) -> MobileError {
 /// [`MobileEvent::Tree`] only while its connection is still the machine's and no newer listing is kept; a stale listing
 /// still answers its caller. The sessions ended since it began are not in what it answers or keeps.
 fn listed<T: Transport>(
-    state: &State<T>,
+    state: &Rc<State<T>>,
     link: &OnMachine<T::Connection>,
-    machine_id: String,
+    machine_id: &str,
     tree: ControlRemoteTree,
     began: u64,
 ) -> Vec<RemoteSession> {
-    let mut tree = with_skipped_app(state, &machine_id, tree);
-    let current = state.is_current(&machine_id, &link.connection);
+    let mut tree = with_skipped_app(state, machine_id, tree);
+    let current = state.is_current(machine_id, &link.connection);
+    let answer = |tree: &ControlRemoteTree| {
+        catalogs::rows(state, machine_id, Some(tree)).unwrap_or_else(|| sessions::listed_sessions(tree))
+    };
     {
         let mut listings = state.listings.borrow_mut();
         let ended = listings
-            .get(&machine_id)
+            .get(machine_id)
             .map(|kept| kept.ended.iter())
             .into_iter()
             .flatten();
@@ -1066,11 +1114,11 @@ fn listed<T: Transport>(
             sessions::forget(&mut tree, session_id);
         }
         if !current {
-            return sessions::listed_sessions(&tree);
+            return answer(&tree);
         }
-        let kept = listings.entry(machine_id.clone()).or_default();
+        let kept = listings.entry(machine_id.to_owned()).or_default();
         if kept.as_of > began {
-            return sessions::listed_sessions(&tree);
+            return answer(&tree);
         }
         let oldest = state
             .open_listings
@@ -1081,13 +1129,9 @@ fn listed<T: Transport>(
         kept.tree = Some(tree.clone());
         kept.as_of = began;
     }
-    let sessions = sessions::listed_sessions(&tree);
-    state.emit(MobileEvent::Tree {
-        machine_id,
-        sessions: sessions.clone(),
-        hint: not_live::hint(&tree),
-    });
-    sessions
+    catalogs::listed(state, machine_id, &link.host, &tree);
+    catalogs::report(state, machine_id);
+    answer(&tree)
 }
 
 async fn list_sessions<T: Transport>(
@@ -1097,7 +1141,7 @@ async fn list_sessions<T: Transport>(
 ) -> Result<Vec<RemoteSession>, MobileError> {
     let listing = state.begin_listing();
     let tree = sessions::list(&*link.connection, &link.host).await.map_err(remote)?;
-    Ok(listed(&state, &link, machine_id, tree, listing.began))
+    Ok(listed(&state, &link, &machine_id, tree, listing.began))
 }
 
 async fn create_session<T: Transport>(
@@ -1106,6 +1150,10 @@ async fn create_session<T: Transport>(
     machine_id: String,
     name: Option<String>,
 ) -> Result<RemoteSession, MobileError> {
+    let operation = Operation::NewSession { name: name.clone() };
+    if let Some(created) = catalog_action(&state, &link, &machine_id, &operation).await {
+        return created_in_catalog(&state, &link, &machine_id, created?).await;
+    }
     let listing = Cell::new(None);
     let (created, tree) = sessions::create(&*link.connection, &link.host, name.as_deref(), || {
         listing.set(Some(state.begin_listing()));
@@ -1118,7 +1166,7 @@ async fn create_session<T: Transport>(
     listed(
         &state,
         &link,
-        machine_id,
+        &machine_id,
         tree,
         listing.as_ref().map_or(0, |listing| listing.began),
     );
@@ -1156,7 +1204,7 @@ async fn duplicate_session<T: Transport>(
     listed(
         &state,
         &link,
-        machine_id,
+        &machine_id,
         tree,
         listing.as_ref().map_or(0, |listing| listing.began),
     );
@@ -1171,37 +1219,156 @@ async fn end_session<T: Transport>(
     machine_id: String,
     session_id: String,
 ) -> Result<(), MobileError> {
+    let operation = Operation::EndSession { id: session_id.clone() };
+    if !is_plain(&session_id) {
+        return Err(remote(INVALID_REMOTE_SESSION.to_owned()));
+    }
+    if let Some(ended) = catalog_action(&state, &link, &machine_id, &operation).await {
+        ended?;
+    } else {
+        let app = state.app_of(&machine_id, &session_id);
+        sessions::end(&*link.connection, &link.host, &session_id, app)
+            .await
+            .map_err(remote)?;
+        catalogs::forget_session(&state, &machine_id, &session_id);
+    }
+    if !state.is_current(&machine_id, &link.connection) {
+        return Ok(());
+    }
+    let ticket = state.ticket();
+    {
+        let mut listings = state.listings.borrow_mut();
+        let kept = listings.entry(machine_id.clone()).or_default();
+        kept.ended.push((ticket, session_id.clone()));
+        if let Some(tree) = kept.tree.as_mut() {
+            sessions::forget(tree, &session_id);
+        }
+    }
+    catalogs::report(&state, &machine_id);
+    Ok(())
+}
+
+/// Renames the session there; while the connection is still the machine's, the kept listing takes the name and is
+/// reported. On a headless machine with its catalog up, the catalog brings the name instead.
+async fn rename_session<T: Transport>(
+    state: Rc<State<T>>,
+    link: OnMachine<T::Connection>,
+    machine_id: String,
+    session_id: String,
+    name: String,
+) -> Result<(), MobileError> {
+    if !is_plain(&session_id) {
+        return Err(remote(INVALID_REMOTE_SESSION.to_owned()));
+    }
+    let operation = Operation::RenameSession {
+        id: session_id.clone(),
+        name: name.clone(),
+    };
+    if let Some(renamed) = catalog_action(&state, &link, &machine_id, &operation).await {
+        return renamed.map(drop);
+    }
     let app = state.app_of(&machine_id, &session_id);
-    sessions::end(&*link.connection, &link.host, &session_id, app)
+    sessions::rename(&*link.connection, &link.host, (&session_id, app), &name)
         .await
         .map_err(remote)?;
     if !state.is_current(&machine_id, &link.connection) {
         return Ok(());
     }
-    let ticket = state.ticket();
-    let listed = {
-        let mut listings = state.listings.borrow_mut();
-        let kept = listings.entry(machine_id.clone()).or_default();
-        kept.ended.push((ticket, session_id.clone()));
-        kept.tree.as_mut().map(|tree| {
-            sessions::forget(tree, &session_id);
-            (sessions::listed_sessions(tree), not_live::hint(tree))
-        })
-    };
-    if let Some((sessions, hint)) = listed {
-        state.emit(MobileEvent::Tree {
-            machine_id,
-            sessions,
-            hint,
-        });
+    if let Some(tree) = state
+        .listings
+        .borrow_mut()
+        .get_mut(&machine_id)
+        .and_then(|kept| kept.tree.as_mut())
+    {
+        sessions::renamed(tree, &session_id, &name);
     }
+    catalogs::report(&state, &machine_id);
     Ok(())
+}
+
+/// Sends `operation` under an operation id when `machine_id`'s catalog is up, and answers once the catalog shows what
+/// it applied, or [`READY_BUDGET`] runs out (New Session at once, as its caller waits for the row): the command's own
+/// reply, `None` when only a lookup told or nothing changed. `None` while the machine has no live catalog: the caller
+/// sends it as a plain command.
+async fn catalog_action<T: Transport>(
+    state: &Rc<State<T>>,
+    link: &OnMachine<T::Connection>,
+    machine_id: &str,
+    operation: &Operation,
+) -> Option<Result<Option<Box<Response<ControlResult>>>, MobileError>> {
+    let position = catalogs::position(state, machine_id)?;
+    let op_id = uuid_string(Uuid::new_v4());
+    let form = OriginForm {
+        peer: RemotePeer::Ngterm,
+        ..link.connection.origin_form()
+    };
+    let settled = operations::send(&*link.connection, (&link.host, form), operation, &op_id, &position).await;
+    note!(
+        INFO,
+        tag::SESSIONS,
+        "catalog operation",
+        operation = operation.label(),
+        outcome = match &settled {
+            Settled::Applied { .. } => "applied",
+            Settled::NoChange => "noop",
+            Settled::Failed(_) => "failed",
+        }
+    );
+    Some(match settled {
+        Settled::Failed(reason) => Err(remote(reason)),
+        Settled::NoChange => Ok(None),
+        Settled::Applied { epoch, rev, reply } => {
+            // New Session's caller waits for its row instead
+            let waits = !matches!(operation, Operation::NewSession { .. });
+            if let Some(rev) = rev.filter(|_| waits) {
+                // the answer waits for the rows to show the change; a catalog that never gets there still answers
+                let _ = catalogs::wait_for(state, machine_id, READY_BUDGET, |mirror| {
+                    mirror.reaches(&epoch, rev).then_some(())
+                })
+                .await;
+            }
+            Ok(reply)
+        }
+    })
+}
+
+/// New Session's answer once the catalog applied it: the created row once the catalog shows it attachable.
+async fn created_in_catalog<T: Transport>(
+    state: &Rc<State<T>>,
+    link: &OnMachine<T::Connection>,
+    machine_id: &str,
+    reply: Option<Box<Response<ControlResult>>>,
+) -> Result<RemoteSession, MobileError> {
+    let id = reply
+        .and_then(|reply| reply.result)
+        .and_then(|result| result.id)
+        .filter(|id| is_plain(id));
+    let Some(id) = id else {
+        return Err(remote(format!(
+            "{} made the session; {}",
+            link.host,
+            sessions::ATTACH_FROM_LIST
+        )));
+    };
+    catalogs::shown(state, machine_id, &id, READY_BUDGET)
+        .await
+        .ok_or_else(|| {
+            remote(sessions::phone_wording(unattached(
+                SESSION_NOUN,
+                &id,
+                &link.host,
+                NOT_ATTACHABLE,
+            )))
+        })
 }
 
 /// Opens the presentation stream of `session_id`, a session of `machine_id`'s last listing, on the machine's
 /// connection.
 fn attach_session<T: Transport>(state: &Rc<State<T>>, machine_id: &str, session_id: &str) -> Result<(), MobileError> {
     let connection = connection_of(state, machine_id)?;
+    if let Some(reason) = catalogs::attach_refusal(state, machine_id, session_id) {
+        return Err(remote(reason));
+    }
     let (version, app) = state
         .listing_of(machine_id, session_id, |app| (app.presentation, app.endpoint.peer()))
         .ok_or_else(|| MobileError::NotListed {
@@ -1438,7 +1605,7 @@ fn check_gone<T: Transport>(state: &Rc<State<T>>, check: GoneCheck) {
                 let gone = !tree
                     .apps()
                     .any(|app| app.sessions.iter().any(|listed| listed.id == check.session_id));
-                listed(&state, &link, check.machine_id.clone(), tree, listing.began);
+                listed(&state, &link, &check.machine_id, tree, listing.began);
                 gone
             }
             Err(_) => false,

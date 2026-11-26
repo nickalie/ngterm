@@ -1,6 +1,6 @@
-//! A machine's sessions: listing them (`ngtermctl live tree`), New Session, Duplicate and End Session, run on the machine's
-//! connection as the lines desktop's Attach Remote runs over ssh ([`ngterm_core::remote::ssh`]'s tails), and read with
-//! the same decisions and strings ([`ngterm_core::remote::origin_replies`]).
+//! A machine's sessions: listing them (`ngtermctl live tree`), New Session, Duplicate, Rename Session and End Session,
+//! run on the machine's connection as the lines desktop's Attach Remote runs over ssh ([`ngterm_core::remote::ssh`]'s
+//! tails), and read with the same decisions and strings ([`ngterm_core::remote::origin_replies`]).
 //!
 //! - The list is what desktop's session picker offers: a page companion has no row of its own, and parents come before
 //!   their companions.
@@ -11,7 +11,11 @@
 //! - Duplicate is New Session with `session duplicate --target` as its second line, desktop's Duplicate Session of a
 //!   remote row: the machine copies its session's focused directory into a fresh shell after it, selected there. A
 //!   companion's copy is a session of its own, and a parent's companions are not copied.
+//! - Rename Session names the session there (`session rename --target ID -- NAME`).
 //! - End Session closes the session there (`session close --target`), with no undo.
+//!
+//! A headless machine with its catalog up gets New Session, Rename Session and End Session under an operation id
+//! instead ([`crate::catalog::operations`]).
 //!
 //! Each line runs once, never retried. A command that can't start (the connection is gone) fails with the transport's
 //! own text; once it ran, what it answered decides.
@@ -33,16 +37,17 @@ use ngterm_core::remote::not_live;
 use ngterm_core::remote::origin::{self, OriginForm, OriginShell};
 use ngterm_core::remote::origin_replies::{
     COMPANION_DEADLINE, ListingWait, NEW_SESSION_ARGUMENTS, PAUSE, RESTORE_MODE_ARGUMENTS, WaitStep,
-    check_restore_mode, duplicate_session_arguments, end_failure, end_session_arguments, pickable_sessions,
-    read_remote_tree, session_created,
+    check_restore_mode, duplicate_session_arguments, end_failure, end_session_arguments, no_answer, pickable_sessions,
+    read_remote_tree, reply_of, session_created,
 };
-use ngterm_core::remote::ssh::{control_tail, tree_tail_for};
+use ngterm_core::remote::ssh::{control_tail, control_tail_with_operands, tree_tail_for};
 use ngterm_core::remote::tree::{
     INVALID_REMOTE_SESSION, NO_ANSWER_IN_TIME, REMOTE_CLI, RemoteCommandResult, TREE_DEADLINE, is_plain,
 };
 use ngterm_proto::{ControlRemoteSession, ControlRemoteTree, RemotePeer};
 
 use crate::applog::tag;
+use crate::catalog::operations::rename_arguments;
 use crate::note;
 use crate::transport::{ChannelEnd, ChannelOutput, Connection};
 
@@ -75,6 +80,14 @@ pub struct RemoteSession {
     /// session; `None` reads as ngterm.
     #[uniffi(default = None)]
     pub peer: Option<crate::peer::PeerKind>,
+    /// A session of a headless origin's catalog whose panes are gone without its shell exiting: it stays listed, marked
+    /// ended, until it is closed. Always false on the plain listing.
+    #[uniffi(default = false)]
+    pub ended: bool,
+    /// A page row of a headless origin's catalog: its page's kind (`file` or `url`). It shows no terminal, so it is
+    /// never attached. `None` for a terminal session, and always on the plain listing, which lists no pages.
+    #[uniffi(default = None)]
+    pub page: Option<String>,
 }
 
 impl RemoteSession {
@@ -95,6 +108,8 @@ impl RemoteSession {
             pane_count: u32::try_from(session.panes.len()).unwrap_or(u32::MAX),
             split_axis: session.split_axis.clone(),
             peer: Some(peer.into()),
+            ended: false,
+            page: None,
         }
     }
 }
@@ -534,6 +549,54 @@ pub async fn end<C: Connection>(
     let form = known_form(connection, host, app).await?;
     let result = control_in(connection, form, &end_session_arguments(session)).await?;
     end_failure(&result, host).map_or(Ok(()), Err)
+}
+
+/// Rename Session: `host` gives its session `session`, a session of `app` (`None`: the machine's own), the name `name`.
+///
+/// # Errors
+///
+/// [`INVALID_REMOTE_SESSION`] for an id that is not one plain token, otherwise why it was not renamed there
+/// ([`rename_failure`]) or the transport's text.
+pub async fn rename<C: Connection>(
+    connection: &C,
+    host: &str,
+    (session, app): (&str, Option<RemotePeer>),
+    name: &str,
+) -> Result<(), String> {
+    if !is_plain(session) {
+        return Err(INVALID_REMOTE_SESSION.to_owned());
+    }
+    let form = known_form(connection, host, app).await?;
+    let line = control_tail_with_operands(form, &rename_arguments(session), &[name]);
+    let result = run(connection, &line, COMPANION_DEADLINE).await?;
+    rename_failure(&result, host).map_or(Ok(()), Err)
+}
+
+/// Why `host`'s answer to `session rename` says the session was not renamed; `None` when it was.
+#[must_use]
+pub fn rename_failure(result: &RemoteCommandResult, host: &str) -> Option<String> {
+    let Some(reply) = reply_of(result) else {
+        return Some(no_answer(
+            result,
+            host,
+            "whether the session was renamed there is unknown",
+        ));
+    };
+    (!reply.ok).then(|| {
+        reply
+            .error
+            .unwrap_or_else(|| format!("the remote command failed on {host}"))
+    })
+}
+
+/// `tree` with session `session` named `name`, whichever app listed it.
+pub fn renamed(tree: &mut ControlRemoteTree, session: &str, name: &str) {
+    if let Some(listed) = tree.sessions.iter_mut().find(|listed| listed.id == session) {
+        name.clone_into(&mut listed.name);
+    }
+    if let Some(beside) = tree.beside.as_deref_mut() {
+        renamed(beside, session, name);
+    }
 }
 
 /// `tree` without session `session` and its companions, as the far side's close took them, whichever app listed it.
