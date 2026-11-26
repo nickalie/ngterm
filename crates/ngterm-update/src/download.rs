@@ -164,17 +164,17 @@ fn metadata_response(
         && let Ok(mut authorization) = ureq::http::HeaderValue::try_from(format!("Bearer {token}"))
     {
         authorization.set_sensitive(true);
-        let reset = limit_reset(&response);
+        let wait = limit_wait(&response);
         response = metadata_request(agent, url, Some(authorization))?;
         if matches!(response.status().as_u16(), 401 | 403) && !primary_limit(&response) {
             return Err(limit_error(
-                reset,
+                wait,
                 " GitHub refused the local token (GH_TOKEN, GITHUB_TOKEN or gh auth token).",
             ));
         }
     }
-    if primary_limit(&response) {
-        return Err(limit_error(limit_reset(&response), ""));
+    if primary_limit(&response) || secondary_limit(&response) {
+        return Err(limit_error(limit_wait(&response), ""));
     }
     if !response.status().is_success() {
         return Err(ureq::Error::StatusCode(response.status().as_u16()).into());
@@ -182,25 +182,40 @@ fn metadata_response(
     Ok(response)
 }
 
-fn limit_reset(response: &ureq::http::Response<ureq::Body>) -> Option<u64> {
+fn header_seconds(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<u64> {
     response
         .headers()
-        .get("x-ratelimit-reset")
+        .get(name)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
-fn limit_error(reset: Option<u64>, note: &str) -> Error {
+/// The wait that GitHub asks for: `Retry-After`, else the time until `X-RateLimit-Reset`.
+fn limit_wait(response: &ureq::http::Response<ureq::Body>) -> Option<Duration> {
+    if let Some(seconds) = header_seconds(response, "retry-after") {
+        return Some(Duration::from_secs(seconds));
+    }
+    let reset = header_seconds(response, "x-ratelimit-reset")?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let retry = reset.map_or_else(String::new, |reset| {
-        format!(" Retry in {} seconds.", reset.saturating_sub(now))
-    });
-    error(format!(
-        "GitHub's API rate limit was reached.{retry}{note} Check local GitHub authentication or use Release Downloads."
-    ))
+    Some(Duration::from_secs(reset.saturating_sub(now)))
+}
+
+fn limit_error(wait: Option<Duration>, note: &str) -> Error {
+    let retry = wait.map_or_else(String::new, |wait| format!(" Retry in {} seconds.", wait.as_secs()));
+    Error::RateLimited {
+        message: format!(
+            "GitHub's API rate limit was reached.{retry}{note} Check local GitHub authentication or use Release Downloads."
+        ),
+        retry_after: wait,
+    }
+}
+
+/// GitHub's secondary limit: a refusal with `Retry-After`.
+fn secondary_limit(response: &ureq::http::Response<ureq::Body>) -> bool {
+    matches!(response.status().as_u16(), 403 | 429) && response.headers().contains_key("retry-after")
 }
 
 fn primary_limit(response: &ureq::http::Response<ureq::Body>) -> bool {

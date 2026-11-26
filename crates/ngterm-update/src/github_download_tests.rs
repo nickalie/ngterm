@@ -185,3 +185,69 @@ fn a_source_other_than_github_reports_the_limit_without_credentials() {
     assert!(error.starts_with("GitHub's API rate limit was reached. Retry in 0 seconds."));
     assert_eq!(server.requests(), ["/latest"]);
 }
+
+#[test]
+fn a_limit_gives_the_wait_that_github_asks_for() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let reset = format!(
+        "403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: {}",
+        now + 600
+    );
+    for (status, wait) in [
+        (reset.as_str(), 590..=600),
+        ("403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nRetry-After: 60", 60..=60),
+        ("429 Too Many Requests\r\nRetry-After: 120", 120..=120),
+        ("403 Forbidden\r\nRetry-After: 30\r\nX-RateLimit-Reset: 1", 30..=30),
+    ] {
+        let server = Server::new(vec![status]);
+        let error = metadata_response(&test_agent(), &server.url, || None).unwrap_err();
+        server.finish();
+        assert!(error.is_transient(), "{status}");
+        let seconds = error.retry_after().expect("the limit gives a wait").as_secs();
+        assert!(wait.contains(&seconds), "{status}: {seconds}");
+        assert!(
+            error.to_string().contains(&format!(" Retry in {seconds} seconds.")),
+            "{error}"
+        );
+    }
+    let server = Server::new(vec!["403 Forbidden\r\nX-RateLimit-Remaining: 0"]);
+    let error = metadata_response(&test_agent(), &server.url, || None).unwrap_err();
+    server.finish();
+    assert_eq!(error.retry_after(), None);
+    assert_eq!(
+        error.to_string(),
+        "GitHub's API rate limit was reached. Check local GitHub authentication or use Release Downloads."
+    );
+}
+
+#[test]
+fn only_a_limit_a_lost_connection_or_a_server_error_is_transient() {
+    let limited = Error::RateLimited {
+        message: "limited".into(),
+        retry_after: None,
+    };
+    assert!(limited.is_transient());
+    for (error, transient) in [
+        (ureq::Error::StatusCode(503), true),
+        (ureq::Error::StatusCode(429), true),
+        (ureq::Error::ConnectionFailed, true),
+        (ureq::Error::HostNotFound, true),
+        (ureq::Error::Io(std::io::Error::other("reset")), true),
+        (ureq::Error::StatusCode(404), false),
+        (ureq::Error::StatusCode(403), false),
+        (ureq::Error::TooManyRedirects, false),
+    ] {
+        assert_eq!(Error::Http(error).is_transient(), transient);
+    }
+    assert!(!crate::error("no matching asset").is_transient());
+    assert!(!Error::Io(std::io::Error::other("disk full")).is_transient());
+    assert_eq!(crate::error("other").retry_after(), None);
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/latest", closed.local_addr().unwrap());
+    drop(closed);
+    let error = metadata_response(&test_agent(), &url, || None).unwrap_err();
+    assert!(error.is_transient(), "{error:?}");
+}

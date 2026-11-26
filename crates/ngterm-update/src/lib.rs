@@ -77,6 +77,42 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Http(#[from] ureq::Error),
+    /// GitHub's API rate limit, with the wait until it resets when the answer gives one.
+    #[error("{message}")]
+    RateLimited {
+        message: String,
+        retry_after: Option<std::time::Duration>,
+    },
+}
+
+impl Error {
+    /// A failure that the next check can clear without the user: a rate limit, a lost connection or a server error.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::RateLimited { .. } => true,
+            Self::Http(error) => matches!(
+                error,
+                ureq::Error::StatusCode(408 | 429 | 500..=599)
+                    | ureq::Error::Io(_)
+                    | ureq::Error::Timeout(_)
+                    | ureq::Error::HostNotFound
+                    | ureq::Error::ConnectionFailed
+                    | ureq::Error::ConnectProxyFailed(_)
+                    | ureq::Error::BodyStalled
+            ),
+            Self::Message(_) | Self::Io(_) | Self::Json(_) => false,
+        }
+    }
+
+    /// The wait until GitHub's rate limit resets, for a rate-limit answer that gives one.
+    #[must_use]
+    pub fn retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            Self::RateLimited { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
 }
 
 fn error(message: impl Into<String>) -> Error {

@@ -1,4 +1,4 @@
-//! The app-wide release updater: one worker at a time, hourly automatic checks, one button to install. An installation
+//! The app-wide release updater: one worker at a time, automatic checks every six hours, one button to install. An installation
 //! the system owns installs through its own installer while the app is open: a password popup, or `sudo` in a new
 //! session where the desktop cannot show one, and the app restarts only once that has succeeded.
 use std::path::{Path, PathBuf};
@@ -25,7 +25,9 @@ use crate::chrome::button::Button;
 use crate::modal::{AlertButton, AlertSpec, open_alert};
 use crate::state::{AppState, Poster, post};
 
-const INTERVAL: Duration = Duration::from_hours(1);
+const INTERVAL: Duration = Duration::from_hours(6);
+/// How long after GitHub's rate limit resets an automatic check tries again.
+const RETRY_MARGIN: Duration = Duration::from_secs(30);
 /// How often a terminal pane's install is checked on.
 const PANE_POLL: Duration = Duration::from_millis(250);
 
@@ -158,13 +160,34 @@ pub fn set_automatic(enabled: bool, cx: &mut App) {
     if updater.polling.is_some() || updater.installation.is_err() {
         return;
     }
-    let task = cx.spawn(async move |cx| {
+    let task = poll(Duration::ZERO, cx);
+    cx.global_mut::<Updater>().polling = Some(task);
+}
+
+/// Automatic checks: the first after `delay`, then one each [`INTERVAL`].
+fn poll(delay: Duration, cx: &mut App) -> Task<()> {
+    cx.spawn(async move |cx| {
+        if !delay.is_zero() {
+            cx.background_executor().timer(delay).await;
+        }
         loop {
             cx.update(|cx| start_check(None, cx));
             cx.background_executor().timer(INTERVAL).await;
         }
-    });
-    cx.global_mut::<Updater>().polling = Some(task);
+    })
+}
+
+/// An automatic check keeps a transient failure quiet. After a rate limit, the next check waits until it resets.
+fn defer_automatic(error: &ngterm_update::Error, cx: &mut App) {
+    tracing::info!(%error, "automatic update check deferred");
+    let updater = cx.global_mut::<Updater>();
+    updater.status = Status::Idle;
+    if let Some(wait) = error.retry_after()
+        && updater.polling.is_some()
+    {
+        let task = poll(wait + RETRY_MARGIN, cx);
+        cx.global_mut::<Updater>().polling = Some(task);
+    }
 }
 
 /// Help > Check for Updates. A ready update opens its install confirmation.
@@ -250,6 +273,7 @@ fn start_check(manual: Option<AnyWindowHandle>, cx: &mut App) {
                     updater.status = Status::Ready(version);
                 }
                 Ok(None) => updater.status = Status::Current,
+                Err(error) if manual.is_none() && error.is_transient() => defer_automatic(&error, cx),
                 Err(error) => {
                     tracing::warn!(%error, "release update failed");
                     updater.status = Status::Failed(error.to_string());
@@ -1413,11 +1437,102 @@ mod tests {
         cx.update(|_, cx| start_check(None, cx));
         cx.run_until_parked();
         assert!(front(cx).is_none(), "a background check opens no alert");
-        let Status::Failed(reason) = status(cx) else {
-            panic!("a rate-limited background check fails: {:?}", status(cx));
-        };
-        assert!((590..=600).contains(&rate_limit_wait(&reason)), "{reason}");
+        assert_eq!(
+            display_status(cx),
+            Status::Idle,
+            "a rate limit needs nothing from the user"
+        );
         assert_eq!(fixture.server.requests(), ["/latest", "/latest"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn display_status(cx: &mut VisualTestContext) -> Status {
+        cx.update(|_, cx| cx.global::<Updater>().display_status())
+    }
+
+    /// Moves the test clock on by `by` and runs what falls due.
+    #[cfg(target_os = "linux")]
+    fn advance(cx: &mut VisualTestContext, by: Duration) {
+        cx.executor().advance_clock(by);
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn an_automatic_check_waits_out_githubs_rate_limit_then_checks_every_six_hours(cx: &mut TestAppContext) {
+        let fixture = Fixture::new();
+        fixture.server.route(
+            "/latest",
+            "403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nRetry-After: 600",
+            "{}",
+        );
+        let cx = host(cx);
+        let _state = cx.update(|_, cx| fixture.start(true, cx));
+        cx.run_until_parked();
+        assert_eq!(front(cx), None, "an automatic check opens no alert");
+        assert_eq!(display_status(cx), Status::Idle, "and shows no titlebar button");
+        assert_eq!(fixture.server.requests().len(), 1);
+
+        advance(cx, Duration::from_secs(600));
+        assert_eq!(fixture.server.requests().len(), 1, "never before the limit resets");
+        fixture.server.publish("0.1.0", &[]);
+        advance(cx, RETRY_MARGIN);
+        assert_eq!(fixture.server.requests().len(), 2, "one retry once the limit resets");
+        assert_eq!(status(cx), Status::Current);
+
+        let six_hours = Duration::from_hours(6);
+        advance(cx, Duration::from_secs(6 * 60 * 60 - 1));
+        assert_eq!(
+            fixture.server.requests().len(),
+            2,
+            "the retry replaces the timer that started with the first check"
+        );
+        advance(cx, Duration::from_secs(1));
+        assert_eq!(
+            fixture.server.requests().len(),
+            3,
+            "the normal interval follows the retry"
+        );
+        advance(cx, six_hours);
+        assert_eq!(fixture.server.requests().len(), 4);
+        assert_eq!(front(cx), None);
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn an_automatic_check_keeps_a_server_error_quiet_and_shows_others(cx: &mut TestAppContext) {
+        let fixture = Fixture::new();
+        fixture.server.route("/latest", "503 Service Unavailable", "");
+        let cx = host(cx);
+        let _state = cx.update(|_, cx| fixture.start(true, cx));
+        cx.run_until_parked();
+        assert_eq!(front(cx), None);
+        assert_eq!(
+            display_status(cx),
+            Status::Idle,
+            "a server error clears on the next check"
+        );
+        advance(cx, Duration::from_hours(6));
+        assert_eq!(
+            fixture.server.requests().len(),
+            2,
+            "the next check comes at the normal interval"
+        );
+
+        cx.update(check);
+        cx.run_until_parked();
+        let alert = front(cx).expect("a manual check says why it failed");
+        assert_eq!(alert.heading.as_str(), "Update needs attention");
+        press(cx, "OK");
+
+        fixture.server.route("/latest", "404 Not Found", "");
+        cx.update(|_, cx| start_check(None, cx));
+        cx.run_until_parked();
+        assert_eq!(front(cx), None, "an automatic check never opens an alert");
+        assert!(
+            matches!(display_status(cx), Status::Failed(_)),
+            "a failure that does not clear on its own keeps the titlebar button"
+        );
     }
 
     #[gpui_kit::test]
