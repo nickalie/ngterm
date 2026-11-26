@@ -14,8 +14,8 @@ internal enum FormScroll {
     /// Hittable is not enough: a row with only a sliver above the foot of an iPad's sheet is hittable, and a press at
     /// its hit point lands outside the sheet and closes it. A swipe's momentum carries a row past the whole view, so
     /// the last moves are drags that end held. A row that a read found and a later read did not went on up with the
-    /// momentum of the swipe before it, so the form drags back down. A read that failed tells nothing and moves
-    /// nothing.
+    /// momentum of the swipe before it, so the form drags back down. Each move comes from a read that completed: a read
+    /// that failed is done again and uses none of the `swipes`.
     @MainActor
     internal static func scroll(to element: XCUIElement, in form: XCUIElement, swipes: Int) {
         var held = false
@@ -23,17 +23,19 @@ internal enum FormScroll {
             if isWhollyShown(element, in: form) {
                 break
             }
-            switch ScreenRead.reading(element) {
+            let answer = ScreenRead.now { ScreenRead.isShown(element) }
+            switch answer {
             case .failed:
-                continue
+                XCTFail("no read of \(element) completed")
+                return
 
-            case .absent where held:
+            case .doesNotHold where held:
                 drag(form, by: form.frame.height)
 
-            case .absent:
+            case .doesNotHold:
                 form.swipeUp()
 
-            case .shown:
+            case .holds:
                 held = true
                 drag(form, by: form.frame.midY - element.frame.midY)
             }
