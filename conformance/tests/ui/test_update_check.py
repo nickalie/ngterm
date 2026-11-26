@@ -41,11 +41,9 @@ CHECK_TIMEOUT = 30.0
 RETRY_MARGIN = 30.0
 # The reset in seconds that a limit names here; `Date` and the reset have whole seconds, so the wait is off by one.
 RESET_IN = 2
-ATTENTION = "Update needs attention"
 # The second button of the alert that a failed check opens: no other alert of the app has it.
 RELEASE_DOWNLOADS = "button name='Release Downloads'"
 DEFERRED = "automatic update check deferred"
-RETRY = re.compile(r"Retry in (\d+) seconds\.")
 
 
 def _url(server) -> str:
@@ -59,7 +57,7 @@ def _log(ctl) -> str:
 def _assert_quiet(ui) -> None:
     assert not ui.all("update-status"), ui.tree_dump()
     tree = ui.tree_dump()
-    assert ATTENTION not in tree and RELEASE_DOWNLOADS not in tree, tree
+    assert RELEASE_DOWNLOADS not in tree, tree
 
 
 def _stay_quiet(ui, until) -> None:
@@ -117,15 +115,16 @@ def test_an_automatic_check_with_no_matching_asset_shows_the_button(launch, ui_f
     with serve(stand_in.handler()) as server:
         ctl = launch(releases_api=_url(server))
         ui = ui_for(ctl)
-        button = ui.find("update-status", role="button", name=ATTENTION, timeout=CHECK_TIMEOUT)
+        # The button carries no accessible name (QA 1028 Q1): its id and the alert it opens tell its state.
+        button = ui.find("update-status", role="button", timeout=CHECK_TIMEOUT)
         assert RELEASE_DOWNLOADS not in ui.tree_dump()
         ui.click(button)
         wait_until(lambda: RELEASE_DOWNLOADS in ui.tree_dump(), timeout=ui.timeout)
-        tree = ui.tree_dump()
-        assert "Release is missing a unique" in tree + _log(ctl), tree
         ui.press("return")
         ui.absent("update-status")
-    assert DEFERRED not in _log(ctl)
+    log = _log(ctl)
+    assert DEFERRED not in log
+    assert re.search(r"release update failed.*Release is missing a unique", log), log
 
 
 @pytest.mark.parametrize(
@@ -149,8 +148,11 @@ def test_check_for_updates_reports_a_rate_limit_with_the_retry_time(launch, ui_f
         ui.press("return")
         wait_until(lambda: RELEASE_DOWNLOADS not in ui.tree_dump(), timeout=ui.timeout)
 
-    assert ATTENTION in tree, tree
-    match = RETRY.search(tree)
-    assert match, tree
+    assert "button name='OK'" in tree, tree
+    # The alert's heading and body are not in the accessibility tree (QA 1028 Q2). Its body is the check's error,
+    # which the app logs with it.
+    log = _log(ctl)
+    match = re.search(r"release update failed.*GitHub's API rate limit was reached\. Retry in (\d+) seconds\.", log)
+    assert match, log
     assert low <= int(match.group(1)) <= high, match.group(0)
-    assert DEFERRED not in _log(ctl)
+    assert DEFERRED not in log
