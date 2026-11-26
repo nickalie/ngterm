@@ -138,12 +138,13 @@ def test_a_lookup_fences_an_unseen_id_and_a_changed_target_is_refused(remote_ori
     assert_ok(origin.request("session.close", sid))
 
 
-@pytest.mark.covers("catalog.subscribe", "session.new", "session.split", "field:tree.session.ended",
-                    streams=("catalog.subscribe",))
+@pytest.mark.covers("catalog.subscribe", "session.new", "session.split", "session.companion.new",
+                    "field:tree.session.ended", streams=("catalog.subscribe",))
 def test_a_session_whose_live_session_is_lost_stays_ended(remote_origin):
     """Upstream's `aLostLastPaneLeavesTheSessionEnded` and `anEndedSessionIsSkippedAndCannotGrowASplit`: a session
     whose last pane's live session is lost, not ended by its shell, stays in the tree and the catalog marked ended with
-    no pane, refuses a split, and leaves with its close. Here the instance's session server dies with its sessions."""
+    no pane, refuses a split and a companion, and leaves with its close. Here the instance's session server dies with
+    its sessions."""
     origin = Ctl(remote_origin.instance)
     sid = assert_ok(origin.request("session.new"))["id"]
     instance = remote_origin.instance
@@ -164,4 +165,5 @@ def test_a_session_whose_live_session_is_lost_stays_ended(remote_origin):
         entry = _entry(_frame(stream, "snapshot")["snapshot"], sid)
         assert entry["lifecycle"] == "ended" and entry["panes"] == [], entry
     assert_error(origin.request("session.split", sid, mode="on"), "session has ended")
+    assert_error(origin.request("session.companion.new", sid, noSelect=True), "session has ended")
     assert_ok(origin.request("session.close", sid))
