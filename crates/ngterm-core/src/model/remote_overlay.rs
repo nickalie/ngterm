@@ -384,23 +384,27 @@ impl Session {
     /// Whether the row holds something of this machine's that closing it would end: a scratch shell or an overlay.
     #[must_use]
     pub fn holds_local_work(&self) -> bool {
-        self.scratch_surface.is_present()
-            || [None, Some(OverlayPane::Left), Some(OverlayPane::Right)]
-                .into_iter()
-                .any(|pane| self.local_overlay_holds(pane))
+        self.scratch_surface.is_present() || self.any_local_overlay_holds()
     }
 
-    /// Whether the pane that set the row's status still holds local work there: the scratch for a scratch status,
-    /// else an overlay on that pane or over the whole row.
+    /// Whether the pane that set the row's status still holds local work there: the scratch for a scratch status, an
+    /// overlay on that pane or over the whole row for a split pane's status, and any overlay for an untagged status,
+    /// which an overlay's program also writes.
     #[must_use]
     pub fn status_pane_holds_local_work(&self) -> bool {
-        match self.agent_indicator.status_pane {
-            Some(StatusPane::Scratch) => self.scratch_surface.is_present(),
-            Some(StatusPane::Right) => self.local_overlay_holds(Some(OverlayPane::Right)),
-            Some(StatusPane::Left) | None => {
-                self.local_overlay_holds(None) || self.local_overlay_holds(Some(OverlayPane::Left))
-            }
-        }
+        let pane = match self.agent_indicator.status_pane {
+            Some(StatusPane::Scratch) => return self.scratch_surface.is_present(),
+            None => return self.any_local_overlay_holds(),
+            Some(StatusPane::Left) => OverlayPane::Left,
+            Some(StatusPane::Right) => OverlayPane::Right,
+        };
+        self.local_overlay_holds(None) || self.local_overlay_holds(Some(pane))
+    }
+
+    fn any_local_overlay_holds(&self) -> bool {
+        [None, Some(OverlayPane::Left), Some(OverlayPane::Right)]
+            .into_iter()
+            .any(|pane| self.local_overlay_holds(pane))
     }
 }
 

@@ -258,6 +258,84 @@ fn fire_follows_an_ended_session_whose_main_pane_overlay_runs() {
     assert_eq!(fire(&mut fixture).map(|followed| followed.session), Some(ended));
 }
 
+/// A scratch block stays skipped once the scratch is gone: the ended row runs nothing where the block came from.
+#[test]
+fn fire_skips_an_ended_session_whose_blocked_scratch_closed() {
+    let mut fixture = Fixture::new(0);
+    let current = fixture.sessions[0];
+    let ended = ended_with_scratch(&mut fixture, Some(StatusPane::Scratch));
+    let session = fixture.store_mut().unwrap().session_mut(ended).unwrap();
+    session.scratch_surface.take();
+    select(&mut fixture, current);
+
+    assert_eq!(fire(&mut fixture), None);
+}
+
+/// An untagged block can come from any overlay, as an overlay's program sets no pane: a right pane overlay keeps it.
+#[test]
+fn fire_follows_an_ended_session_whose_untagged_block_has_a_right_pane_overlay() {
+    let mut fixture = Fixture::new(0);
+    let current = fixture.sessions[0];
+    let ended = ended_split(&mut fixture, None, Some(OverlayPane::Right));
+    select(&mut fixture, current);
+
+    assert_eq!(fire(&mut fixture).map(|followed| followed.session), Some(ended));
+}
+
+/// A right pane block is kept by an overlay on the right pane, not by one on the left pane.
+#[test]
+fn fire_follows_a_right_pane_block_only_while_a_right_pane_overlay_runs() {
+    let mut fixture = Fixture::new(0);
+    let current = fixture.sessions[0];
+    let left = ended_split(&mut fixture, Some(StatusPane::Right), Some(OverlayPane::Left));
+    let right = ended_split(&mut fixture, Some(StatusPane::Right), Some(OverlayPane::Right));
+    select(&mut fixture, current);
+
+    assert_eq!(fire(&mut fixture).map(|followed| followed.session), Some(right));
+    select(&mut fixture, current);
+    assert_eq!(fire(&mut fixture), None, "a left pane overlay does not keep it");
+    assert!(!consumed(&fixture, left));
+}
+
+/// An overlay over the whole row keeps a block of either pane followed.
+#[test]
+fn fire_follows_an_ended_split_pane_block_under_a_session_overlay() {
+    for status_pane in [StatusPane::Left, StatusPane::Right] {
+        let mut fixture = Fixture::new(0);
+        let current = fixture.sessions[0];
+        let ended = ended_split(&mut fixture, Some(status_pane), None);
+        let program = OverlayProgram {
+            command: "top".to_owned(),
+            ..OverlayProgram::default()
+        };
+        assert!(fixture.store_mut().unwrap().open_overlay(ended, program));
+        select(&mut fixture, current);
+
+        assert_eq!(
+            fire(&mut fixture).map(|followed| followed.session),
+            Some(ended),
+            "{status_pane:?}"
+        );
+    }
+}
+
+/// A blocked split session, then ended; `status_pane` names the pane that blocked, `overlay` the pane overlay that runs.
+fn ended_split(fixture: &mut Fixture, status_pane: Option<StatusPane>, overlay: Option<OverlayPane>) -> Uuid {
+    let ended = add_blocked(fixture, 100);
+    let store = fixture.store_mut().unwrap();
+    store.set_split_visibility(ended, true, None);
+    assert!(store.mark_session_ended(ended));
+    if let Some(pane) = overlay {
+        let program = OverlayProgram {
+            command: "top".to_owned(),
+            ..OverlayProgram::default()
+        };
+        store.open_pane_overlay(ended, pane, program).unwrap();
+    }
+    store.session_mut(ended).unwrap().agent_indicator.status_pane = status_pane;
+    ended
+}
+
 /// A blocked session, then ended, with a scratch present; `status_pane` names the pane that blocked.
 fn ended_with_scratch(fixture: &mut Fixture, status_pane: Option<StatusPane>) -> Uuid {
     let ended = add_blocked(fixture, 100);
