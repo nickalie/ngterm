@@ -1289,7 +1289,7 @@ async fn rename_session<T: Transport>(
 /// Sends `operation` under an operation id when `machine_id`'s catalog is up, and answers once the catalog shows what
 /// it applied, or [`READY_BUDGET`] runs out (New Session at once, as its caller waits for the row): the command's own
 /// reply, `None` when only a lookup told or nothing changed. `None` while the machine has no live catalog: the caller
-/// sends it as a plain command.
+/// sends it as a plain command, as it does for a session the catalog does not hold.
 async fn catalog_action<T: Transport>(
     state: &Rc<State<T>>,
     link: &OnMachine<T::Connection>,
@@ -1297,6 +1297,12 @@ async fn catalog_action<T: Transport>(
     operation: &Operation,
 ) -> Option<Result<Option<Box<Response<ControlResult>>>, MobileError>> {
     let position = catalogs::position(state, machine_id)?;
+    // a session of the machine's other app is not the catalog's to act on
+    if let Operation::RenameSession { id, .. } | Operation::EndSession { id } = operation
+        && !catalogs::holds(state, machine_id, id)
+    {
+        return None;
+    }
     let op_id = uuid_string(Uuid::new_v4());
     let form = OriginForm {
         peer: RemotePeer::Ngterm,

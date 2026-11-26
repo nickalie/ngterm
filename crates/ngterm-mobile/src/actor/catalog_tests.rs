@@ -844,3 +844,50 @@ fn a_plain_end_while_the_stream_is_down_drops_the_row_it_shows() {
         );
     });
 }
+
+#[test]
+fn a_machine_running_both_apps_keeps_agterms_sessions_beside_the_catalog() {
+    local(async {
+        let actor = Actor::start();
+        let Script { stdout, .. } = listing(true);
+        let agterm = json!({"ok": true, "result": {"remote": {
+            "endpoint": {"executable": "/Applications/agterm.app/Contents/MacOS/zmx", "socketDirectory": "/tmp/zmx"},
+            "presentation": 1,
+            "sessions": [{
+                "id": uuid_string(id(0xA6)), "name": "theirs", "windowID": "w1", "windowName": "main",
+                "workspaceID": "ws1", "workspaceName": "mac", "cwd": "/repo",
+                "panes": [{"pane": "left", "daemon": "agterm-00000000000000000000000000000000"}],
+            }],
+        }}});
+        let both = format!(
+            "{}\n{}\n{agterm}\n",
+            String::from_utf8(stdout).unwrap(),
+            ngterm_core::remote::peer::AGTERM_ANSWER
+        );
+        actor
+            .transport
+            .script(&tree_tail(OriginShell::Posix), Script::ok(&both));
+        actor
+            .transport
+            .script(&version_line(), version_answer(Some(versions())));
+        actor.connect().await;
+        actor.list().await;
+        let peer = stream(&actor).await;
+        send(&peer, &hello()).await;
+        send(&peer, &first_snapshot()).await;
+        let mut expected = first_rows();
+        expected.push(row("theirs", "mac", None, false));
+        assert_eq!(trees(&actor.sink.take()).last(), Some(&expected));
+
+        let theirs = uuid_string(id(0xA6));
+        let agterm_form = ngterm_core::remote::origin::OriginForm {
+            peer: ngterm_proto::RemotePeer::Agterm,
+            ..OriginShell::Posix.into()
+        };
+        let end = control_tail(agterm_form, &["session", "close", "--target", &theirs]);
+        actor.transport.script(&end, Script::ok(r#"{"ok":true}"#));
+        assert_eq!(post_end(&actor, &theirs).await.unwrap(), Ok(()));
+        assert!(opened(&actor).await.is_empty(), "no operation id for agterm's session");
+        assert_eq!(trees(&actor.sink.take()).last(), Some(&first_rows()));
+    });
+}

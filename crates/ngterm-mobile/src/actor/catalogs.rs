@@ -119,7 +119,8 @@ pub(super) fn forget<T: Transport>(state: &State<T>, machine_id: &str) {
     }
 }
 
-/// The rows of `machine_id`'s catalog, with what `tree` adds; `None` while it has no catalog to list from.
+/// The rows of `machine_id`'s catalog, with what `tree` adds, then the sessions `tree` lists of the machine's other
+/// app; `None` while it has no catalog to list from.
 pub(super) fn rows<T: Transport>(
     state: &State<T>,
     machine_id: &str,
@@ -127,18 +128,28 @@ pub(super) fn rows<T: Transport>(
 ) -> Option<Vec<RemoteSession>> {
     let catalogs = state.catalogs.borrow();
     let catalog = catalogs.get(machine_id)?.mirror.catalog()?;
-    Some(catalog::rows(catalog, tree))
+    let mut rows = catalog::rows(catalog, tree);
+    // the other app of a machine that runs both is not in the catalog: its sessions stay as listed
+    rows.extend(
+        tree.map(sessions::listed_sessions)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|listed| listed.peer != Some(RemotePeer::Ngterm.into())),
+    );
+    Some(rows)
 }
 
-/// Reports `machine_id`'s sessions: its catalog's rows, with its kept listing's statuses, or without a catalog to list
-/// from, its kept listing as it is; nothing when it has neither.
+/// Reports `machine_id`'s sessions: its catalog's rows, with its kept listing's statuses and the other app's sessions,
+/// or without a catalog to list from, its kept listing as it is; the listing's hint either way; nothing when it has
+/// neither.
 pub(super) fn report<T: Transport>(state: &State<T>, machine_id: &str) {
     let listed = {
         let listings = state.listings.borrow();
         let tree = listings.get(machine_id).and_then(|kept| kept.tree.as_ref());
+        let hint = tree.and_then(not_live::hint);
         rows(state, machine_id, tree)
-            .map(|rows| (rows, None))
-            .or_else(|| tree.map(|tree| (sessions::listed_sessions(tree), not_live::hint(tree))))
+            .or_else(|| tree.map(sessions::listed_sessions))
+            .map(|rows| (rows, hint))
     };
     if let Some((sessions, hint)) = listed {
         state.emit(MobileEvent::Tree {
@@ -447,4 +458,13 @@ pub(super) async fn shown<T: Transport>(
             .find(|row| row.id.eq_ignore_ascii_case(id))
     })
     .await
+}
+
+/// Whether `machine_id`'s catalog holds session `id`.
+pub(super) fn holds<T: Transport>(state: &State<T>, machine_id: &str, id: &str) -> bool {
+    let catalogs = state.catalogs.borrow();
+    catalogs
+        .get(machine_id)
+        .and_then(|follow| follow.mirror.catalog())
+        .is_some_and(|catalog| catalog::session(catalog, id).is_some())
 }
