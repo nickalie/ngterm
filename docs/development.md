@@ -169,7 +169,8 @@ secondary rate limit) is also a rate limit. The wait is `Retry-After` (seconds o
 one), and a secondary limit waits one minute. No wait is longer than an hour. A background check keeps a rate limit,
 a lost connection or a server error quiet: no alert and no titlebar button. After a rate limit with a wait, the next
 background check runs 30 seconds after that wait and the six-hour interval continues from it. Each rate limit in a
-row doubles the wait, up to six hours; a check that succeeds starts again from the wait that GitHub gives. Only Check for Updates reports the limit, with the wait.
+row doubles that delay, up to six hours; any other result, or turning automatic checks back on, starts again from
+the wait that GitHub gives. Only Check for Updates reports the limit, with the wait.
 
 Disable background checks and downloads in **Settings → General → Updates** (`autoUpdate: false` in `settings.json`);
 manual checks remain available. Archive installs must stay together in a dedicated directory named `ngterm`, with

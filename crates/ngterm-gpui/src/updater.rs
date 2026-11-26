@@ -164,7 +164,9 @@ pub fn set_automatic(enabled: bool, cx: &mut App) {
         return;
     }
     let task = poll(Duration::ZERO, cx);
-    cx.global_mut::<Updater>().polling = Some(task);
+    let updater = cx.global_mut::<Updater>();
+    updater.deferrals = 0;
+    updater.polling = Some(task);
 }
 
 /// Automatic checks: the first after `delay`, then one each [`INTERVAL`].
@@ -181,7 +183,7 @@ fn poll(delay: Duration, cx: &mut App) -> Task<()> {
 }
 
 /// An automatic check keeps a transient failure quiet. After a rate limit, the next check waits until it resets,
-/// and a limit that continues doubles the wait, up to [`INTERVAL`], as GitHub asks of clients.
+/// and a limit that continues doubles the delay, up to [`INTERVAL`], as GitHub asks of clients.
 fn defer_automatic(error: &ngterm_update::Error, cx: &mut App) {
     tracing::info!(%error, "automatic update check deferred");
     let updater = cx.global_mut::<Updater>();
@@ -191,7 +193,7 @@ fn defer_automatic(error: &ngterm_update::Error, cx: &mut App) {
     {
         let backoff = 2_u32.saturating_pow(updater.deferrals);
         updater.deferrals = updater.deferrals.saturating_add(1);
-        let delay = wait.saturating_mul(backoff).saturating_add(RETRY_MARGIN).min(INTERVAL);
+        let delay = wait.saturating_add(RETRY_MARGIN).saturating_mul(backoff).min(INTERVAL);
         let task = poll(delay, cx);
         cx.global_mut::<Updater>().polling = Some(task);
     }
@@ -266,34 +268,42 @@ fn start_check(manual: Option<AnyWindowHandle>, cx: &mut App) {
             Ok(None) => Ok(None),
             Err(error) => Err(error),
         };
-        cx.update(|cx| {
-            let updater = cx.global_mut::<Updater>();
-            updater.job.take();
-            updater.cancelled.take();
-            if result.is_ok() {
-                updater.deferrals = 0;
-                updater.notice.take();
-                let _ = std::fs::remove_file(error_file(&updater.state_dir));
-            }
-            match result {
-                Ok(Some((version, prepared))) => {
-                    updater.prepared = Some(prepared);
-                    updater.status = Status::Ready(version);
-                }
-                Ok(None) => updater.status = Status::Current,
-                Err(error) if manual.is_none() && error.is_transient() => defer_automatic(&error, cx),
-                Err(error) => {
-                    tracing::warn!(%error, "release update failed");
-                    updater.status = Status::Failed(error.to_string());
-                }
-            }
-            cx.refresh_windows();
-            if let Some(window) = manual {
-                let _ = window.update(cx, |_, window, cx| show_status(window, cx));
-            }
-        });
+        cx.update(|cx| finish_check(result, manual, cx));
     });
     cx.global_mut::<Updater>().job = Some(task);
+}
+
+fn finish_check(
+    result: Result<Option<(String, Prepared)>, ngterm_update::Error>,
+    manual: Option<AnyWindowHandle>,
+    cx: &mut App,
+) {
+    let updater = cx.global_mut::<Updater>();
+    updater.job.take();
+    updater.cancelled.take();
+    if !matches!(&result, Err(error) if error.retry_after().is_some()) {
+        updater.deferrals = 0;
+    }
+    if result.is_ok() {
+        updater.notice.take();
+        let _ = std::fs::remove_file(error_file(&updater.state_dir));
+    }
+    match result {
+        Ok(Some((version, prepared))) => {
+            updater.prepared = Some(prepared);
+            updater.status = Status::Ready(version);
+        }
+        Ok(None) => updater.status = Status::Current,
+        Err(error) if manual.is_none() && error.is_transient() => defer_automatic(&error, cx),
+        Err(error) => {
+            tracing::warn!(%error, "release update failed");
+            updater.status = Status::Failed(error.to_string());
+        }
+    }
+    cx.refresh_windows();
+    if let Some(window) = manual {
+        let _ = window.update(cx, |_, window, cx| show_status(window, cx));
+    }
 }
 
 fn show_status(window: &mut Window, cx: &mut App) {
@@ -1510,6 +1520,28 @@ mod tests {
         assert_eq!(front(cx), None);
     }
 
+    /// Starts automatic checks against a limit with `limit`'s headers and asserts that each next check comes exactly
+    /// after the delay in `delays`, the last one a check that succeeds. Gives the count of requests.
+    #[cfg(target_os = "linux")]
+    fn assert_deferrals(fixture: &Fixture, cx: &mut VisualTestContext, limit: &str, delays: &[u64]) -> usize {
+        fixture.server.route("/latest", limit, "{}");
+        cx.run_until_parked();
+        let mut requests = fixture.server.requests().len();
+        for (index, &delay) in delays.iter().enumerate() {
+            assert_eq!(fixture.server.requests().len(), requests);
+            if index + 1 == delays.len() {
+                fixture.server.publish("0.1.0", &[]);
+            }
+            advance(cx, Duration::from_secs(delay - 1));
+            assert_eq!(fixture.server.requests().len(), requests, "never before {delay} s");
+            advance(cx, Duration::from_secs(1));
+            requests += 1;
+            assert_eq!(fixture.server.requests().len(), requests, "one check after {delay} s");
+        }
+        assert_eq!(status(cx), Status::Current);
+        requests
+    }
+
     #[gpui_kit::test]
     #[cfg(target_os = "linux")]
     fn a_rate_limit_that_continues_doubles_the_wait_until_a_check_succeeds(cx: &mut TestAppContext) {
@@ -1518,21 +1550,7 @@ mod tests {
         fixture.server.route("/latest", LIMITED, "{}");
         let cx = host(cx);
         let _state = cx.update(|_, cx| fixture.start(true, cx));
-        cx.run_until_parked();
-        let second = Duration::from_secs(1);
-        let mut requests = 1;
-        for wait in [60, 120, 240, 480] {
-            assert_eq!(fixture.server.requests().len(), requests);
-            if wait == 480 {
-                fixture.server.publish("0.1.0", &[]);
-            }
-            advance(cx, Duration::from_secs(wait - 1) + RETRY_MARGIN);
-            assert_eq!(fixture.server.requests().len(), requests, "never before {wait} s");
-            advance(cx, second);
-            requests += 1;
-            assert_eq!(fixture.server.requests().len(), requests, "one check after {wait} s");
-        }
-        assert_eq!(status(cx), Status::Current);
+        let requests = assert_deferrals(&fixture, cx, LIMITED, &[90, 180, 360, 720]);
 
         fixture.server.route("/latest", LIMITED, "{}");
         advance(cx, INTERVAL);
@@ -1542,6 +1560,82 @@ mod tests {
             fixture.server.requests().len(),
             requests + 2,
             "a check that succeeds starts again from GitHub's wait"
+        );
+        assert_eq!(front(cx), None);
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_rate_limit_with_no_wait_left_still_doubles_the_delay(cx: &mut TestAppContext) {
+        let fixture = Fixture::new();
+        fixture
+            .server
+            .route("/latest", "429 Too Many Requests\r\nRetry-After: 0", "{}");
+        let cx = host(cx);
+        let _state = cx.update(|_, cx| fixture.start(true, cx));
+        assert_deferrals(
+            &fixture,
+            cx,
+            "429 Too Many Requests\r\nRetry-After: 0",
+            &[30, 60, 120, 240],
+        );
+        assert_eq!(front(cx), None);
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_long_rate_limit_never_moves_the_next_check_past_six_hours(cx: &mut TestAppContext) {
+        const LIMITED: &str = "429 Too Many Requests\r\nRetry-After: 3600";
+        let fixture = Fixture::new();
+        fixture.server.route("/latest", LIMITED, "{}");
+        let cx = host(cx);
+        let _state = cx.update(|_, cx| fixture.start(true, cx));
+        let six_hours = INTERVAL.as_secs();
+        assert_deferrals(&fixture, cx, LIMITED, &[3630, 7260, 14520, six_hours, six_hours]);
+        assert_eq!(front(cx), None);
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_failure_between_rate_limits_starts_the_wait_again(cx: &mut TestAppContext) {
+        const LIMITED: &str = "429 Too Many Requests\r\nRetry-After: 60";
+        let fixture = Fixture::new();
+        fixture.server.route("/latest", LIMITED, "{}");
+        let cx = host(cx);
+        let _state = cx.update(|_, cx| fixture.start(true, cx));
+        cx.run_until_parked();
+        advance(cx, Duration::from_secs(90));
+        assert_eq!(fixture.server.requests().len(), 2);
+
+        fixture.server.route("/latest", "503 Service Unavailable", "");
+        advance(cx, Duration::from_secs(180));
+        assert_eq!(fixture.server.requests().len(), 3);
+
+        fixture.server.route("/latest", LIMITED, "{}");
+        advance(cx, INTERVAL);
+        assert_eq!(fixture.server.requests().len(), 4);
+        advance(cx, Duration::from_secs(89));
+        assert_eq!(fixture.server.requests().len(), 4);
+        advance(cx, Duration::from_secs(1));
+        assert_eq!(
+            fixture.server.requests().len(),
+            5,
+            "the failure ended the limits in a row"
+        );
+
+        cx.update(|_, cx| {
+            set_automatic(false, cx);
+            set_automatic(true, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(fixture.server.requests().len(), 6);
+        advance(cx, Duration::from_secs(89));
+        assert_eq!(fixture.server.requests().len(), 6);
+        advance(cx, Duration::from_secs(1));
+        assert_eq!(
+            fixture.server.requests().len(),
+            7,
+            "turning checks back on starts the wait again"
         );
         assert_eq!(front(cx), None);
     }
