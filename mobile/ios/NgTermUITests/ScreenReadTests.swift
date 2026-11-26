@@ -169,6 +169,23 @@ internal final class ScreenReadTests: XCTestCase {
         FakeApp.expect(add, "an element that shows")
     }
 
+    // a wait's own check of the app: false while the app runs, true once it stopped, and a blind wait of a stopped app
+    // ends at its limit
+    @MainActor
+    internal func testTheWaitTellsWhetherTheAppRuns() {
+        let app = FakeApp.launch(withKey: true, for: self)
+        FakeApp.showMachines(in: app)
+        XCTAssertFalse(ScreenRead.Wait().appStopped())
+        app.terminate()
+        XCTAssertTrue(ScreenRead.Wait().appStopped())
+        let blindLimit: TimeInterval = 60
+        let polled = ScreenRead.Wait(reads: 3, beat: 0.1, limit: 0.5, blindLimit: blindLimit).poll {
+            ScreenRead.isShown(app.buttons["add-machine"])
+        }
+        XCTAssertEqual(polled.answer, .failed)
+        XCTAssertLessThan(polled.seconds, blindLimit)
+    }
+
     // a read that fails says that the element does not exist, as a read that found none does: only the read of the
     // snapshot tells them apart
     @MainActor
