@@ -32,10 +32,12 @@ internal struct CheckmarkGlyphTests {
 
     // the badge drawn at 3x on the grouped ground of `scheme`, as its raw RGBA bytes and size
     private static func pixels(of badge: AgentStatusBadge, in scheme: ColorScheme) throws -> Rendered {
-        try pixels(
+        let rendered = try pixels(
             of: badge.ngtermTheme().padding().background(Color(uiColor: .systemGroupedBackground)),
             in: scheme
         )
+        try #require(ink(of: rendered) > 0, "the badge drew nothing, not even its ground")
+        return rendered
     }
 
     // a glyph drawn at 3x on no ground, so that only its own pixels are opaque
@@ -43,19 +45,31 @@ internal struct CheckmarkGlyphTests {
         try pixels(of: StatusGlyph(glyph, color: .primary).ngtermTheme(), in: scheme)
     }
 
+    // drawn by CoreGraphics: `cgImage` goes through the simulator's Metal, blank on an overloaded host
     private static func pixels(of content: some View, in scheme: ColorScheme) throws -> Rendered {
         let renderer = ImageRenderer(content: content.environment(\.colorScheme, scheme))
-        renderer.scale = Self.scale
-        let image = try #require(renderer.cgImage, "the view did not render")
-        let bytesPerRow = image.width * Self.bytesPerPixel
-        var bytes = [UInt8](repeating: 0, count: bytesPerRow * image.height)
+        var rendered: Rendered?
+        renderer.render(rasterizationScale: Self.scale) { size, draw in
+            rendered = bitmap(width: pixelCount(size.width), height: pixelCount(size.height), draw: draw)
+        }
+        return try #require(rendered, "the view did not render")
+    }
+
+    private static func pixelCount(_ points: CGFloat) -> Int {
+        Int((points * scale).rounded(.up))
+    }
+
+    // the RGBA bytes `draw` paints on a clear bitmap of `width` by `height` pixels, at 3x, or nil without a context
+    private static func bitmap(width: Int, height: Int, draw: (CGContext) -> Void) -> Rendered? {
+        let bytesPerRow = width * bytesPerPixel
+        var bytes = [UInt8](repeating: 0, count: bytesPerRow * height)
         let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
             guard
                 let context = CGContext(
                     data: buffer.baseAddress,
-                    width: image.width,
-                    height: image.height,
-                    bitsPerComponent: Self.bitsPerComponent,
+                    width: width,
+                    height: height,
+                    bitsPerComponent: bitsPerComponent,
                     bytesPerRow: bytesPerRow,
                     space: CGColorSpaceCreateDeviceRGB(),
                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
@@ -63,11 +77,11 @@ internal struct CheckmarkGlyphTests {
             else {
                 return false
             }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            context.scaleBy(x: scale, y: scale)
+            draw(context)
             return true
         }
-        #expect(drawn, "no bitmap context for the view")
-        return Rendered(width: image.width, height: image.height, bytes: bytes)
+        return drawn ? Rendered(width: width, height: height, bytes: bytes) : nil
     }
 
     @Test("a checkmark status draws neither the star nor the circle", arguments: [ColorScheme.light, .dark])
