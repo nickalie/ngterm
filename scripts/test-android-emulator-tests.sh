@@ -137,7 +137,10 @@ check "an emulator on another port is left alone" 'alive "emulator-$other" && [[
 status="$(run "$port")"
 check "a missing command is a usage error" '[[ "$status" == 2 ]] && grep -q "^usage:" "$work/log"'
 status="$(run "" true)"
-check "a missing EMULATOR_PORT is a usage error" '[[ "$status" == 2 ]] && grep -q "^usage:" "$work/log"'
+check "an empty EMULATOR_PORT is a usage error" '[[ "$status" == 2 ]] && grep -q "^usage:" "$work/log"'
+status=0
+env -u EMULATOR_PORT "$script" true >"$work/log" 2>&1 || status=$?
+check "an unset EMULATOR_PORT is a usage error" '[[ "$status" == 2 ]] && grep -q "^usage:" "$work/log"'
 
 ((failures == 0)) || {
   echo "$failures check(s) failed" >&2
