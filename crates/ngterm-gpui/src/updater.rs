@@ -69,6 +69,8 @@ struct Updater {
     origin: Origin,
     cancelled: Option<Arc<AtomicBool>>,
     polling: Option<Task<()>>,
+    /// Rate limits in a row on automatic checks; each one doubles the wait before the next check.
+    deferrals: u32,
     restart: bool,
     poster: Poster,
 }
@@ -130,6 +132,7 @@ fn start(
         origin: Origin::Automatic,
         cancelled: None,
         polling: None,
+        deferrals: 0,
         restart: false,
         poster,
     });
@@ -177,7 +180,8 @@ fn poll(delay: Duration, cx: &mut App) -> Task<()> {
     })
 }
 
-/// An automatic check keeps a transient failure quiet. After a rate limit, the next check waits until it resets.
+/// An automatic check keeps a transient failure quiet. After a rate limit, the next check waits until it resets,
+/// and a limit that continues doubles the wait, up to [`INTERVAL`], as GitHub asks of clients.
 fn defer_automatic(error: &ngterm_update::Error, cx: &mut App) {
     tracing::info!(%error, "automatic update check deferred");
     let updater = cx.global_mut::<Updater>();
@@ -185,7 +189,10 @@ fn defer_automatic(error: &ngterm_update::Error, cx: &mut App) {
     if let Some(wait) = error.retry_after()
         && updater.polling.is_some()
     {
-        let task = poll(wait.saturating_add(RETRY_MARGIN), cx);
+        let backoff = 2_u32.saturating_pow(updater.deferrals);
+        updater.deferrals = updater.deferrals.saturating_add(1);
+        let delay = wait.saturating_mul(backoff).saturating_add(RETRY_MARGIN).min(INTERVAL);
+        let task = poll(delay, cx);
         cx.global_mut::<Updater>().polling = Some(task);
     }
 }
@@ -264,6 +271,7 @@ fn start_check(manual: Option<AnyWindowHandle>, cx: &mut App) {
             updater.job.take();
             updater.cancelled.take();
             if result.is_ok() {
+                updater.deferrals = 0;
                 updater.notice.take();
                 let _ = std::fs::remove_file(error_file(&updater.state_dir));
             }
@@ -610,6 +618,7 @@ mod tests {
                         origin,
                         cancelled: Some(Arc::clone(&cancelled)),
                         polling: None,
+                        deferrals: 0,
                         restart: false,
                         poster: Arc::downgrade(&posting),
                     });
@@ -668,6 +677,7 @@ mod tests {
                 origin: Origin::Automatic,
                 cancelled: None,
                 polling: None,
+                deferrals: 0,
                 restart: false,
                 poster: Arc::downgrade(&posting),
             });
@@ -744,6 +754,7 @@ mod tests {
             origin: Origin::Automatic,
             cancelled: None,
             polling: None,
+            deferrals: 0,
             restart: false,
             poster: crate::state::detached_poster(),
         }
@@ -1122,6 +1133,7 @@ mod tests {
             cx.set_global(Updater {
                 job: Some(job),
                 polling: Some(polling),
+                deferrals: 0,
                 cancelled: Some(Arc::clone(&cancelled)),
                 ..source_build(&state, Status::Downloading("0.2.0".into()), dir.path())
             });
@@ -1495,6 +1507,42 @@ mod tests {
         );
         advance(cx, six_hours);
         assert_eq!(fixture.server.requests().len(), 4);
+        assert_eq!(front(cx), None);
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_rate_limit_that_continues_doubles_the_wait_until_a_check_succeeds(cx: &mut TestAppContext) {
+        const LIMITED: &str = "429 Too Many Requests\r\nRetry-After: 60";
+        let fixture = Fixture::new();
+        fixture.server.route("/latest", LIMITED, "{}");
+        let cx = host(cx);
+        let _state = cx.update(|_, cx| fixture.start(true, cx));
+        cx.run_until_parked();
+        let second = Duration::from_secs(1);
+        let mut requests = 1;
+        for wait in [60, 120, 240, 480] {
+            assert_eq!(fixture.server.requests().len(), requests);
+            if wait == 480 {
+                fixture.server.publish("0.1.0", &[]);
+            }
+            advance(cx, Duration::from_secs(wait - 1) + RETRY_MARGIN);
+            assert_eq!(fixture.server.requests().len(), requests, "never before {wait} s");
+            advance(cx, second);
+            requests += 1;
+            assert_eq!(fixture.server.requests().len(), requests, "one check after {wait} s");
+        }
+        assert_eq!(status(cx), Status::Current);
+
+        fixture.server.route("/latest", LIMITED, "{}");
+        advance(cx, INTERVAL);
+        assert_eq!(fixture.server.requests().len(), requests + 1);
+        advance(cx, Duration::from_secs(60) + RETRY_MARGIN);
+        assert_eq!(
+            fixture.server.requests().len(),
+            requests + 2,
+            "a check that succeeds starts again from GitHub's wait"
+        );
         assert_eq!(front(cx), None);
     }
 

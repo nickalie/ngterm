@@ -77,7 +77,7 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Http(#[from] ureq::Error),
-    /// GitHub's API rate limit, with the wait until it resets when the answer gives one.
+    /// GitHub's API rate limit, with the wait before the next try (see [`Error::retry_after`]).
     #[error("{message}")]
     RateLimited {
         message: String,
@@ -105,7 +105,8 @@ impl Error {
         }
     }
 
-    /// The wait until GitHub's rate limit resets, for a rate-limit answer that gives one.
+    /// The wait before a try after a rate limit: GitHub's own when its answer gives one, a minute for a secondary
+    /// limit with no wait, and never more than an hour.
     #[must_use]
     pub fn retry_after(&self) -> Option<std::time::Duration> {
         match self {

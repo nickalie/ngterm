@@ -170,23 +170,35 @@ fn metadata_response(
         authorization.set_sensitive(true);
         let wait = limit_wait(&response);
         response = metadata_request(agent, url, Some(authorization))?;
-        if matches!(response.status().as_u16(), 401 | 403) && !primary_limit(&response) {
+        if let Some(error) = rate_limit(&mut response) {
+            return Err(error);
+        }
+        if matches!(response.status().as_u16(), 401 | 403) {
             return Err(limit_error(
                 wait,
                 " GitHub refused the local token (GH_TOKEN, GITHUB_TOKEN or gh auth token).",
             ));
         }
     }
-    if primary_limit(&response) || secondary_limit(&response) {
-        return Err(limit_error(limit_wait(&response), ""));
-    }
-    if unmarked_secondary_limit(&mut response) {
-        return Err(limit_error(Some(SECONDARY_WAIT), ""));
+    if let Some(error) = rate_limit(&mut response) {
+        return Err(error);
     }
     if !response.status().is_success() {
         return Err(ureq::Error::StatusCode(response.status().as_u16()).into());
     }
     Ok(response)
+}
+
+/// The error of a rate-limit answer, with its wait, or `None` when the answer is not a rate limit.
+fn rate_limit(response: &mut ureq::http::Response<ureq::Body>) -> Option<Error> {
+    let wait = if primary_limit(response) {
+        limit_wait(response)
+    } else if secondary_limit(response) || unmarked_secondary_limit(response) {
+        Some(retry_after(response).unwrap_or(SECONDARY_WAIT).min(LIMIT_WAIT_MAX))
+    } else {
+        return None;
+    };
+    Some(limit_error(wait, ""))
 }
 
 fn header_seconds(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<u64> {
@@ -197,26 +209,37 @@ fn header_seconds(response: &ureq::http::Response<ureq::Body>, name: &str) -> Op
         .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
-/// The wait that GitHub asks for: `Retry-After`, else the time until `X-RateLimit-Reset`.
+/// `Retry-After` in seconds or as an HTTP date against the answer's `Date`.
+fn retry_after(response: &ureq::http::Response<ureq::Body>) -> Option<Duration> {
+    header_seconds(response, "retry-after")
+        .map(Duration::from_secs)
+        .or_else(|| {
+            let date = response.headers().get("retry-after")?.to_str().ok()?;
+            let at = httpdate::parse_http_date(date).ok()?;
+            Some(at.duration_since(server_now(response)).unwrap_or_default())
+        })
+}
+
+/// The wait of a primary limit: `Retry-After`, else the time until `X-RateLimit-Reset`.
 fn limit_wait(response: &ureq::http::Response<ureq::Body>) -> Option<Duration> {
-    let seconds = match header_seconds(response, "retry-after") {
-        Some(seconds) => seconds,
-        None => header_seconds(response, "x-ratelimit-reset")?.saturating_sub(server_now(response)),
-    };
-    Some(Duration::from_secs(seconds).min(LIMIT_WAIT_MAX))
+    let wait = retry_after(response).or_else(|| {
+        let now = server_now(response)
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let reset = Duration::from_secs(header_seconds(response, "x-ratelimit-reset")?);
+        Some(reset.saturating_sub(now))
+    })?;
+    Some(wait.min(LIMIT_WAIT_MAX))
 }
 
 /// GitHub's clock from the answer's `Date`, so a wrong local clock does not move the reset.
-fn server_now(response: &ureq::http::Response<ureq::Body>) -> u64 {
+fn server_now(response: &ureq::http::Response<ureq::Body>) -> std::time::SystemTime {
     response
         .headers()
         .get("date")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| httpdate::parse_http_date(value).ok())
         .unwrap_or_else(std::time::SystemTime::now)
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 fn limit_error(wait: Option<Duration>, note: &str) -> Error {

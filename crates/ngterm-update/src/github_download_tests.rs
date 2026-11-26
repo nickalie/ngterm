@@ -123,6 +123,16 @@ fn no_token_and_failed_authentication_stop_with_a_useful_error() {
             "GitHub's API rate limit was reached. Retry in 0 seconds. Check local GitHub authentication or use \
              Release Downloads.",
         ),
+        (
+            "403 Forbidden\r\nRetry-After: 45",
+            "GitHub's API rate limit was reached. Retry in 45 seconds. Check local GitHub authentication or use \
+             Release Downloads.",
+        ),
+        (
+            "403 Forbidden\r\n\r\n{\"message\":\"You have exceeded a secondary rate limit.\"}",
+            "GitHub's API rate limit was reached. Retry in 60 seconds. Check local GitHub authentication or use \
+             Release Downloads.",
+        ),
     ] {
         let server = Server::new(vec![LIMITED, second]);
         let error = metadata_response(&test_agent(), &server.url, || Some("secret-token".into()))
@@ -228,6 +238,15 @@ fn a_limit_gives_the_wait_that_github_asks_for() {
             "429 Too Many Requests\r\n\r\nYou have exceeded a Secondary Rate Limit",
             60..=60,
         ),
+        (
+            "429 Too Many Requests\r\nRetry-After: Wed, 21 Oct 2015 07:30:00 GMT\r\nDate: Wed, 21 Oct 2015 07:28:00 GMT",
+            120..=120,
+        ),
+        (
+            "429 Too Many Requests\r\nRetry-After: Wed, 21 Oct 2015 07:20:00 GMT\r\nDate: Wed, 21 Oct 2015 07:28:00 GMT",
+            0..=0,
+        ),
+        ("403 Forbidden\r\nRetry-After: soon\r\nX-RateLimit-Reset: 1", 60..=60),
     ] {
         let server = Server::new(vec![status]);
         let error = metadata_response(&test_agent(), &server.url, || None).unwrap_err();
