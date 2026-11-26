@@ -226,3 +226,97 @@ def test_the_scratch_is_a_live_session_of_its_own_that_a_hide_keeps_and_the_clos
     while replaced in _live_daemons(origin) and time.monotonic() < deadline:
         time.sleep(0.2)
     assert replaced not in _live_daemons(origin)
+
+
+def _scratch_daemon_shape(daemon, identity):
+    """Upstream's `scratchDaemonName`: the vocabulary's prefix, `scratch-`, then the identity's 32 lowercase hex
+    digits."""
+    prefix, _, digits = daemon.rpartition("scratch-")
+    assert prefix and digits == identity.replace("-", "").lower() and len(digits) == 32, daemon
+
+
+@pytest.mark.covers("catalog.subscribe", "session.new", "session.scratch", "session.companion.page",
+                    "field:result.receipt", streams=("catalog.subscribe",))
+def test_a_stale_scratch_identity_is_refused_and_a_page_has_no_scratch(remote_origin, tmp_path):
+    """Upstream's `aStaleExpectedScratchIsRefusedAndLeavesTheReplacementRunning` and
+    `anExpectedScratchThatMatchesIsServedWithAReceipt`: an operation decided against another scratch, or against none
+    while one runs, is refused with a receipt and changes nothing; one that names the running scratch is applied. A page
+    session has no terminal for a scratch."""
+    origin = Ctl(remote_origin.instance)
+    epoch = _epoch(origin)
+    sid = assert_ok(origin.request("session.new"))["id"]
+    assert_ok(origin.request("session.scratch", sid, mode="on"))
+    scratch = _scratch_of(origin, sid)
+    identity, daemon = scratch["pane"]["identity"], scratch["pane"]["daemon"]
+    _scratch_daemon_shape(daemon, identity)
+
+    for op, expected in (("op-scratch-other", "00000000-0000-4000-8000-000000000000"), ("op-scratch-none", "none")):
+        stale = origin.request("session.scratch", sid, mode="on", command="exec cat", opID=op, epoch=epoch,
+                               scratch=expected)
+        assert_error(stale, "the session's scratch changed; take the catalog again")
+        assert stale.result["receipt"]["outcome"] == "refused", stale.raw
+    assert _scratch_of(origin, sid) == scratch
+
+    served = assert_ok(origin.request("session.scratch", sid, mode="off", opID="op-scratch-same", epoch=epoch,
+                                      scratch=identity))
+    assert served["receipt"]["outcome"] == "applied", served
+    hidden = _scratch_of(origin, sid)
+    assert hidden["pane"] == scratch["pane"] and hidden["shown"] is False, hidden
+
+    page_file = tmp_path / "page.html"
+    page_file.write_text("<!doctype html><title>Page</title><p>page</p>")
+    page = assert_ok(origin.request("session.companion.page", sid, html=str(page_file)))["id"]
+    assert_error(origin.request("session.scratch", page, mode="on"), "session.scratch: not available on a page session")
+    refused = origin.request("session.scratch", page, mode="on", opID="op-scratch-page", epoch=epoch, scratch="none")
+    assert_error(refused, "session.scratch: not available on a page session")
+    assert refused.result["receipt"]["outcome"] == "refused", refused.raw
+
+    assert_ok(origin.request("session.close", sid))
+    deadline = time.monotonic() + 30
+    while daemon in _live_daemons(origin) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert daemon not in _live_daemons(origin)
+
+
+@pytest.mark.covers("catalog.subscribe", "session.new", "session.scratch", "session.close", "live.list",
+                    "field:tree.session.ended", streams=("catalog.subscribe",))
+def test_an_ended_session_keeps_its_scratch_until_its_close(remote_origin):
+    """Upstream's plan for an ended session: its last pane is lost, it stays in the catalog ended, and its scratch
+    runs on there in a live session of its own until the session's close. Here the instance's session server dies
+    with the session's live sessions, so the scratch starts after the session ended."""
+    origin = Ctl(remote_origin.instance)
+    sid = assert_ok(origin.request("session.new"))["id"]
+    instance = remote_origin.instance
+    deadline = time.monotonic() + 30
+    while not (servers := base.session_servers(instance.live_dir, instance.vocabulary)) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert servers, "no session server runs the origin's sessions"
+    for pid in servers:
+        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+    deadline = time.monotonic() + 30
+    while not find_session(origin.tree(), sid).get("ended") and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert find_session(origin.tree(), sid).get("ended") is True
+
+    assert_ok(origin.request("session.scratch", sid, mode="on"))
+    entry = _catalog_entry(origin, sid)
+    assert entry["lifecycle"] == "ended" and entry["panes"] == [], entry
+    scratch = entry.get("scratch")
+    assert scratch is not None and scratch["shown"] is True, entry
+    daemon = scratch["pane"]["daemon"]
+    _scratch_daemon_shape(daemon, scratch["pane"]["identity"])
+    deadline = time.monotonic() + 30
+    while daemon not in _live_daemons(origin) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert _live_daemons(origin)[daemon]["observation"] == "running"
+
+    assert_ok(origin.request("session.scratch", sid, mode="off"))
+    entry = _catalog_entry(origin, sid)
+    assert entry["lifecycle"] == "ended" and entry["scratch"]["pane"]["daemon"] == daemon, entry
+    assert entry["scratch"]["shown"] is False and daemon in _live_daemons(origin), entry
+
+    assert_ok(origin.request("session.close", sid))
+    deadline = time.monotonic() + 30
+    while daemon in _live_daemons(origin) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert daemon not in _live_daemons(origin)
