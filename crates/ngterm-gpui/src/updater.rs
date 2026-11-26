@@ -69,7 +69,8 @@ struct Updater {
     origin: Origin,
     cancelled: Option<Arc<AtomicBool>>,
     polling: Option<Task<()>>,
-    /// Rate limits in a row on automatic checks; each one doubles the wait before the next check.
+    /// Rate limits in a row on any check while automatic checks are on; each one doubles the wait before the next
+    /// automatic check.
     deferrals: u32,
     restart: bool,
     poster: Poster,
@@ -1678,6 +1679,30 @@ mod tests {
         assert_eq!(fixture.server.requests().len(), 3);
         assert_eq!(status(cx), Status::Current);
         assert_eq!(front(cx), None);
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_rate_limit_on_a_manual_check_starts_no_automatic_check_when_they_are_off(cx: &mut TestAppContext) {
+        let fixture = Fixture::new();
+        fixture
+            .server
+            .route("/latest", "429 Too Many Requests\r\nRetry-After: 600", "{}");
+        let cx = host(cx);
+        let _state = cx.update(|_, cx| fixture.start(false, cx));
+
+        cx.update(check);
+        cx.run_until_parked();
+        press(cx, "OK");
+        assert_eq!(fixture.server.requests().len(), 1);
+
+        advance(cx, INTERVAL);
+        assert_eq!(
+            fixture.server.requests().len(),
+            1,
+            "with automatic checks off, nothing checks in the background"
+        );
+        assert!(cx.update(|_, cx| cx.global::<Updater>().polling.is_none()));
     }
 
     #[gpui_kit::test]
