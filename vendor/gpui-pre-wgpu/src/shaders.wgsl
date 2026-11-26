@@ -1526,7 +1526,6 @@ struct ExternalSurfaceParams {
 struct ExternalSurfaceVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) texture_position: vec2<f32>,
-    @location(3) clip_distances: vec4<f32>,
 }
 
 @vertex
@@ -1534,17 +1533,14 @@ fn vs_external_surface(@builtin(vertex_index) vertex_id: u32) -> ExternalSurface
     let unit_vertex = vec2<f32>(f32(vertex_id & 1u), 0.5 * f32(vertex_id & 2u));
 
     var out = ExternalSurfaceVarying();
-    out.position = to_device_position(unit_vertex, external_surface.bounds);
-    out.texture_position = unit_vertex;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, external_surface.bounds, external_surface.content_mask);
+    let clipped = clip_to_mask(unit_vertex, external_surface.bounds, external_surface.content_mask);
+    out.position = to_device_position_impl(clipped.position);
+    out.texture_position = clipped.unit_vertex;
     return out;
 }
 
 @fragment
 fn fs_external_surface(input: ExternalSurfaceVarying) -> @location(0) vec4<f32> {
-    if (any(input.clip_distances < vec4<f32>(0.0))) {
-        return vec4<f32>(0.0);
-    }
     let texel = textureSampleLevel(t_external, s_external, input.texture_position, 0.0);
     if (external_surface.opaque != 0u) {
         return vec4<f32>(texel.rgb, 1.0);
