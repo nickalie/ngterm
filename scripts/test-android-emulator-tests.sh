@@ -34,7 +34,6 @@ mkdir -p "$work/bin" "$work/emulator"
 cat >"$work/emulator/qemu-system-x86_64-headless" <<'EOF'
 #!/bin/bash
 # -port PORT, then the mode: obey or ignore
-echo "$$" >"$STANDIN_DIR/emulator-$2.pid"
 if [[ "$3" == ignore ]]; then
   trap '' TERM
   setsid sleep 600 &
@@ -42,6 +41,8 @@ if [[ "$3" == ignore ]]; then
 else
   trap 'exit 0' TERM
 fi
+# Written last: the test sends emu kill once this file is there, so the trap and the holder must exist first.
+echo "$$" >"$STANDIN_DIR/emulator-$2.pid"
 echo booted
 while :; do sleep 0.1; done
 EOF
@@ -82,9 +83,10 @@ reader_done() {
 
 alive() { kill -0 "$(cat "$work/$1.pid")" 2>/dev/null; }
 
+# Runs the script with EMULATOR_PORT=$1, as the runner sets it, and the command in the rest.
 run() {
   local status=0
-  "$script" "$@" >"$work/log" 2>&1 || status=$?
+  EMULATOR_PORT="$1" "$script" "${@:2}" >"$work/log" 2>&1 || status=$?
   echo "$status"
 }
 
@@ -134,6 +136,8 @@ check "an emulator on another port is left alone" 'alive "emulator-$other" && [[
 
 status="$(run "$port")"
 check "a missing command is a usage error" '[[ "$status" == 2 ]] && grep -q "^usage:" "$work/log"'
+status="$(run "" true)"
+check "a missing EMULATOR_PORT is a usage error" '[[ "$status" == 2 ]] && grep -q "^usage:" "$work/log"'
 
 ((failures == 0)) || {
   echo "$failures check(s) failed" >&2

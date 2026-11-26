@@ -208,7 +208,7 @@ jobs:
           force-avd-creation: false
           working-directory: mobile/android
           emulator-port: 5554
-          script: ../../scripts/android-emulator-tests.sh 5554 ./gradlew :app:connectedGithubDebugAndroidTest
+          script: ../../scripts/android-emulator-tests.sh ./gradlew :app:connectedGithubDebugAndroidTest
       - name: instrumented tests on the tablet
         timeout-minutes: 20
         uses: reactivecircus/android-emulator-runner@v2
@@ -221,7 +221,7 @@ jobs:
           force-avd-creation: false
           working-directory: mobile/android
           emulator-port: 5554
-          script: ../../scripts/android-emulator-tests.sh 5554 ./gradlew :app:connectedGithubDebugAndroidTest
+          script: ../../scripts/android-emulator-tests.sh ./gradlew :app:connectedGithubDebugAndroidTest
       - name: upload the instrumented test reports
         if: failure()
         uses: actions/upload-artifact@v7

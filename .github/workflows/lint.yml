@@ -1,7 +1,8 @@
 # The workflows and the scripts, linted by scripts/lint.sh: actionlint over .github/workflows/ (each `run:` block
 # through shellcheck), shellcheck over scripts/*.sh, scripts/lib/*.sh, .githooks/* and the cookbook's scripts, both at
 # the versions packaging/release/pins.env pins and checksum-verified, then the cookbook's layout check and node runs,
-# each scripts/*.py `--self-test`, the pre-commit hook's test, the Mac runner's test and the iOS smoke set test.
+# each scripts/*.py `--self-test`, the pre-commit hook's test, the Mac runner's test, the iOS smoke set test and the
+# Android emulator stop's test.
 #
 # Path-filtered to what it reads: the workflows and actionlint's settings, the scripts, the Git hooks, shellcheck's
 # settings, the pins and the cookbook. Pushes to a `ci/**` branch run it too, and it can be run by hand.

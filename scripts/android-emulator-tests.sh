@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs a command (the instrumented tests) against the emulator android-emulator-runner booted on PORT, then stops that
-# emulator in bounded time and exits with the command's status. The runner's own teardown only sends `emu kill`, and its
-# step ends only when every process that holds the emulator's output pipe has exited: the emulator (its qemu, which the
+# Runs a command (the instrumented tests) against the emulator android-emulator-runner booted on EMULATOR_PORT (the
+# runner sets it in the script's environment from its emulator-port input), then stops that emulator in bounded time
+# and exits with the command's status. The runner's own teardown only sends `emu kill`, and its step ends only when every process that holds the emulator's output pipe has exited: the emulator (its qemu, which the
 # launcher execs into) and the crashpad_handler it starts in a session of its own. An emulator that accepts `emu kill`
 # but never shuts down held android.yml's emulator job until its timeout. So this script sends `emu kill` itself
 # (bounded too: a stopped emulator's console takes the connection and never answers), waits up to EMULATOR_STOP_TIMEOUT
@@ -9,15 +9,14 @@
 # then sends SIGKILL to the ones left and logs a warning. The runner's later `emu kill` then finds no device, which it
 # logs and ignores.
 #
-# Usage: scripts/android-emulator-tests.sh PORT COMMAND [ARG...]
+# Usage: EMULATOR_PORT=PORT scripts/android-emulator-tests.sh COMMAND [ARG...]
 set -uo pipefail
 
-(($# >= 2)) || {
-  echo "usage: scripts/android-emulator-tests.sh PORT COMMAND [ARG...]" >&2
+(($# >= 1)) && [[ -n "${EMULATOR_PORT:-}" ]] || {
+  echo "usage: EMULATOR_PORT=PORT scripts/android-emulator-tests.sh COMMAND [ARG...]" >&2
   exit 2
 }
-port="$1"
-shift
+port="$EMULATOR_PORT"
 timeout="${EMULATOR_STOP_TIMEOUT:-60}"
 
 # The pids of the emulator processes (qemu-system-*, or the launcher before its exec) started with `-port PORT`.
