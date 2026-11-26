@@ -81,6 +81,14 @@ fn the_probe_can_read_the_terminal_it_runs_in() -> TestResult {
     Ok(())
 }
 
+/// What the unit does after the installer starts it, as when another server holds its state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unit {
+    Stays,
+    Stops,
+    Restarts,
+}
+
 /// A home with a release archive's stand-in to install: `usr/bin` stubs that log to `LOG` and the real
 /// `server-install.sh`.
 struct Host {
@@ -97,7 +105,7 @@ impl Host {
         executable(
             &host.stubs().join("systemctl"),
             "#!/bin/sh\necho \"systemctl $*\" >> \"$LOG\"\ncase \"$*\" in\n  *is-active*) [ -e \"$ACTIVE\" ] && [ -z \"$CONFLICT\" ] ;;\n  \
-             *show*) cat \"$SERVER_PID\" ;;\n  *start*) touch \"$ACTIVE\" ;;\nesac\n",
+             *show*) if [ -n \"$PID_CHANGES\" ] && [ -e \"$SHOWN\" ]; then echo 1; else touch \"$SHOWN\"; cat \"$SERVER_PID\"; fi ;;\n  *start*) touch \"$ACTIVE\" ;;\nesac\n",
         )?;
         executable(
             &host.stubs().join("loginctl"),
@@ -164,12 +172,11 @@ impl Host {
     /// The remote installer, beside a stand-in server process whose environment and working directory the script
     /// must hand `ngtermctl version`.
     fn install(&self, linger: &str, linger_allowed: bool, hooks_exit: i32) -> TestResult<Output> {
-        self.install_with(linger, linger_allowed, hooks_exit, "")
+        self.install_with(linger, linger_allowed, hooks_exit, Unit::Stays)
     }
 
-    /// [`Self::install`]; a non-empty `conflict` keeps the unit from staying active, as when another server holds
-    /// its state.
-    fn install_with(&self, linger: &str, linger_allowed: bool, hooks_exit: i32, conflict: &str) -> TestResult<Output> {
+    /// [`Self::install`] with the unit doing `unit` after it starts.
+    fn install_with(&self, linger: &str, linger_allowed: bool, hooks_exit: i32, unit: Unit) -> TestResult<Output> {
         let linger_file = self.root.path().join("linger");
         fs::write(&linger_file, format!("{linger}\n"))?;
         let server_cwd = self.root.path().join("server-cwd");
@@ -195,7 +202,9 @@ impl Host {
             .env("LINGER", &linger_file)
             .env("LINGER_ALLOWED", if linger_allowed { "yes" } else { "no" })
             .env("HOOKS_EXIT", hooks_exit.to_string())
-            .env("CONFLICT", conflict)
+            .env("SHOWN", self.root.path().join("shown"))
+            .env("CONFLICT", if unit == Unit::Stops { "yes" } else { "" })
+            .env("PID_CHANGES", if unit == Unit::Restarts { "yes" } else { "" })
             .output();
         server.kill()?;
         server.wait()?;
@@ -376,19 +385,21 @@ fn incomplete_hooks_exit_3() -> TestResult {
 }
 
 #[test]
-fn a_server_that_answers_for_a_unit_that_stops_is_no_install() -> TestResult {
-    let host = Host::new()?;
-    assert!(host.unpack("/bin/sh", &host.archive("first")?)?.status.success());
-    let output = host.install_with("yes", true, 0, "another server holds the state")?;
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let stderr = String::from_utf8(output.stderr)?;
-    assert!(stderr.contains("ngterm-headless did not stay running"), "{stderr}");
-    assert!(
-        !host
-            .take_log()
-            .iter()
-            .any(|line| line.contains("--install-agent-hooks")),
-        "the hooks ran for a server that is not the unit's"
-    );
+fn a_server_that_answers_for_a_unit_that_stops_or_restarts_is_no_install() -> TestResult {
+    for unit in [Unit::Stops, Unit::Restarts] {
+        let host = Host::new()?;
+        assert!(host.unpack("/bin/sh", &host.archive("first")?)?.status.success());
+        let output = host.install_with("yes", true, 0, unit)?;
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("ngterm-headless did not stay running"), "{stderr}");
+        assert!(
+            !host
+                .take_log()
+                .iter()
+                .any(|line| line.contains("--install-agent-hooks")),
+            "the hooks ran for a server that is not the unit's"
+        );
+    }
     Ok(())
 }

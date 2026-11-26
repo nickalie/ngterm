@@ -11,7 +11,8 @@ use ngterm_update::Trust;
 use ngterm_update::fakes::{Server, manifest};
 
 use super::{
-    CopyFailure, Effects, Install, LiveEffects, NOT_A_RELEASE, ServerCommand, appimage_dir, copy_bounded, release_of,
+    CopyFailure, Effects, Install, LiveEffects, NOT_A_RELEASE, ServerCommand, appimage_dir, copy_bounded, copy_failure,
+    release_of,
 };
 use crate::terminfo::{Connection, Input, InstallFailure, Outcome, ssh_command};
 use crate::{Failure, Ngtermctl};
@@ -551,6 +552,23 @@ fn a_copy_tells_a_write_failure_from_a_read_failure() {
         copy_bounded(&mut endless, &mut std::io::sink()),
         Err(CopyFailure::TooLarge)
     ));
+}
+
+#[test]
+fn a_copy_failure_names_the_side_that_failed() {
+    let file = Path::new("/tmp/snapshot");
+    assert_eq!(
+        copy_failure(CopyFailure::Write(std::io::Error::other("no space")), "r.tar.gz", file),
+        "could not write /tmp/snapshot: no space"
+    );
+    assert_eq!(
+        copy_failure(CopyFailure::Read, "r.tar.gz", file),
+        "could not read r.tar.gz as a regular file"
+    );
+    assert_eq!(
+        copy_failure(CopyFailure::TooLarge, "r.tar.gz", file),
+        format!("r.tar.gz is larger than {DOWNLOAD_LIMIT} bytes")
+    );
 }
 
 #[cfg(target_os = "macos")]

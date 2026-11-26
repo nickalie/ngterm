@@ -311,8 +311,8 @@ fn failed(what: String) -> impl FnOnce(io::Error) -> String {
 /// Copies `source` through one checked descriptor into the private `file`, which alone is hashed and streamed: a copy
 /// of the path would follow a symlink whose target can change between the hash and the unpack.
 fn snapshot(source: &str, file: &Path) -> Result<(), String> {
-    let unreadable = || format!("could not read {source} as a regular file");
-    let too_large = || format!("{source} is larger than {DOWNLOAD_LIMIT} bytes");
+    let unreadable = || copy_failure(CopyFailure::Read, source, file);
+    let too_large = || copy_failure(CopyFailure::TooLarge, source, file);
     let mut input = File::open(source).map_err(|_| unreadable())?;
     let metadata = input.metadata().map_err(|_| unreadable())?;
     if !metadata.is_file() {
@@ -321,13 +321,21 @@ fn snapshot(source: &str, file: &Path) -> Result<(), String> {
     if metadata.len() > DOWNLOAD_LIMIT {
         return Err(too_large());
     }
-    let unwritable = || format!("could not write {}", file.display());
-    let mut output = create_private(file).map_err(failed(unwritable()))?;
-    copy_bounded(&mut input, &mut output).map_err(|failure| match failure {
-        CopyFailure::Read => unreadable(),
-        CopyFailure::TooLarge => too_large(),
-        CopyFailure::Write(error) => failed(unwritable())(error),
-    })
+    let mut output = create_private(file).map_err(failed(unwritable(file)))?;
+    copy_bounded(&mut input, &mut output).map_err(|failure| copy_failure(failure, source, file))
+}
+
+fn unwritable(file: &Path) -> String {
+    format!("could not write {}", file.display())
+}
+
+/// The message of a failed [`snapshot`] copy from `source` into `file`.
+fn copy_failure(failure: CopyFailure, source: &str, file: &Path) -> String {
+    match failure {
+        CopyFailure::Read => format!("could not read {source} as a regular file"),
+        CopyFailure::TooLarge => format!("{source} is larger than {DOWNLOAD_LIMIT} bytes"),
+        CopyFailure::Write(error) => failed(unwritable(file))(error),
+    }
 }
 
 /// Why [`copy_bounded`] stopped.
