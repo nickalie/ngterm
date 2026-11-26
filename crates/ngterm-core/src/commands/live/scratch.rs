@@ -3,8 +3,6 @@
 //! nothing that adopts, maps or prunes pane daemons claims. It outlives a hide and a viewer's detach, and ends with
 //! its own exit, its session's close, a `session scratch --command` that replaces it, or the next server start.
 
-use std::collections::BTreeSet;
-
 use ngterm_host::KillOutcome;
 use uuid::Uuid;
 
@@ -54,10 +52,10 @@ impl Core {
         }
     }
 
-    /// Ends every listed scratch daemon that is not one of `owned` (upstream's `endUnownedScratches`): a scratch never
-    /// outlives the server that started it, so at a start every one is a previous run's. The names it ended; none when
-    /// the listing failed.
-    pub fn end_unowned_scratches(&self, owned: &BTreeSet<Uuid>) -> Vec<String> {
+    /// Ends every listed scratch daemon (upstream's `endUnownedScratches` at a start): a scratch never outlives the
+    /// server that started it, so at a start every one is a previous run's. The names it ended; none when the listing
+    /// failed.
+    pub fn end_previous_scratches(&self) -> Vec<String> {
         let Some(host) = self.live.host() else {
             return Vec::new();
         };
@@ -68,11 +66,10 @@ impl Core {
                 return Vec::new();
             }
         };
-        let owned: BTreeSet<String> = owned.iter().copied().map(scratch_daemon_name).collect();
         records
             .into_iter()
             .map(|record| record.name)
-            .filter(|name| is_scratch_daemon_name(name) && !owned.contains(name))
+            .filter(|name| is_scratch_daemon_name(name))
             .filter(|name| match host.kill(name, true) {
                 KillOutcome::Killed | KillOutcome::StaleSocket => true,
                 outcome @ KillOutcome::Failed(_) => {

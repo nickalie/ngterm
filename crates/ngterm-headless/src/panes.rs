@@ -18,7 +18,7 @@
 //! - A session's scratch, once shown, is a terminal of its own whose live session has the scratch name shape
 //!   ([`ngterm_core::live::scratch_daemon_name`], upstream's server scratch). A hide keeps it. Its session's close, a
 //!   `session scratch --command` replacement or its window's close ends that live session; its own exit and a quit
-//!   do not need to. The next start ends what a quit left ([`Core::end_unowned_scratches`]).
+//!   do not need to. The next start ends what a quit left ([`Core::end_previous_scratches`]).
 //!
 //! Overlays and the HUD are drawn things and are not mounted: a command that waits for one answers as for an
 //! unrealized surface.

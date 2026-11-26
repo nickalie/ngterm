@@ -280,3 +280,41 @@ fn a_saved_live_mode_survives_bootstrap_without_a_home_directory() {
         "/"
     );
 }
+
+#[test]
+fn a_start_ends_the_scratches_of_a_previous_run_and_keeps_the_pane_daemons() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Arc::new(ngterm_host::fakes::FakeSessionHost::new());
+    let pane = ngterm_core::live::daemon_name(uuid::Uuid::new_v4());
+    let leftover = ngterm_core::live::scratch_daemon_name(uuid::Uuid::new_v4());
+    for name in [&pane, &leftover] {
+        host.insert(name.as_str(), "");
+    }
+    let mut core = Core::new(
+        CoreConfig {
+            app: identity(),
+            capabilities: Vec::new(),
+        },
+        CoreState::default(),
+    );
+
+    start_live(
+        &mut core,
+        LiveInstall {
+            host: Arc::clone(&host) as Arc<dyn ngterm_host::SessionHost>,
+            endpoint: ControlLiveEndpoint {
+                peer: None,
+                attach_bridge: None,
+                executable: "/bin/false".into(),
+                socket_directory: dir.path().join("live").to_string_lossy().into_owned(),
+            },
+            wrap: Inputs::default(),
+            state_dir: dir.path().to_path_buf(),
+            outdated_before: None,
+        },
+    );
+
+    assert_eq!(host.kills(), [(leftover.clone(), true)]);
+    assert!(host.session(&leftover).is_none());
+    assert!(host.session(&pane).is_some());
+}

@@ -187,25 +187,33 @@ fn install_live(core: &mut Core, runtime: &Runtime) {
         }
     }
     let outdated_before = launch_cutoff(bundled.as_deref(), &runtime.state_dir, SystemTime::now());
-    core.install_live_sessions(LiveInstall {
-        host: Arc::new(ServerHost::new(runtime.executable.clone(), directory)),
-        endpoint,
-        wrap: Inputs {
-            executable: runtime.executable.clone(),
-            login_shell: runtime.login_shell.clone(),
-            command_shell: runtime.command_shell.clone(),
-            resources_dir: runtime.resources_dir.clone(),
-            own_resources_dir: runtime.own_resources_dir.clone(),
+    start_live(
+        core,
+        LiveInstall {
+            host: Arc::new(ServerHost::new(runtime.executable.clone(), directory)),
+            endpoint,
+            wrap: Inputs {
+                executable: runtime.executable.clone(),
+                login_shell: runtime.login_shell.clone(),
+                command_shell: runtime.command_shell.clone(),
+                resources_dir: runtime.resources_dir.clone(),
+                own_resources_dir: runtime.own_resources_dir.clone(),
+                state_dir: runtime.state_dir.clone(),
+                inherited: runtime.inherited.clone(),
+                ..Inputs::default()
+            },
             state_dir: runtime.state_dir.clone(),
-            inherited: runtime.inherited.clone(),
-            ..Inputs::default()
+            outdated_before,
         },
-        state_dir: runtime.state_dir.clone(),
-        outdated_before,
-    });
+    );
+}
+
+/// The core takes the live-session host, the launch reap runs, and a previous run's scratches end.
+fn start_live(core: &mut Core, install: LiveInstall) {
+    core.install_live_sessions(install);
     core.run_live_launch();
     // a scratch never outlives the server that started it: what a previous run left ends here
-    let ended = core.end_unowned_scratches(&std::collections::BTreeSet::new());
+    let ended = core.end_previous_scratches();
     if !ended.is_empty() {
         tracing::info!(count = ended.len(), "ended the scratches of a previous run");
     }

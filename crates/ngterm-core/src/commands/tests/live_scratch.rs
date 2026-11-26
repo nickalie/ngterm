@@ -1,7 +1,6 @@
 //! The server's scratch as a live session of its own (upstream's `ServerActionsScratchTests` and `ServerPanesTests`):
 //! its seed and its end over a [`FakeSessionHost`], its catalog entry, and the operation pinned to it.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ngterm_host::KillOutcome;
@@ -183,25 +182,24 @@ fn a_failed_scratch_kill_is_reported() {
     assert!(!live.fixture.core.end_scratch(identity));
 }
 
-/// Upstream's `unownedScratchDaemonsAreEndedAndTheRestKept`.
+/// Upstream's `unownedScratchDaemonsAreEndedAndTheRestKept`, at a start, where no scratch is this run's.
 #[test]
-fn unowned_scratch_daemons_are_ended_and_the_rest_kept() {
+fn a_previous_runs_scratch_daemons_are_ended_and_the_rest_kept() {
     let mut fixture = Fixture::new(0);
     let host = Arc::new(FakeSessionHost::new());
     let resources = resources();
     install(&mut fixture.core, &host, resources.path(), RestoreMode::Live);
-    let mine = Uuid::new_v4();
     let pane = daemon_name(Uuid::new_v4());
     let leftover = scratch_daemon_name(Uuid::new_v4());
-    for name in [pane.as_str(), leftover.as_str(), &scratch_daemon_name(mine), "work"] {
+    for name in [pane.as_str(), leftover.as_str(), "work"] {
         host.insert(name, "");
     }
 
-    let ended = fixture.core.end_unowned_scratches(&BTreeSet::from([mine]));
+    let ended = fixture.core.end_previous_scratches();
 
     assert_eq!(ended, std::slice::from_ref(&leftover));
     assert_eq!(host.kills(), [(leftover, true)]);
-    for kept in [pane.as_str(), &scratch_daemon_name(mine), "work"] {
+    for kept in [pane.as_str(), "work"] {
         assert!(host.session(kept).is_some(), "{kept}");
     }
 }
@@ -216,9 +214,9 @@ fn a_scratch_whose_kill_failed_is_not_reported_ended() {
     live.host
         .set_kill_outcome(&leftover, Some(KillOutcome::Failed("busy".into())));
 
-    assert!(live.fixture.core.end_unowned_scratches(&BTreeSet::new()).is_empty());
+    assert!(live.fixture.core.end_previous_scratches().is_empty());
     assert_eq!(live.host.kills(), [(leftover, true)]);
-    assert!(Fixture::new(0).core.end_unowned_scratches(&BTreeSet::new()).is_empty());
+    assert!(Fixture::new(0).core.end_previous_scratches().is_empty());
 }
 
 #[test]

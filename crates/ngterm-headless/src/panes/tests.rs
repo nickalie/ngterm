@@ -565,6 +565,14 @@ fn clipboard_unblocks(sequence: &str) {
 /// whose wrap cannot build, so a scratch runs as an ordinary terminal. The session's id and the host.
 #[cfg(unix)]
 fn scratch_core() -> (Core, Uuid, Arc<ngterm_host::fakes::FakeSessionHost>) {
+    scratch_core_with(ngterm_core::live::support::Inputs::default())
+}
+
+/// [`scratch_core`] over the wrap `wrap`.
+#[cfg(unix)]
+fn scratch_core_with(
+    wrap: ngterm_core::live::support::Inputs,
+) -> (Core, Uuid, Arc<ngterm_host::fakes::FakeSessionHost>) {
     let library = ngterm_core::model::WindowLibrary::seeded("/home/u");
     let mut core = Core::new(
         ngterm_core::CoreConfig {
@@ -585,7 +593,7 @@ fn scratch_core() -> (Core, Uuid, Arc<ngterm_host::fakes::FakeSessionHost>) {
             executable: String::new(),
             socket_directory: String::new(),
         },
-        wrap: ngterm_core::live::support::Inputs::default(),
+        wrap,
         state_dir: PathBuf::new(),
         outdated_before: None,
     });
@@ -743,5 +751,66 @@ fn an_exited_scratch_closes_without_a_kill() {
 
     assert!(panes.is_empty());
     assert!(!session_mut(&mut core, session).scratch_active);
+    assert!(host.kills().is_empty());
+}
+
+/// A session that a pending close holds keeps its live scratch: an undo gives it back. The final close ends it.
+#[cfg(unix)]
+#[test]
+fn a_pending_close_keeps_the_live_scratch_until_the_close_is_final() {
+    let (mut core, session, host) = scratch_core();
+    session_mut(&mut core, session).ended = true;
+    let mut panes = Panes::new(shell_environment(), Arc::new(|_, _| {}));
+    show_scratch(&mut core, session, "exec cat");
+    panes.sync(&mut core);
+    let token = scratch_token(&core, session).unwrap();
+    scratch_surface(&panes, session, &token).0.live.set(true);
+    let window = core.library().window_id_for_session(session).unwrap();
+    let store = core.library_mut().store_mut(window).unwrap();
+    assert!(store.soft_close_session(session));
+    assert!(store.pending_held_session_ids().contains(&session));
+
+    panes.sync(&mut core);
+
+    assert_eq!(panes.len(), 1);
+    assert!(host.kills().is_empty());
+    let store = core.library_mut().store_mut(window).unwrap();
+    assert!(store.finalize_pending_close_of_session(session));
+    panes.sync(&mut core);
+    assert!(panes.is_empty());
+    let name = ngterm_core::live::scratch_daemon_name(Uuid::parse_str(&token).unwrap());
+    assert_eq!(host.kills(), [(name, true)]);
+}
+
+/// A live scratch that does not start closes, and its live session, which never started, is not ended.
+#[cfg(unix)]
+#[test]
+fn a_live_scratch_that_does_not_start_closes_without_a_kill() {
+    let resources = tempfile::tempdir().unwrap();
+    let integration = resources.path().join("shell-integration/zsh");
+    std::fs::create_dir_all(&integration).unwrap();
+    std::fs::write(integration.join(".zshenv"), "").unwrap();
+    let (mut core, session, host) = scratch_core_with(ngterm_core::live::support::Inputs {
+        executable: PathBuf::from("/bin/sh"),
+        login_shell: Some("/bin/zsh".to_owned()),
+        resources_dir: Some(resources.path().to_path_buf()),
+        state_dir: resources.path().join("state"),
+        ..ngterm_core::live::support::Inputs::default()
+    });
+    session_mut(&mut core, session).ended = true;
+    let mut environment = environment();
+    // a terminal of no size cannot be made, so the start fails before any attach
+    environment.grid = (0, 0);
+    let mut panes = Panes::new(environment, Arc::new(|_, _| {}));
+    show_scratch(&mut core, session, "exec cat");
+    let identity = session_mut(&mut core, session).scratch_identity.unwrap();
+    assert!(core.scratch_seed(identity, None).is_some_and(|seed| seed.live));
+
+    panes.sync(&mut core);
+
+    assert!(panes.is_empty());
+    let found = session_mut(&mut core, session);
+    assert!(!found.scratch_active);
+    assert!(!found.scratch_surface.is_present());
     assert!(host.kills().is_empty());
 }
