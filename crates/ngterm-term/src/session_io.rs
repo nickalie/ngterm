@@ -230,7 +230,7 @@ pub(crate) struct Live {
     pause: ReadPause,
     resumed: (Mutex<()>, Condvar),
     leaving: AtomicBool,
-    /// The connection ended without the session's exit and no attach found it again: the session was lost.
+    /// No attach reached the session (the first, or one after a connection ended without its exit): the session was lost.
     session_lost: AtomicBool,
     /// The most input bytes queued before [`Live::input`] refuses more.
     write_limit: usize,
