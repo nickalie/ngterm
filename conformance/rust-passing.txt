@@ -2,6 +2,8 @@
 # tools/check_ratchet.py fails a run in which a listed id fails, errors or skips (a host-dependent skip excepted).
 # Add newly passing ids with `tools/check_ratchet.py --report <nodeid report> --add`.
 tests/behaviors/test_agterm_peer_relaunch.py::test_a_relaunch_attaches_pinned_and_detected_agterm_rows_again
+tests/behaviors/test_auto_follow.py::test_a_blocked_session_whose_shell_exits_never_takes_the_selection
+tests/behaviors/test_auto_follow.py::test_auto_follow_selects_a_blocked_session_that_runs
 tests/behaviors/test_hooks.py::test_a_hook_runs_once_per_event_in_event_order
 tests/behaviors/test_hooks.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_hooks.py::test_app_launched_runs_its_hook_once_per_launch
@@ -214,6 +216,7 @@ tests/cli/test_document_pages_cli.py::test_cli_document_sources_reject_incompati
 tests/cli/test_document_pages_cli.py::test_cli_document_sources_resolve_relative_paths[image]
 tests/cli/test_document_pages_cli.py::test_cli_document_sources_resolve_relative_paths[markdown]
 tests/cli/test_document_pages_cli.py::test_cli_text_source_is_taken_literally
+tests/cli/test_live_attach_select.py::test_a_plain_attach_selects_the_new_row
 tests/cli/test_registered_ahead_cli.py::test_a_command_registered_ahead_of_its_feature_is_refused_by_name[page-blocked]
 tests/cli/test_registered_ahead_cli.py::test_a_command_registered_ahead_of_its_feature_is_refused_by_name[page]
 tests/cli/test_registered_ahead_cli.py::test_a_command_registered_ahead_of_its_feature_is_refused_by_name[session-detach]

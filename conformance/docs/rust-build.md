@@ -122,6 +122,8 @@ share is asserted directly, with no capability.
 | `web-worker-faults` |  | Rust-only, Linux: the HTML pages' engine runs in a worker process (`ngterm-web`) a launch can make misbehave (`launch(web_worker_fault=...)`): end before its hello, fail its read before it, stop reading after it, say hello only once its app is gone, answer an evaluation with a second hello, send a frame for a page the app closed, hold the answers to a page's requests until a page closes |
 | `shell-profiles` |  | Rust-only: a pane runs a shell profile (an absolute executable, its arguments and variables) in place of the login shell: Settings' `defaultShellProfile` for new sessions, a `shellProfiles` entry from the sidebar's + menu for one session, kept by the pane through splits, duplicates and restores |
 | `sidebar-search` |  | Rust-only: the sidebar's session search: a field over the sidebar (`focus_sidebar_search`, Search Sessions…) keeps the sessions whose name holds its text, case-insensitive, under their workspaces, a matching companion's parent as context; Return opens the first match, Escape empties it, and the tree reads its text back as `sidebarSearch` |
+| `auto-follow-skips-ended` |  | Rust-only: auto-follow never selects a blocked session that runs nothing: one whose live session was lost, or an attached row every pane of which holds its exit, since the build closes such a terminal companion row and the selection would come back at once |
+| `live-attach-no-select` |  | Rust-only: `live attach HOST SESSION --no-select`, also with `--companions` (`noSelect` on `live.attach` and `live.attach.group`), adds the rows and leaves the window's selection and keyboard focus where they were |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -326,6 +328,12 @@ reads its text back as `sidebarSearch`, after upstream's fields and omitted whil
 `tests/ui/test_sidebar_search.py`, on the ids under `rust:` in `ui-ids.yaml`. The build claims it on every OS
 (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and the three Linux legs run with `--must-pass sidebar-search`;
 Windows' `windows` job runs the test under the ratchet alone until it is green there.
+
+`auto-follow-skips-ended`: upstream's auto-follow selects any blocked session. This build closes a terminal companion
+row whose session ended on its origin, so a jump to an ended row would move the selection back at once. Auto-follow
+skips a blocked session that runs nothing. `live-attach-no-select`: upstream's `live attach` always selects the new row.
+This build's `--no-select` (`noSelect` on `live.attach` and `live.attach.group`) leaves the selection and the focus as
+they were. Their tests are in `tests/behaviors/test_auto_follow.py` and `tests/cli/test_live_attach_select.py`.
 
 ### Commands
 

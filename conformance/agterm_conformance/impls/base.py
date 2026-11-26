@@ -205,6 +205,12 @@ CAPABILITIES: Mapping[str, str] = {
     "Search Sessions…) keeps the sessions whose name holds its text, case-insensitive, under their workspaces, a "
     "matching companion's parent as context; Return opens the first match, Escape empties it, and the tree reads its "
     "text back as `sidebarSearch`",
+    "auto-follow-skips-ended": "Rust-only: auto-follow never selects a blocked session that runs nothing: one whose "
+    "live session was lost, or an attached row every pane of which holds its exit, since the build closes such a "
+    "terminal companion row and the selection would come back at once",
+    "live-attach-no-select": "Rust-only: `live attach HOST SESSION --no-select`, also with `--companions` "
+    "(`noSelect` on `live.attach` and `live.attach.group`), adds the rows and leaves the window's selection and "
+    "keyboard focus where they were",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",
