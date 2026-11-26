@@ -45,7 +45,11 @@ def test_snapshot_reads_portable_values():
     from types import SimpleNamespace as NS
     from agterm_conformance.drivers.atspi import AtspiDriver
     driver = object.__new__(AtspiDriver)
-    driver.atspi = NS(StateType=NS(CHECKED='checked', SELECTED='selected', ENABLED='enabled', EDITABLE='editable'))
+    # The Text interface's own read: GObject resolves `handle.get_text` to Accessible's, which takes no range.
+    driver.atspi = NS(
+        StateType=NS(CHECKED='checked', SELECTED='selected', ENABLED='enabled', EDITABLE='editable'),
+        Text=NS(get_text=lambda handle, start, end: handle.text[start:None if end == -1 else end]),
+    )
     states = {'checked', 'enabled', 'editable'}
     class Handle:
         def get_state_set(self): return NS(contains=lambda state: state in states)
@@ -60,7 +64,7 @@ def test_snapshot_reads_portable_values():
     handle = Handle()
     handle.get_role_name = lambda: 'text'
     handle.get_interfaces = lambda: ['Text', 'EditableText']
-    handle.get_text = lambda start, end: 'hello'
+    handle.text = 'hello'
     assert driver.snapshot(handle).role == 'text-field'
     assert driver.snapshot(handle).value == 'hello'
     # a read-only entry is selectable text
