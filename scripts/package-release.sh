@@ -98,6 +98,8 @@ case "$(host_os)" in
     mkdir -p "$root/usr"
     cp -R "$stage/bin" "$stage/share" "$root/usr/"
     cp -R /usr/share/common-licenses "$root/usr/share/"
+    # `ngtermctl server install` runs it on a Linux host once this archive is unpacked there
+    install -m755 "$NATIVE_ROOT/scripts/server-host-install.sh" "$root/usr/share/ngterm/server-install.sh"
     cp "$NATIVE_ROOT/packaging/linux/apparmor/ngterm" "$root/usr/share/doc/ngterm/apparmor.profile.in"
     mkdir -p "$root/usr/share/icons"
     cp -R "$NATIVE_ROOT/resources/icons/hicolor" "$root/usr/share/icons/"

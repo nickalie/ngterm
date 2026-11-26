@@ -23,7 +23,9 @@
 //!   viewer's new split created on the origin and attached here ([`split`]), a
 //!   parent's respawn on the origin carried to its viewers' held panes ([`respawn`]), and the sessions this machine asks
 //!   an origin to create or end ([`origin_sessions`]); what an origin answers to those lines, read with no `Core`
-//!   ([`origin_replies`]).
+//!   ([`origin_replies`]);
+//! - `ngtermctl server install`'s host-free rules: the host's architecture and the remote commands that unpack a
+//!   release archive there and run its installer ([`server_install`]).
 //!
 //! The streams are the frontend's: it hands the core each adopted connection as a [`LineChannel`] and reports
 //! the lines read from it and its close, arms the hello deadline and the heartbeat, and the core does the rest (upstream's
@@ -61,6 +63,7 @@ pub(crate) mod remote_text;
 pub mod remotes;
 pub mod replica_page;
 pub mod respawn;
+pub mod server_install;
 mod split;
 pub(crate) mod split_mirror;
 pub mod ssh;

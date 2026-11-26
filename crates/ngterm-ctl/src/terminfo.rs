@@ -219,6 +219,16 @@ pub enum Outcome {
     Signaled(i32),
 }
 
+/// As upstream's `ForegroundSpawn.Outcome` reads in a message: `exited(1)`, `signaled(9)`.
+impl std::fmt::Display for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exited(status) => write!(f, "exited({status})"),
+            Self::Signaled(signal) => write!(f, "signaled({signal})"),
+        }
+    }
+}
+
 /// A host or remote-session token: not empty, no whitespace, no control characters (upstream's
 /// `RemoteSession.isPlain`).
 #[must_use]
@@ -273,6 +283,14 @@ fn entry_file(directory: &Path) -> Option<PathBuf> {
 /// terminal. The script runs through a quoted `/bin/sh -c` because sshd hands the command to the account's shell,
 /// which need not parse POSIX syntax.
 pub fn install_command(connection: &Connection, ssh: &str) -> Result<Vec<String>, InstallFailure> {
+    let mut argv = ssh_command(connection, ssh)?;
+    argv.push(shell_quoted_line(&["/bin/sh", "-c", REMOTE_SCRIPT]));
+    Ok(argv)
+}
+
+/// ssh with the installer-owned [`EXECUTION_OPTIONS`], the connection's options and its destination, for a remote
+/// command to follow (upstream's `TerminfoInstall.sshCommand`, which `server install` shares).
+pub fn ssh_command(connection: &Connection, ssh: &str) -> Result<Vec<String>, InstallFailure> {
     let destination = &connection.destination;
     if !is_plain(destination) || destination.starts_with('-') {
         return Err(InstallFailure::InvalidDestination);
@@ -292,7 +310,6 @@ pub fn install_command(connection: &Connection, ssh: &str) -> Result<Vec<String>
         argv.extend(["-F".to_owned(), config.clone()]);
     }
     argv.push(destination.clone());
-    argv.push(shell_quoted_line(&["/bin/sh", "-c", REMOTE_SCRIPT]));
     Ok(argv)
 }
 
@@ -312,7 +329,7 @@ pub fn run(
         });
     };
     let source = dump(&directory)?;
-    install(ssh, &argv[1..], &source, environment)
+    foreground_run(ssh, &argv[1..], Input::Bytes(&source), environment).map(|(outcome, _)| outcome)
 }
 
 /// The entry's source with its extended capabilities (the ones worth installing it for), as upstream's `infocmp -x`
@@ -328,26 +345,55 @@ fn dump(directory: &Path) -> Result<Vec<u8>, InstallFailure> {
     Ok(source::source(&decoded, &entry))
 }
 
-/// Runs ssh with the source on its stdin. The child stays in the caller's process group (ssh reads its password and
-/// host-key prompts from the controlling tty, and a background group doing that is stopped by SIGTTIN), inherits only
-/// its standard three descriptors (upstream's `POSIX_SPAWN_CLOEXEC_DEFAULT`), and starts with every signal unblocked and
-/// at its default action, whatever the caller blocks or ignores. On Windows, which has neither signals nor process
-/// groups of this kind, ssh gets the standard three handles and whatever handles its caller made inheritable, as
-/// any Windows child does; the CLI opens none of its own inheritable.
-fn install(
+/// What a [`foreground_run`] child reads on stdin.
+pub enum Input<'a> {
+    /// These bytes, then EOF.
+    Bytes(&'a [u8]),
+    /// This file, from where it stands.
+    File(std::fs::File),
+    /// Nothing: EOF at once.
+    Null,
+    /// Nothing, with stdout captured and returned.
+    Capture,
+}
+
+/// Runs ssh (upstream's `ForegroundSpawn`) with `input` on its stdin and the terminal's stdout, unless the input is
+/// [`Input::Capture`]. The child stays in the caller's process group (ssh reads its password and host-key prompts from
+/// the controlling tty, and a background group doing that is stopped by SIGTTIN), inherits only its standard three
+/// descriptors (upstream's `POSIX_SPAWN_CLOEXEC_DEFAULT`), and starts with every signal unblocked and at its default
+/// action, whatever the caller blocks or ignores. On Windows, which has neither signals nor process groups of this
+/// kind, ssh gets the standard three handles and whatever handles its caller made inheritable, as any Windows child
+/// does; the CLI opens none of its own inheritable.
+pub fn foreground_run(
     program: &str,
     arguments: &[String],
-    source: &[u8],
+    input: Input<'_>,
     environment: &HashMap<OsString, OsString>,
-) -> Result<Outcome, InstallFailure> {
+) -> Result<(Outcome, Vec<u8>), InstallFailure> {
     let mut command = Command::new(program);
     command
         .args(arguments)
         .env_clear()
         .envs(environment)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
+        .stdout(if matches!(input, Input::Capture) {
+            Stdio::piped()
+        } else {
+            Stdio::inherit()
+        })
         .stderr(Stdio::inherit());
+    let mut bytes = None;
+    match input {
+        Input::Bytes(source) => {
+            command.stdin(Stdio::piped());
+            bytes = Some(source);
+        }
+        Input::File(file) => {
+            command.stdin(Stdio::from(file));
+        }
+        Input::Null | Input::Capture => {
+            command.stdin(Stdio::null());
+        }
+    }
     // SAFETY: the hook only makes async-signal-safe calls (`sigemptyset` on its own stack, `sigprocmask`, `signal`,
     // `close_range`, `fcntl`) and touches no memory of the parent.
     #[cfg(unix)]
@@ -364,11 +410,15 @@ fn install(
         operation: "posix_spawnp".to_owned(),
         reason: crate::client::os_message(&error),
     })?;
-    if let Some(mut stdin) = child.stdin.take() {
+    if let (Some(mut stdin), Some(source)) = (child.stdin.take(), bytes) {
         // an ssh that fails before reading would otherwise SIGPIPE the CLI before it can report; the EPIPE the write
         // gets instead is dropped because ssh's own stderr and status say what happened
         let _sigpipe = SigpipeIgnored::new();
         write_dropping_errors(&mut stdin, source);
+    }
+    let mut captured = Vec::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _: io::Result<usize> = io::Read::read_to_end(&mut stdout, &mut captured);
     }
     let status = child.wait().map_err(|error| InstallFailure::SpawnFailed {
         operation: "waitpid".to_owned(),
@@ -378,10 +428,11 @@ fn install(
     let signal = std::os::unix::process::ExitStatusExt::signal(&status);
     #[cfg(windows)]
     let signal = None;
-    Ok(match signal {
+    let outcome = match signal {
         Some(signal) => Outcome::Signaled(signal),
         None => Outcome::Exited(status.code().unwrap_or(-1)),
-    })
+    };
+    Ok((outcome, captured))
 }
 
 /// Writes `bytes`, giving up quietly at the first error ([`io::Write::write_all`] retries `EINTR`).

@@ -144,7 +144,21 @@ another mode, the session picker, `ngtermctl live tree` and the phone apps say s
 
 ### A server without a display
 
-To host sessions on a machine with no screen, install ngterm there and run its windowless version:
+To host sessions on a Linux machine with no screen, install the server there from your desktop:
+
+```sh
+ngtermctl server install me@buildbox   # -p PORT, -i KEY, -J JUMP and -F CONFIG pass to ssh
+```
+
+It installs the ngterm-headless release of your own ngterm's version under `~/.local/lib/ngterm` on that machine, as a
+systemd user service that keeps running after you log out, and sets up the agent skill and status hooks there. The
+release download is checked against the checksums signed for that release before anything reaches the host. Run it
+again after you update ngterm to upgrade the server; your sessions keep running. `--from FILE` installs a Linux release
+archive (`ngterm-VERSION-linux-ARCH.tar.gz`) you already downloaded. It exits 3 when the server is installed but the
+agent hooks are not, with the reason above. The host needs systemd with lingering allowed for your user; when it is
+not, the command stops and prints what to ask an administrator.
+
+On a macOS or Windows machine, or a Linux one without systemd, install ngterm there and run its windowless version:
 
 ```sh
 ngterm-headless --detach   # keeps running after you log out

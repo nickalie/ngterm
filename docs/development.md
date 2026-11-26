@@ -1029,6 +1029,24 @@ ngtermctl session new --name build      # sessions to attach; they outlive ngter
 ngtermctl live tree SERVER && ngtermctl live attach SERVER SESSION-ID
 ```
 
+`ngtermctl server install [-p port] [-i identity] [-J jump] [-F config] [--from FILE] HOST` (`crates/ngterm-ctl/src/server.rs`,
+upstream's `ServerCommands.swift`) installs or upgrades the server on a Linux host from a desktop of any OS: three ssh
+connections, run as `terminfo install` runs its one (in the terminal's foreground group, a prompt answered there).
+It reads this build's release version (an install its packaging marked; a development build has none, refused),
+asks the host's `uname -m`, takes that release's Linux archive (`ngterm-VERSION-linux-ARCH.tar.gz`, downloaded, or
+`--from`, through a private snapshot) and refuses it unless its sha256 is the one the release's `SHA256SUMS` names,
+verified with the build's release key as an update verifies it (`ngterm-update`'s `release_asset.rs`), before any
+byte goes to the host. The host unpacks it beside `~/.local/lib/ngterm` and swaps it in by rename (a running server
+keeps its open binaries), then runs the archive's `usr/share/ngterm/server-install.sh` (`scripts/server-host-install.sh`,
+placed by `scripts/package-release.sh`): links in `~/.local/bin`, the `ngterm-headless` systemd user unit written only
+when absent (`KillMode=process`, so a stop or restart leaves the session server and every session running), lingering
+(a refusal stops before anything starts, printing the administrator's command), start or restart, the running
+server's answer to `ngtermctl version` in its own environment, and `ngterm-headless --install-agent-hooks` in a login
+shell. Exit 0, 3 with the hooks incomplete, 1 for any failure. Upstream seals the checksums into its app bundle at
+release time; here the signed `SHA256SUMS` already binds each asset to its release, so the release workflow builds as
+before. macOS and Windows hosts keep the manual install below: neither has a systemd user manager to keep the server
+running after logout, and launchd and Task Scheduler need their own installers (left open).
+
 Agent status indicators need the hooks installed on the machine running the agents; installing them on the viewer
 alone does not install them on the server. So each start of a staged `ngterm-headless` (a package, a release archive,
 `scripts/stage.sh`) runs the desktop's Help installers before any pane's shell starts: the agent skill into each coding

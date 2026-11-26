@@ -3,6 +3,8 @@
 //! an installation the system owns, hands the package to the system's installer ([`privileged`]).
 //! App releases come from GitHub alone ([`Source::github`]); [`fakes`] (feature `fakes`) serves tests a local one, and
 //! `stand_in` the e2e of an instrumented build (`cfg(coverage)`) a local API.
+//! [`release_asset`] fetches one named asset of a stated release, checked against the checksum it was published with,
+//! for a caller that installs it elsewhere (`ngtermctl server install`).
 //! [`web_engine`] holds the pinned, verified Linux engine runtime download and per-user cache, with a URL-only
 //! mirror override and atomic runtime publication.
 
@@ -12,6 +14,7 @@ pub mod fakes;
 mod github_auth;
 mod install;
 mod privileged;
+pub mod release_asset;
 mod staging;
 #[cfg(coverage)]
 mod stand_in;

@@ -5335,6 +5335,8 @@ dependencies = [
  "ngterm-host",
  "ngterm-proto",
  "ngterm-server",
+ "ngterm-update",
+ "semver",
  "serde_json",
  "serde_norway",
  "sha2 0.11.1",

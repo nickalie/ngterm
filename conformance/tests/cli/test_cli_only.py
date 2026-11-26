@@ -1,5 +1,5 @@
-"""The `agtermctl` subcommands with no socket command of their own: `clipboard set` and `terminfo install`, which
-never open the socket, and `session wait`, which composes existing reads (`events.read`, `window.list`, `tree`); and
+"""The `agtermctl` subcommands with no socket command of their own: `clipboard set`, `terminfo install` and
+`server install`, which never open the socket, and `session wait`, which composes existing reads (`events.read`, `window.list`, `tree`); and
 the usage errors `session overlay open --companion`, `follow`, `search`, `changes` and a log page's options give before
 any connection.
 
@@ -319,6 +319,21 @@ def test_terminfo_install_reports_how_ssh_ended(cli, fake_ssh):
 def test_terminfo_install_refuses_a_destination_ssh_would_misread(cli, fake_ssh, destination):
     result = cli.local("terminfo", "install", "--", destination, env=fake_ssh(), input="")
     _usage(result, f"destination must be a host, user@host or an ssh alias, not '{destination}'")
+    assert not fake_ssh.record.exists()
+
+
+# -- server install
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("cli:server install")
+@pytest.mark.parametrize("source", [None, "absent.tar.gz"])
+def test_server_install_from_a_build_with_no_release_connects_nowhere(cli, fake_ssh, source):
+    """The build under test is no release, so it has none to install: exit 1, before ssh or a download runs."""
+    origin = ("--from", source) if source else ()
+    result = cli.local("server", "install", *origin, "-p", "2222", "box", env=fake_ssh(), input="")
+    assert (result.returncode, result.stdout) == (1, ""), result.argv
+    assert result.stderr.startswith("Error: ") and "Usage:" not in result.stderr, result.stderr
     assert not fake_ssh.record.exists()
 
 

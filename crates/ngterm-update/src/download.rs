@@ -11,10 +11,10 @@ use crate::{Error, Installation, Prepared, Trust, error};
 
 const API: &str = "https://api.github.com/repos/nickalie/ngterm/releases/latest";
 pub(crate) const DOWNLOADS: &str = "https://github.com/nickalie/ngterm/releases/download/";
-const METADATA_LIMIT: u64 = 2 * 1024 * 1024;
+pub(crate) const METADATA_LIMIT: u64 = 2 * 1024 * 1024;
 const ASSET_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
 // a minisign signature is four short lines
-const SIGNATURE_LIMIT: u64 = 4 * 1024;
+pub(crate) const SIGNATURE_LIMIT: u64 = 4 * 1024;
 
 #[derive(Deserialize)]
 pub(crate) struct Metadata {
@@ -265,7 +265,7 @@ pub(crate) fn select(
     }))
 }
 
-const SIGNATURE: &str = "SHA256SUMS.minisig";
+pub(crate) const SIGNATURE: &str = "SHA256SUMS.minisig";
 
 /// The checksum manifest, once its signature checks out: with a trusted key, `signature` must verify the exact
 /// manifest bytes, and its trusted comment must name this release (`ngterm v<version> SHA256SUMS`), so a signature
@@ -289,7 +289,7 @@ pub(crate) fn verified_manifest(
     String::from_utf8(manifest).map_err(|e| error(e.to_string()))
 }
 
-fn bounded_read(mut reader: impl std::io::Read, limit: u64) -> Result<Vec<u8>, Error> {
+pub(crate) fn bounded_read(mut reader: impl std::io::Read, limit: u64) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     reader.by_ref().take(limit + 1).read_to_end(&mut bytes)?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {

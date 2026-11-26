@@ -135,13 +135,3 @@ def test_an_operation_id_is_refused_and_nothing_runs(cli, ctl, row):
         _refused(cli("session", "overlay", "open", "--html", row["PAGE"], *flags, *operation, "--target", sid),
                  RECEIPTS)
     assert _holds(ctl) == before
-
-
-def test_server_install_checks_its_destination_then_refuses(cli):
-    """Local-only: nothing is connected to, here or over ssh."""
-    _failed(
-        cli.local("server", "install", "a b"),
-        "destination must be a host, user@host or an ssh alias, not 'a b'",
-    )
-    refusal = "server install is not supported by this build"
-    _failed(cli.local("server", "install", "-p", "2222", "me@buildbox"), refusal)

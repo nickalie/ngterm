@@ -1259,8 +1259,8 @@ fn convert_prints_the_fresh_parent_and_an_app_too_old_is_named() -> TestResult {
     Ok(())
 }
 
-/// `server install` is local: it takes no socket, names a destination ssh cannot be given, and refuses the rest
-/// until its installer lands.
+/// `server install` is local: it takes no socket, names a destination ssh cannot be given, and refuses a development
+/// build, which has no release to install, before ssh runs.
 #[test]
 fn server_install_refuses_locally() -> TestResult {
     let dir = short_dir()?;
@@ -1279,7 +1279,8 @@ fn server_install_refuses_locally() -> TestResult {
         (
             Some(1),
             String::new(),
-            "Error: server install is not supported by this build\n".to_owned()
+            "Error: this ngtermctl is not part of an ngterm release; a development build has no release to install\n"
+                .to_owned()
         )
     );
     Ok(())

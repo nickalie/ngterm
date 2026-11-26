@@ -18,8 +18,11 @@ ngterm-core.workspace = true
 ngterm-host.workspace = true
 # the control socket's client end: `AF_UNIX`, or the named pipe on Windows
 ngterm-server.workspace = true
+# `server install`: the release archive's published checksum and its download
+ngterm-update.workspace = true
 base64.workspace = true
 clap.workspace = true
+semver.workspace = true
 serde_json.workspace = true
 # `agent chat`'s account: the Keychain item's name (a SHA-256 of Claude's config dir) and Claude's usage endpoint
 sha2.workspace = true
