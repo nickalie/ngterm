@@ -355,6 +355,73 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
     assert_eq!(viewer.sent("hello").len(), 1);
 }
 
+/// `live attach --no-select` (a viewer hook attaching an origin's new companion) leaves the window's selection, and
+/// the keyboard, where they were; a plain attach selects its row.
+#[test]
+fn attach_with_no_select_keeps_the_selection_and_a_plain_attach_takes_it() {
+    let mut viewer = viewer_with(false);
+    let attached = viewer.session;
+    assert_eq!(
+        viewer.fixture.selected(),
+        Some(attached),
+        "a plain attach selects its row"
+    );
+    let local = viewer.fixture.sessions[0];
+    viewer.fixture.store_mut().unwrap().select_session(Some(local));
+    viewer.fixture.core.clear_pane_focus_requests();
+    viewer.fixture.store_mut().unwrap().take_outbox();
+
+    let response = viewer.fixture.core.dispatch(&ngterm_proto::Request {
+        cmd: Command::Live(LiveCmd::Attach),
+        target: Some(ORIGIN_SESSION.to_owned()),
+        args: Some(args(|a| {
+            a.host = Some("origin".to_owned());
+            a.no_select = Some(true);
+        })),
+    });
+
+    let row = super::answered_id(&response).unwrap_or_else(|| panic!("{response:?}"));
+    assert_ne!(row, attached);
+    assert_eq!(viewer.fixture.selected(), Some(local));
+    assert!(!viewer.fixture.core.pane_focus_requested(row));
+    let events = viewer.fixture.store_mut().unwrap().take_outbox().events;
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.kind == ngterm_proto::EventKind::SessionSelected),
+        "not even for a moment"
+    );
+}
+
+/// A blocked row whose session ended on its origin holds its exit until its close here: auto-follow leaves it alone,
+/// so the end of a row that is not selected never moves the selection, not even to it and back.
+#[test]
+fn auto_follow_never_jumps_to_a_row_whose_session_ended() {
+    let mut viewer = viewer_with(false);
+    let (window, row, local) = (viewer.fixture.window, viewer.session, viewer.fixture.sessions[0]);
+    let blocked = crate::model::AgentIndicator {
+        status: crate::model::AgentStatus::Blocked,
+        ..crate::model::AgentIndicator::default()
+    };
+    let store = viewer.fixture.store_mut().unwrap();
+    store.set_agent_indicator(blocked, row);
+    store.select_session(Some(local));
+    let primary = viewer.session().pane_identity;
+
+    viewer.fixture.core.pane_held(row, &wire(primary));
+    assert!(viewer.fixture.store().remote_pane_is_held(primary, row));
+    viewer.fixture.store_mut().unwrap().take_outbox();
+    assert_eq!(viewer.fixture.core.auto_follow_step(window), None);
+
+    assert_eq!(viewer.fixture.selected(), Some(local));
+    let events = viewer.fixture.store_mut().unwrap().take_outbox().events;
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.kind == ngterm_proto::EventKind::SessionSelected)
+    );
+}
+
 /// An origin's listing of its session, from the origin's pane identities and whether it is split.
 type TreeAnswer = fn((Uuid, Uuid), bool) -> String;
 

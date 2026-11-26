@@ -289,7 +289,7 @@ pub(crate) fn begin_page_row_attach(
         endpoint: tree.endpoint.clone(),
         session_name: remote.name.clone(),
     };
-    match core.start_page_attach(&remote.id, host, spot, Some(origin), true) {
+    match core.start_page_attach(&remote.id, host, spot, Some(origin), request.select) {
         Ok(attach) => drive_page(attach),
         Err(error) => Dispatched::done(Err(ControlError::rejected(error))),
     }

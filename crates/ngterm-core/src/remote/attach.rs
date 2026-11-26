@@ -102,7 +102,7 @@ pub(crate) fn start_peer_tree_read_within(
         .ok_or_else(|| ControlError::rejected(format!("the remote command failed on {host}")))
 }
 
-/// Starts `live.attach HOST SESSION [--window]` (upstream's dispatcher arm): no `active` default, as the target names a
+/// Starts `live.attach HOST SESSION [--window] [--no-select]` (upstream's dispatcher arm): no `active` default, as the target names a
 /// session on another machine, and a target with control characters is refused before it can reach an error message.
 pub(crate) fn begin_attach(core: &mut Core, request: &Request) -> Dispatched {
     let args = request.args.as_ref();
@@ -116,8 +116,17 @@ pub(crate) fn begin_attach(core: &mut Core, request: &Request) -> Dispatched {
         return Dispatched::done(Err(ControlError::rejected(tree::INVALID_REMOTE_SESSION)));
     }
     let window = trimmed(args.and_then(|args| args.window.as_deref())).map(str::to_owned);
+    let select = args.and_then(|args| args.no_select) != Some(true);
     match start_tree_read(core, &host) {
-        Ok(answer) => poll_attach(answer, AttachRequest { host, session, window }),
+        Ok(answer) => poll_attach(
+            answer,
+            AttachRequest {
+                host,
+                session,
+                window,
+                select,
+            },
+        ),
         Err(error) => Dispatched::done(Err(error)),
     }
 }
@@ -128,6 +137,8 @@ pub(crate) struct AttachRequest {
     pub(crate) host: String,
     pub(crate) session: String,
     pub(crate) window: Option<String>,
+    /// Whether the row it makes is selected; `--no-select` leaves the window's selection as it was.
+    pub(crate) select: bool,
 }
 
 fn poll_attach(answer: Answer, request: AttachRequest) -> Dispatched {
@@ -209,11 +220,11 @@ impl Core {
             &remote_tree.endpoint,
         );
         let under = match rows.as_slice() {
-            [parent] => Placement::under(self.library(), *parent, true),
+            [parent] => Placement::under(self.library(), *parent, request.select),
             _ => None,
         };
         let placement = under
-            .or_else(|| self.workspace_placement(window, true))
+            .or_else(|| self.workspace_placement(window, request.select))
             .ok_or_else(|| ControlError::rejected("no window to attach into"))?;
         self.attach_remote_session(remote, remote_tree, host, placement)
     }
@@ -298,6 +309,7 @@ impl Core {
         // a session attached by any path takes over the row a relaunch saved for it, so closing it forgets it
         self.forget_saved_remote_session(host, &remote.id);
         if placement.select {
+            tracing::info!(%host, session = %remote.id, "live attach: selected the attached row");
             self.request_pane_focus(created);
         }
         Ok(ControlResult {
@@ -941,6 +953,7 @@ impl Core {
             host,
             session,
             window: Some(uuid_string(flow.window)),
+            select: true,
         };
         match super::group_attach::start(self, request) {
             Ok(run) => {
@@ -985,6 +998,7 @@ impl Core {
                         host,
                         session,
                         window: Some(uuid_string(flow.window)),
+                        select: true,
                     },
                     answer,
                 };

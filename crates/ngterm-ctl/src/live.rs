@@ -13,6 +13,7 @@ use ngterm_proto::command::LiveCmd;
 use ngterm_proto::{Args, Command, ControlLiveEntry, ControlLiveInventory, Request};
 
 use crate::output::format_restore_status;
+use crate::session::flag;
 use crate::{BasicOptions, Failure, RequestCommand};
 
 /// `ngtermctl live <subcommand>`.
@@ -460,6 +461,12 @@ pub struct Attach {
     )]
     companions: bool,
 
+    #[arg(
+        long,
+        help = "Attach without selecting or focusing the new row (leaves the current selection untouched)."
+    )]
+    no_select: bool,
+
     #[command(flatten)]
     options: BasicOptions,
 }
@@ -478,6 +485,7 @@ impl RequestCommand for Attach {
         let args = Args {
             host: Some(self.host.clone()),
             window: self.window.clone(),
+            no_select: flag(self.no_select),
             ..Args::default()
         };
         let cmd = if self.companions {
@@ -740,6 +748,22 @@ mod tests {
             unreachable!()
         };
         assert_eq!(group.command().make_request().cmd, Command::Live(LiveCmd::Attach));
+    }
+
+    #[test]
+    fn no_select_rides_both_attach_commands() {
+        use clap::Parser;
+        for (extra, cmd) in [(None, "live.attach"), (Some("--companions"), "live.attach.group")] {
+            let mut argv = vec!["ngtermctl", "live", "attach", "host", "remote", "--no-select"];
+            argv.extend(extra);
+            let crate::Command::Live(group) = crate::Ngtermctl::try_parse_from(argv).unwrap().command else {
+                unreachable!()
+            };
+            assert_eq!(
+                serde_json::to_value(group.command().make_request()).unwrap(),
+                serde_json::json!({"cmd": cmd, "target": "remote", "args": {"host": "host", "noSelect": true}})
+            );
+        }
     }
 
     #[test]

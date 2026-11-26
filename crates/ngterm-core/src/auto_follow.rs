@@ -277,8 +277,8 @@ impl Core {
     }
 
     /// One auto-follow step in window `window` (upstream's `autoFollowFire`): unless suppressed, selects the
-    /// [`auto_follow_target`] among the window's blocked sessions, without noting activity, and mutes it until it
-    /// re-enters blocked. No target is a no-op and does not re-arm.
+    /// [`auto_follow_target`] among the window's blocked sessions that still run something, without noting activity,
+    /// and mutes it until it re-enters blocked. No target is a no-op and does not re-arm.
     pub(crate) fn auto_follow_step(&mut self, window: Uuid) -> Option<AutoFollowed> {
         // an open dashboard suppresses as upstream's dashboard open does (`suppressAutoFollow` until it closes), so
         // an armed jump cannot reshuffle the selection under the grid
@@ -290,10 +290,11 @@ impl Core {
         let blocked: Vec<&Session> = store
             .attention_sessions()
             .into_iter()
-            .filter(|session| session.agent_indicator.status == AgentStatus::Blocked)
+            .filter(|session| session.agent_indicator.status == AgentStatus::Blocked && !has_ended(session))
             .collect();
         let target = auto_follow_target(store.active_session(), &blocked, stay_on_active)?;
         let indicator = store.select_session(Some(target));
+        tracing::info!(%window, session = %target, "auto-follow: selected a blocked session");
         if let Some(session) = store.session_mut(target) {
             session.set_auto_follow_consumed(true);
         }
@@ -372,6 +373,23 @@ pub fn auto_follow_target(current: Option<&Session>, blocked: &[&Session], stay_
         .filter(|session| !session.auto_follow_consumed())
         .min_by_key(|session| (session.status_changed_at.is_none(), session.status_changed_at))
         .map(|session| session.id())
+}
+
+/// Whether nothing runs in `session` any more: its live session was lost, or every pane of a row attached from
+/// another machine holds its exit. Such a row is about to close (`remote::ended_companions`), so a jump to it would
+/// show it for a moment and then move the selection back.
+fn has_ended(session: &Session) -> bool {
+    if session.ended {
+        return true;
+    }
+    let Some(state) = session.remote_presentation() else {
+        return false;
+    };
+    let split = session.split_pane_identity.filter(|_| session.split.exists);
+    [Some(session.pane_identity), split]
+        .into_iter()
+        .flatten()
+        .all(|pane| state.held_panes.contains(&pane))
 }
 
 /// What upstream's attention observation reads: the workspaces, their sessions and each session's indicator.

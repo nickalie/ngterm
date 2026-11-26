@@ -196,6 +196,27 @@ fn fire_is_a_no_op_without_blocked() {
     assert_eq!(fixture.selected(), Some(a));
 }
 
+/// A blocked session whose live session was lost runs nothing: a jump to it would show it until its close moves the
+/// selection back. The oldest blocked session that still runs is the target.
+#[test]
+fn fire_skips_an_ended_session() {
+    let mut fixture = Fixture::new(0);
+    let current = fixture.sessions[0];
+    let ended = add_blocked(&mut fixture, 100);
+    let running = add_blocked(&mut fixture, 200);
+    assert!(fixture.store_mut().unwrap().mark_session_ended(ended));
+    select(&mut fixture, current);
+
+    assert_eq!(fire(&mut fixture).map(|followed| followed.session), Some(running));
+    assert!(!consumed(&fixture, ended));
+
+    select(&mut fixture, current);
+    fixture.store_mut().unwrap().take_outbox();
+    assert_eq!(fire(&mut fixture), None, "the one left has ended");
+    assert_eq!(fixture.selected(), Some(current));
+    assert!(fixture.store_mut().unwrap().take_outbox().events.is_empty());
+}
+
 #[test]
 fn fire_advances_after_the_current_clears() {
     let mut fixture = Fixture::new(0);

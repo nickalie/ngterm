@@ -80,6 +80,7 @@ pub(crate) fn begin(core: &mut Core, request: &Request) -> Dispatched {
         host: host.to_owned(),
         session: session.to_owned(),
         window: trimmed(args.and_then(|args| args.window.as_deref())).map(str::to_owned),
+        select: args.and_then(|args| args.no_select) != Some(true),
     };
     match start(core, request) {
         Ok(run) => drive(core, run),
@@ -187,7 +188,7 @@ fn discovered(
     }
     let window = Resolver::new(core.library()).open_placement_window(request.window.as_deref())?;
     let placement = core
-        .workspace_placement(window, true)
+        .workspace_placement(window, request.select)
         .ok_or_else(|| ControlError::rejected("no window to attach into"))?;
     if remote.content.as_deref() == Some("page") {
         let origin = RemoteOrigin {
@@ -200,7 +201,7 @@ fn discovered(
             workspace: placement.workspace,
         };
         let page = core
-            .start_page_attach(&remote.id, &request.host, spot, Some(origin), true)
+            .start_page_attach(&remote.id, &request.host, spot, Some(origin), request.select)
             .map_err(ControlError::rejected)?;
         return Ok(State::Rooting(Box::new(Rooting { tree, remote, page })));
     }

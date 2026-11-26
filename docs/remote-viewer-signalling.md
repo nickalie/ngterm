@@ -39,11 +39,12 @@ ngterm, in `~/.config/ngterm/remote-companions/`:
 | machine | `hooks.conf` line | what it does |
 |---|---|---|
 | origin | `on session.created "$HOME/.config/ngterm/remote-companions/announce.sh"` | for a session with a parent that has viewers, posts a `Companion started` notify on the parent, with the new id in brackets at the end of the body |
-| viewer | `on notify "$HOME/.config/ngterm/remote-companions/attach.sh"` | on that title, waits until the companion is listed, then runs `live attach` under the parent, puts the selection back and clears the badge it raised |
+| viewer | `on notify "$HOME/.config/ngterm/remote-companions/attach.sh"` | on that title, waits until the companion is listed, then runs `live attach --no-select` under the parent and clears the badge it raised |
 
 Details that are easy to break:
 
-- `live attach` always selects the new row and has no `--no-select`, so `attach.sh` reselects the previous row.
+- `attach.sh` passes `--no-select`: without it `live attach` selects the new row, and a script that selects the
+  previous row again afterwards makes the window show the new row for a moment (a visible blink).
 - New Companion on a remote row attaches by itself and the origin announces it too. `attach.sh` waits three seconds, then
   leaves alone anything that already has a `live present` process or a row showing its daemon.
 - `announce.sh` skips page companions and parents with no viewers, since on a desktop origin the notify would otherwise
