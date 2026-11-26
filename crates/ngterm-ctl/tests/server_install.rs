@@ -96,7 +96,7 @@ impl Host {
         fs::create_dir_all(host.stubs())?;
         executable(
             &host.stubs().join("systemctl"),
-            "#!/bin/sh\necho \"systemctl $*\" >> \"$LOG\"\ncase \"$*\" in\n  *is-active*) [ -e \"$ACTIVE\" ] ;;\n  \
+            "#!/bin/sh\necho \"systemctl $*\" >> \"$LOG\"\ncase \"$*\" in\n  *is-active*) [ -e \"$ACTIVE\" ] && [ -z \"$CONFLICT\" ] ;;\n  \
              *show*) cat \"$SERVER_PID\" ;;\n  *start*) touch \"$ACTIVE\" ;;\nesac\n",
         )?;
         executable(
@@ -164,6 +164,12 @@ impl Host {
     /// The remote installer, beside a stand-in server process whose environment and working directory the script
     /// must hand `ngtermctl version`.
     fn install(&self, linger: &str, linger_allowed: bool, hooks_exit: i32) -> TestResult<Output> {
+        self.install_with(linger, linger_allowed, hooks_exit, "")
+    }
+
+    /// [`Self::install`]; a non-empty `conflict` keeps the unit from staying active, as when another server holds
+    /// its state.
+    fn install_with(&self, linger: &str, linger_allowed: bool, hooks_exit: i32, conflict: &str) -> TestResult<Output> {
         let linger_file = self.root.path().join("linger");
         fs::write(&linger_file, format!("{linger}\n"))?;
         let server_cwd = self.root.path().join("server-cwd");
@@ -189,6 +195,7 @@ impl Host {
             .env("LINGER", &linger_file)
             .env("LINGER_ALLOWED", if linger_allowed { "yes" } else { "no" })
             .env("HOOKS_EXIT", hooks_exit.to_string())
+            .env("CONFLICT", conflict)
             .output();
         server.kill()?;
         server.wait()?;
@@ -297,6 +304,8 @@ fn a_first_install_writes_the_unit_enables_linger_starts_and_installs_the_hooks(
             "systemctl --user show -p MainPID --value ngterm-headless".to_owned(),
             version.clone(),
             version,
+            "systemctl --user is-active --quiet ngterm-headless".to_owned(),
+            "systemctl --user show -p MainPID --value ngterm-headless".to_owned(),
             "ngterm-headless first --install-agent-hooks".to_owned(),
         ]
     );
@@ -363,5 +372,23 @@ fn incomplete_hooks_exit_3() -> TestResult {
     let output = host.install("yes", true, 1)?;
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     assert!(String::from_utf8(output.stderr)?.contains("the agent hooks install is incomplete"));
+    Ok(())
+}
+
+#[test]
+fn a_server_that_answers_for_a_unit_that_stops_is_no_install() -> TestResult {
+    let host = Host::new()?;
+    assert!(host.unpack("/bin/sh", &host.archive("first")?)?.status.success());
+    let output = host.install_with("yes", true, 0, "another server holds the state")?;
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("ngterm-headless did not stay running"), "{stderr}");
+    assert!(
+        !host
+            .take_log()
+            .iter()
+            .any(|line| line.contains("--install-agent-hooks")),
+        "the hooks ran for a server that is not the unit's"
+    );
     Ok(())
 }

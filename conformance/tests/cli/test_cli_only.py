@@ -327,6 +327,16 @@ def test_terminfo_install_refuses_a_destination_ssh_would_misread(cli, fake_ssh,
 
 @pytest.mark.since("0.42.0")
 @pytest.mark.covers("cli:server install")
+def test_server_install_refuses_a_destination_ssh_would_misread(cli, fake_ssh):
+    """Checked before the release and before ssh, and an install failure, not a usage error."""
+    result = cli.local("server", "install", "a b", env=fake_ssh(), input="")
+    assert (result.returncode, result.stdout) == (1, ""), result.argv
+    assert result.stderr == "Error: destination must be a host, user@host or an ssh alias, not 'a b'\n", result.stderr
+    assert not fake_ssh.record.exists()
+
+
+@pytest.mark.since("0.42.0")
+@pytest.mark.covers("cli:server install")
 @pytest.mark.parametrize("source", [None, "absent.tar.gz"])
 def test_server_install_from_a_build_with_no_release_connects_nowhere(cli, fake_ssh, source):
     """The build under test is no release, so it has none to install: exit 1, before ssh or a download runs."""

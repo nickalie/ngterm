@@ -59,12 +59,22 @@ for _ in $(seq 50); do
   [[ "$pid" != 0 && -r "/proc/$pid/environ" ]] && break
   sleep 0.2
 done
-[[ "$pid" != 0 ]] || { echo "server install: ngterm-headless did not start" >&2; exit 1; }
+status_hint="see: systemctl --user status ngterm-headless"
+[[ "$pid" != 0 ]] || { echo "server install: ngterm-headless did not start; $status_hint" >&2; exit 1; }
 mapfile -d '' environment <"/proc/$pid/environ"
 ctl=(env -i "${environment[@]}" "$bin/ngtermctl" version)
 cd "/proc/$pid/cwd"
 for _ in $(seq 50); do "${ctl[@]}" >/dev/null 2>&1 && break; sleep 0.2; done
 "${ctl[@]}" || { echo "server install: ngterm-headless is not answering" >&2; exit 1; }
+# another server on the same socket (an earlier ngterm-headless --detach) answers too while the unit's own instance
+# fails on the state that server holds, and the unit restarts it after RestartSec
+sleep 1
+if ! systemctl --user is-active --quiet ngterm-headless ||
+  [[ "$(systemctl --user show -p MainPID --value ngterm-headless)" != "$pid" ]]; then
+  echo "server install: ngterm-headless did not stay running;" \
+    "another ngterm-headless may hold its state; $status_hint" >&2
+  exit 1
+fi
 cd "$HOME"
 
 status=0

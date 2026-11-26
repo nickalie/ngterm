@@ -68,13 +68,11 @@ fn the_asset_must_have_exactly_one_line() {
     let one = fakes::manifest(&[("a.tar.gz", archive)]);
     let twice = fakes::manifest(&[("a.tar.gz", archive), ("a.tar.gz", archive)]);
     let source = server.source();
-    for (manifest, expected) in [
-        (one.clone(), Err("Release checksum is missing or ambiguous.".to_owned())),
-        (twice, Err("Release checksum is missing or ambiguous.".to_owned())),
-    ] {
+    for (manifest, asset) in [(one.clone(), "b.tar.gz"), (twice, "a.tar.gz")] {
         server.route("/download/v1.0.0/SHA256SUMS", "200 OK", manifest);
+        let expected = Err("Release checksum is missing or ambiguous.".to_owned());
         let result = source
-            .published_checksum(&v("1.0.0"), "b.tar.gz", &Trust::default())
+            .published_checksum(&v("1.0.0"), asset, &Trust::default())
             .map_err(|error| error.to_string());
         assert_eq!(result, expected);
     }

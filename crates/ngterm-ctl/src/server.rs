@@ -8,14 +8,14 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{self, Read as _};
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ngterm_core::identity::InstalledSource;
 use ngterm_core::remote::server_install::{self, ARCHITECTURES, DOWNLOAD_LIMIT, INSTALLER_COMMAND, PROBE_COMMAND};
 use ngterm_update::release_asset::{self, create_private, file_sha256};
-use ngterm_update::{Source, Trust};
+use ngterm_update::{MARKER, Source, Trust};
 use semver::Version;
 
 use crate::Failure;
@@ -159,7 +159,7 @@ impl LiveEffects {
 
 impl Effects for LiveEffects {
     fn release(&self) -> Option<Version> {
-        release_of(&client_path()?)
+        release_of(&client_path()?, appimage_dir(|name| std::env::var_os(name)).as_deref())
     }
 
     fn ssh(&mut self, argv: &[String], input: Input<'_>) -> Result<(Outcome, Vec<u8>), InstallFailure> {
@@ -191,15 +191,27 @@ impl Effects for LiveEffects {
 
 /// The release version of the CLI at `client`: its installed identity's, when release packaging marked the install
 /// (`share/ngterm/update-format`, or `Contents/Resources/update-format` in a bundle), which a development tree never
-/// is.
-fn release_of(client: &Path) -> Option<Version> {
+/// is. An application image carries no marker, so a client inside the mounted `image` directory is a release too, as
+/// `ngterm_update::Installation::detect` takes it.
+fn release_of(client: &Path, image: Option<&Path>) -> Option<Version> {
     let source = InstalledSource::of_executable(client)?;
-    let marker = match &source {
-        InstalledSource::Staged(file) => file.parent()?.join("update-format"),
-        InstalledSource::Bundle(plist) => plist.parent()?.join("Resources/update-format"),
-    };
-    fs::read_to_string(marker).ok().filter(|text| !text.trim().is_empty())?;
+    if !image.is_some_and(|appdir| client.starts_with(appdir)) {
+        let marker = match &source {
+            InstalledSource::Staged(file) => file.parent()?.parent()?.parent()?.join(MARKER),
+            InstalledSource::Bundle(plist) => plist.parent()?.join("Resources/update-format"),
+        };
+        fs::read_to_string(marker).ok().filter(|text| !text.trim().is_empty())?;
+    }
     Version::parse(&source.read()?.version).ok()
+}
+
+/// The mounted directory of the application image this process runs from, when `var` names one (`APPDIR`, with `APPIMAGE`
+/// the image file); only Linux has them.
+fn appimage_dir(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    if !cfg!(target_os = "linux") || !Path::new(&var("APPIMAGE")?).is_file() {
+        return None;
+    }
+    fs::canonicalize(var("APPDIR")?).ok()
 }
 
 /// One run of `server install` (upstream's `ServerInstaller`).
@@ -309,12 +321,40 @@ fn snapshot(source: &str, file: &Path) -> Result<(), String> {
     if metadata.len() > DOWNLOAD_LIMIT {
         return Err(too_large());
     }
-    let mut output = create_private(file).map_err(failed(format!("could not write {}", file.display())))?;
-    let copied = io::copy(&mut (&mut input).take(DOWNLOAD_LIMIT + 1), &mut output).map_err(|_| unreadable())?;
-    if copied > DOWNLOAD_LIMIT {
-        return Err(too_large());
+    let unwritable = || format!("could not write {}", file.display());
+    let mut output = create_private(file).map_err(failed(unwritable()))?;
+    copy_bounded(&mut input, &mut output).map_err(|failure| match failure {
+        CopyFailure::Read => unreadable(),
+        CopyFailure::TooLarge => too_large(),
+        CopyFailure::Write(error) => failed(unwritable())(error),
+    })
+}
+
+/// Why [`copy_bounded`] stopped.
+#[derive(Debug)]
+enum CopyFailure {
+    Read,
+    TooLarge,
+    Write(io::Error),
+}
+
+/// Copies at most [`DOWNLOAD_LIMIT`] bytes, telling a read failure from a write failure.
+fn copy_bounded(input: &mut dyn io::Read, output: &mut dyn io::Write) -> Result<(), CopyFailure> {
+    let mut buffer = vec![0; 64 * 1024];
+    let mut copied = 0;
+    loop {
+        let read = match input.read(&mut buffer) {
+            Ok(0) => return output.flush().map_err(CopyFailure::Write),
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(CopyFailure::Read),
+        };
+        copied += read as u64;
+        if copied > DOWNLOAD_LIMIT {
+            return Err(CopyFailure::TooLarge);
+        }
+        output.write_all(&buffer[..read]).map_err(CopyFailure::Write)?;
     }
-    Ok(())
 }
 
 #[cfg(test)]

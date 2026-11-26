@@ -10,7 +10,9 @@ use sha2::{Digest as _, Sha256};
 use ngterm_update::Trust;
 use ngterm_update::fakes::{Server, manifest};
 
-use super::{Effects, Install, LiveEffects, NOT_A_RELEASE, ServerCommand, release_of};
+use super::{
+    CopyFailure, Effects, Install, LiveEffects, NOT_A_RELEASE, ServerCommand, appimage_dir, copy_bounded, release_of,
+};
 use crate::terminfo::{Connection, Input, InstallFailure, Outcome, ssh_command};
 use crate::{Failure, Ngtermctl};
 
@@ -468,17 +470,87 @@ fn tree(root: &Path, identity: &str, marker: Option<&str>) -> PathBuf {
 fn only_a_release_marked_install_has_a_release() {
     let dir = tempfile::tempdir().unwrap();
     let released = tree(&dir.path().join("released"), "1.2.3\nabc\n", Some("linux-deb\n"));
-    assert_eq!(release_of(&released), Some(Version::new(1, 2, 3)));
+    assert_eq!(release_of(&released, None), Some(Version::new(1, 2, 3)));
     let staged = tree(&dir.path().join("staged"), "1.2.3\nabc\n", None);
-    assert_eq!(release_of(&staged), None);
+    assert_eq!(release_of(&staged, None), None);
     let blank = tree(&dir.path().join("blank"), "1.2.3\n", Some("\n"));
-    assert_eq!(release_of(&blank), None);
+    assert_eq!(release_of(&blank, None), None);
     let unversioned = tree(
         &dir.path().join("unversioned"),
         "not a version\n",
         Some("linux-archive\n"),
     );
-    assert_eq!(release_of(&unversioned), None);
+    assert_eq!(release_of(&unversioned, None), None);
+}
+
+#[test]
+fn an_appimage_is_a_release_with_no_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let appdir = dir.path().join("mount");
+    let client = tree(&appdir.join("usr"), "1.2.3\nabc\n", None);
+    assert_eq!(release_of(&client, Some(&appdir)), Some(Version::new(1, 2, 3)));
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    assert_eq!(release_of(&client, Some(&elsewhere)), None);
+}
+
+#[test]
+fn only_a_mounted_appimage_names_its_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("ngterm.AppImage");
+    std::fs::write(&image, "").unwrap();
+    let appdir = dir.path().join("mount");
+    std::fs::create_dir(&appdir).unwrap();
+    let env = |image: PathBuf, appdir: PathBuf| {
+        move |name: &str| match name {
+            "APPIMAGE" => Some(image.clone().into_os_string()),
+            "APPDIR" => Some(appdir.clone().into_os_string()),
+            _ => None,
+        }
+    };
+    let expected = cfg!(target_os = "linux").then(|| appdir.canonicalize().unwrap());
+    assert_eq!(appimage_dir(env(image.clone(), appdir.clone())), expected);
+    assert_eq!(appimage_dir(env(dir.path().join("absent"), appdir.clone())), None);
+    assert_eq!(appimage_dir(env(image, dir.path().join("unmounted"))), None);
+    assert_eq!(appimage_dir(|_| None), None);
+}
+
+struct Broken;
+
+impl std::io::Read for Broken {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("broken"))
+    }
+}
+
+impl std::io::Write for Broken {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("no space"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_copy_tells_a_write_failure_from_a_read_failure() {
+    let mut copy = Vec::new();
+    copy_bounded(&mut &b"archive"[..], &mut copy).unwrap();
+    assert_eq!(copy, b"archive");
+    assert!(matches!(
+        copy_bounded(&mut &b"archive"[..], &mut Broken),
+        Err(CopyFailure::Write(error)) if error.to_string() == "no space"
+    ));
+    assert!(matches!(
+        copy_bounded(&mut Broken, &mut Vec::new()),
+        Err(CopyFailure::Read)
+    ));
+    let mut endless = std::io::repeat(0).take(DOWNLOAD_LIMIT + 1);
+    assert!(matches!(
+        copy_bounded(&mut endless, &mut std::io::sink()),
+        Err(CopyFailure::TooLarge)
+    ));
 }
 
 #[cfg(target_os = "macos")]
@@ -495,9 +567,9 @@ fn a_release_bundle_has_a_release() {
     )
     .unwrap();
     let client = contents.join("MacOS/ngtermctl");
-    assert_eq!(release_of(&client), None);
+    assert_eq!(release_of(&client, None), None);
     std::fs::write(contents.join("Resources/update-format"), "macos-bundle\n").unwrap();
-    assert_eq!(release_of(&client), Some(Version::new(1, 2, 3)));
+    assert_eq!(release_of(&client, None), Some(Version::new(1, 2, 3)));
 }
 
 const ASSET: &str = "ngterm-1.2.3-linux-x86_64.tar.gz";
