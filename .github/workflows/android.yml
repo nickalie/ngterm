@@ -11,6 +11,9 @@
 #
 # `emulator`: :app's instrumented tests (connectedGithubDebugAndroidTest) on the phone and then the tablet AVD
 # setup-android.sh creates (reactivecircus/android-emulator-runner on KVM, which reuses them: force-avd-creation off).
+# Each run goes through scripts/android-emulator-tests.sh, which stops the emulator in bounded time after the tests and
+# keeps their exit status: the runner's own teardown only sends `emu kill`, and an emulator that accepted it without
+# shutting down held the job to its timeout. Each step's own time limit backs that bound.
 # TerminalFrameTimeTest runs there too: it checks only that frames came, and its numbers (logcat, tag TerminalFrames)
 # are a software-rendered emulator's, for reading, not a gate.
 #
@@ -43,6 +46,7 @@ on:
       - mobile/android/**
       - scripts/build-android.sh
       - scripts/setup-android.sh
+      - scripts/android-emulator-tests.sh
       - scripts/build-ghostty-vt.sh
       - scripts/lib/native.sh
       - scripts/ci-rust-toolchain.sh
@@ -193,6 +197,7 @@ jobs:
       - name: build the app and its instrumented tests
         run: scripts/build-android.sh assembleDebug :app:assembleGithubDebugAndroidTest
       - name: instrumented tests on the phone
+        timeout-minutes: 20
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ steps.pins.outputs.api }}
@@ -202,8 +207,10 @@ jobs:
           profile: ${{ steps.pins.outputs.phone-device }}
           force-avd-creation: false
           working-directory: mobile/android
-          script: ./gradlew :app:connectedGithubDebugAndroidTest
+          emulator-port: 5554
+          script: ../../scripts/android-emulator-tests.sh 5554 ./gradlew :app:connectedGithubDebugAndroidTest
       - name: instrumented tests on the tablet
+        timeout-minutes: 20
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ steps.pins.outputs.api }}
@@ -213,7 +220,8 @@ jobs:
           profile: ${{ steps.pins.outputs.tablet-device }}
           force-avd-creation: false
           working-directory: mobile/android
-          script: ./gradlew :app:connectedGithubDebugAndroidTest
+          emulator-port: 5554
+          script: ../../scripts/android-emulator-tests.sh 5554 ./gradlew :app:connectedGithubDebugAndroidTest
       - name: upload the instrumented test reports
         if: failure()
         uses: actions/upload-artifact@v7

@@ -1737,8 +1737,9 @@ already holds changes no file, so the path-filtered workflows don't start on it.
   pins): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
   `scripts/build-android.sh check assembleDebug` (Spotless, detekt, Android Lint, the JVM unit and Roborazzi screenshot
   tests) and keeps the debug APK as the `ngterm-android-debug` artifact (the mobile core's e2e runs in `linux.yml`'s
-  `headless-e2e`); `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM), where the app's
-  e2e tests (`e2e` package, `scripts/test-android-e2e.sh`) skip: they have no machine there, and the one that needs
+  `headless-e2e`); `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM) through
+  `scripts/android-emulator-tests.sh`, which stops each emulator in bounded time and keeps the tests' status. The app's
+  e2e tests (`e2e` package, `scripts/test-android-e2e.sh`) skip there: they have no machine, and the one that needs
   none (a key's export and import) still needs the app process of its own that the script gives each class.
 - `ios.yml` (path-filtered to the mobile core, the crates under it, `mobile/ios/`, the shared fonts and the iOS
   scripts and pins), on the `xcode-27` image: `core` builds the core's XCFramework and
