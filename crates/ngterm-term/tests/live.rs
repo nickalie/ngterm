@@ -876,8 +876,10 @@ fn a_live_panes_config_reload_reports_its_scheme_to_a_program_that_asked() -> Te
 }
 
 // -- the pane as a remote viewer: its program is an origin's `ngterm-session attach-bridge`, run in the pane's own PTY
-// (a pseudoconsole on Windows) as ssh runs it there, with the viewer's launch nonce. Each case runs with the platform's
-// `bridge_osc_input` and without it, as on Windows, against this build's origin or an older one ([`OLDER_ORIGIN`])
+// (a pseudoconsole on Windows) as ssh runs it there, with the viewer's launch nonce, against this build's origin or an
+// older one ([`OLDER_ORIGIN`]). Each case runs with the platform's `bridge_osc_input` and, where that is on, without
+// it, as on Windows: to this build's origin a viewer without it can paste only in an APC envelope, to an older origin
+// only as plain input; a viewer with it pastes in an OSC envelope only to an older origin
 
 /// The variable that names an older build's `ngterm-session` as the origin's (one from before the APC envelopes).
 const OLDER_ORIGIN: &str = "NGTERM_TEST_OLDER_ORIGIN";
@@ -888,6 +890,15 @@ fn origin_executable(live: &Live) -> (std::path::PathBuf, bool) {
         || (live.runtime.executable.clone(), false),
         |older| (older.into(), true),
     )
+}
+
+/// The `bridge_osc_input` values a case runs with: the platform's, and none when that is not already the platform's.
+fn osc_inputs() -> Vec<bool> {
+    if PaneConfig::new(SIZE).bridge_osc_input {
+        vec![true, false]
+    } else {
+        vec![false]
+    }
 }
 
 /// A viewer pane of a fresh session of `live`'s namespace, attached through the bridge by `executable`, its input
@@ -923,7 +934,7 @@ fn viewer(live: &Live, executable: &Path, osc_input: bool) -> TestResult<Pane> {
 /// a viewer without OSC input of an older origin, as a plain bracketed paste.
 fn paste_reaches_the_origins_program(osc_input: bool) -> TestResult {
     let live = Live::new()?;
-    let (executable, _) = origin_executable(&live);
+    let (executable, older) = origin_executable(&live);
     let pane = viewer(&live, &executable, osc_input)?;
     let pasted = pane.paste(
         if cfg!(windows) {
@@ -936,6 +947,7 @@ fn paste_reaches_the_origins_program(osc_input: bool) -> TestResult {
         false,
     )?;
     assert_eq!(pasted, ngterm_term::Paste::Written);
+    assert_eq!(pane.stats().bridged_pastes, u64::from(!older || osc_input));
     pane.write(b"\r")?;
     wait_text(&pane, "pasted-text");
     Ok(())
@@ -943,12 +955,10 @@ fn paste_reaches_the_origins_program(osc_input: bool) -> TestResult {
 
 #[test]
 fn a_paste_into_a_viewer_pane_reaches_the_origins_program() -> TestResult {
-    paste_reaches_the_origins_program(PaneConfig::new(SIZE).bridge_osc_input)
-}
-
-#[test]
-fn a_paste_into_a_viewer_pane_without_osc_input_reaches_the_origins_program() -> TestResult {
-    paste_reaches_the_origins_program(false)
+    for osc_input in osc_inputs() {
+        paste_reaches_the_origins_program(osc_input)?;
+    }
+    Ok(())
 }
 
 /// The next clipboard write the viewer is asked for.
@@ -1015,10 +1025,8 @@ fn clipboard_writes_reach_the_viewer_one_after_another(osc_input: bool) -> TestR
 
 #[test]
 fn an_origins_clipboard_writes_reach_a_viewer_pane_one_after_another() -> TestResult {
-    clipboard_writes_reach_the_viewer_one_after_another(PaneConfig::new(SIZE).bridge_osc_input)
-}
-
-#[test]
-fn an_origins_clipboard_writes_reach_a_viewer_pane_without_osc_input_one_after_another() -> TestResult {
-    clipboard_writes_reach_the_viewer_one_after_another(false)
+    for osc_input in osc_inputs() {
+        clipboard_writes_reach_the_viewer_one_after_another(osc_input)?;
+    }
+    Ok(())
 }

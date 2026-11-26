@@ -397,6 +397,7 @@ fn a_viewer_without_osc_input_of_an_origin_without_apc_sends_plain_bracketed_pas
         let sent = fixture.sent_until(format!("\x1b[200~{text}\x1b[201~").as_bytes());
         assert!(!sent.windows(PREFIX.len()).any(|window| window == PREFIX), "{sent:?}");
     }
+    assert_eq!(fixture.pane.stats().bridged_pastes, 0);
 }
 
 #[test]
@@ -412,6 +413,7 @@ fn a_viewer_that_pastes_through_the_bridge_sends_the_paste_in_an_envelope() {
         panic!("expected paste")
     };
     assert_eq!(paste.contents[0].data, b"clipboard");
+    assert_eq!(fixture.pane.stats().bridged_pastes, 1);
 }
 
 #[test]

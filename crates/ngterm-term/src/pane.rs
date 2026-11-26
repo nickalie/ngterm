@@ -199,7 +199,8 @@ pub struct FrameSnapshot {
     pub stale: bool,
 }
 
-/// Counters of the read path and the VT lock (profiling and the lock-latency check).
+/// Counters of the read path, the VT lock and the attach bridge (profiling, the lock-latency check and the bridge's
+/// end-to-end checks).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PaneStats {
     /// Bytes fed to the VT.
@@ -213,6 +214,8 @@ pub struct PaneStats {
     pub vt_nanos: u64,
     /// The longest single hold of the VT lock by the IO thread.
     pub max_hold_nanos: u64,
+    /// Pastes sent to the origin in an attach bridge envelope, not as plain input.
+    pub bridged_pastes: u64,
 }
 
 #[derive(Debug, Default)]
@@ -1002,6 +1005,7 @@ impl Pane {
             wakes: counters.wakes.load(Ordering::Relaxed),
             vt_nanos: counters.vt_nanos.load(Ordering::Relaxed),
             max_hold_nanos: counters.max_hold_nanos.load(Ordering::Relaxed),
+            bridged_pastes: lock(&self.shared.bridge).sent_pastes,
         }
     }
 }

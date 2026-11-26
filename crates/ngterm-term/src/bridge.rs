@@ -145,6 +145,8 @@ pub(crate) struct Peer {
     pub(crate) osc_input: bool,
     /// The origin reads envelopes framed as an APC ([`Message::ApcInput`]), which a pseudoconsole passes.
     pub(crate) apc_input: bool,
+    /// [`crate::PaneStats::bridged_pastes`].
+    pub(crate) sent_pastes: u64,
 }
 #[derive(Clone, Copy)]
 pub(crate) struct PasteOptions<'a> {
@@ -245,6 +247,7 @@ impl Peer {
             return Err(crate::PaneError::Backpressure);
         }
         pane.write(&bytes)?;
+        self.sent_pastes += 1;
         if lazy && !text_source {
             while self.pastes.len() >= 32 {
                 self.pastes.pop_front();
