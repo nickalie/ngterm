@@ -53,9 +53,11 @@ fn serve(listener: &std::net::TcpListener, response: &str) -> String {
         }
         request.push_str(&line);
     }
+    let (head, body) = response.split_once("\r\n\r\n").unwrap_or((response, "{}"));
     write!(
         stream,
-        "HTTP/1.1 {response}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        "HTTP/1.1 {head}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
     )
     .unwrap();
     request.to_ascii_lowercase()
@@ -196,11 +198,36 @@ fn a_limit_gives_the_wait_that_github_asks_for() {
         "403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: {}",
         now + 600
     );
+    let huge_reset = format!(
+        "403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: {}",
+        now + 365 * 24 * 60 * 60
+    );
     for (status, wait) in [
         (reset.as_str(), 590..=600),
         ("403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nRetry-After: 60", 60..=60),
         ("429 Too Many Requests\r\nRetry-After: 120", 120..=120),
         ("403 Forbidden\r\nRetry-After: 30\r\nX-RateLimit-Reset: 1", 30..=30),
+        (
+            "403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 1445412480\r\nDate: Wed, 21 Oct 2015 07:28:00 GMT",
+            0..=0,
+        ),
+        (
+            "403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 1445413080\r\nDate: Wed, 21 Oct 2015 07:28:00 GMT",
+            600..=600,
+        ),
+        (
+            "429 Too Many Requests\r\nRetry-After: 18446744073709551615",
+            3600..=3600,
+        ),
+        (&huge_reset, 3600..=3600),
+        (
+            "403 Forbidden\r\n\r\n{\"message\":\"You have exceeded a secondary rate limit.\"}",
+            60..=60,
+        ),
+        (
+            "429 Too Many Requests\r\n\r\nYou have exceeded a Secondary Rate Limit",
+            60..=60,
+        ),
     ] {
         let server = Server::new(vec![status]);
         let error = metadata_response(&test_agent(), &server.url, || None).unwrap_err();
@@ -213,6 +240,10 @@ fn a_limit_gives_the_wait_that_github_asks_for() {
             "{error}"
         );
     }
+    let server = Server::new(vec!["403 Forbidden\r\n\r\n{\"message\":\"Resource not accessible\"}"]);
+    let error = metadata_response(&test_agent(), &server.url, || None).unwrap_err();
+    server.finish();
+    assert!(matches!(error, Error::Http(ureq::Error::StatusCode(403))), "{error}");
     let server = Server::new(vec!["403 Forbidden\r\nX-RateLimit-Remaining: 0"]);
     let error = metadata_response(&test_agent(), &server.url, || None).unwrap_err();
     server.finish();

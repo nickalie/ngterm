@@ -33,7 +33,7 @@ pub fn sections(snapshot: &Snapshot) -> Vec<Section> {
                 ),
                 Item::hint(
                     "settings-auto-update-hint",
-                    "Official releases check at launch and hourly. Choose Install Update when a download is ready.",
+                    "Official releases check at launch and every six hours. Choose Install Update when a download is ready.",
                 ),
             ],
         ),

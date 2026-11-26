@@ -185,7 +185,7 @@ fn defer_automatic(error: &ngterm_update::Error, cx: &mut App) {
     if let Some(wait) = error.retry_after()
         && updater.polling.is_some()
     {
-        let task = poll(wait + RETRY_MARGIN, cx);
+        let task = poll(wait.saturating_add(RETRY_MARGIN), cx);
         cx.global_mut::<Updater>().polling = Some(task);
     }
 }

@@ -15,6 +15,10 @@ pub(crate) const METADATA_LIMIT: u64 = 2 * 1024 * 1024;
 const ASSET_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
 // a minisign signature is four short lines
 pub(crate) const SIGNATURE_LIMIT: u64 = 4 * 1024;
+/// GitHub's primary limit resets each hour, so a longer wait comes from a broken answer.
+const LIMIT_WAIT_MAX: Duration = Duration::from_hours(1);
+/// GitHub asks for at least a minute's wait after a secondary limit whose answer gives no wait.
+const SECONDARY_WAIT: Duration = Duration::from_secs(60);
 
 #[derive(Deserialize)]
 pub(crate) struct Metadata {
@@ -176,6 +180,9 @@ fn metadata_response(
     if primary_limit(&response) || secondary_limit(&response) {
         return Err(limit_error(limit_wait(&response), ""));
     }
+    if unmarked_secondary_limit(&mut response) {
+        return Err(limit_error(Some(SECONDARY_WAIT), ""));
+    }
     if !response.status().is_success() {
         return Err(ureq::Error::StatusCode(response.status().as_u16()).into());
     }
@@ -192,15 +199,24 @@ fn header_seconds(response: &ureq::http::Response<ureq::Body>, name: &str) -> Op
 
 /// The wait that GitHub asks for: `Retry-After`, else the time until `X-RateLimit-Reset`.
 fn limit_wait(response: &ureq::http::Response<ureq::Body>) -> Option<Duration> {
-    if let Some(seconds) = header_seconds(response, "retry-after") {
-        return Some(Duration::from_secs(seconds));
-    }
-    let reset = header_seconds(response, "x-ratelimit-reset")?;
-    let now = std::time::SystemTime::now()
+    let seconds = match header_seconds(response, "retry-after") {
+        Some(seconds) => seconds,
+        None => header_seconds(response, "x-ratelimit-reset")?.saturating_sub(server_now(response)),
+    };
+    Some(Duration::from_secs(seconds).min(LIMIT_WAIT_MAX))
+}
+
+/// GitHub's clock from the answer's `Date`, so a wrong local clock does not move the reset.
+fn server_now(response: &ureq::http::Response<ureq::Body>) -> u64 {
+    response
+        .headers()
+        .get("date")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| httpdate::parse_http_date(value).ok())
+        .unwrap_or_else(std::time::SystemTime::now)
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    Some(Duration::from_secs(reset.saturating_sub(now)))
+        .as_secs()
 }
 
 fn limit_error(wait: Option<Duration>, note: &str) -> Error {
@@ -216,6 +232,16 @@ fn limit_error(wait: Option<Duration>, note: &str) -> Error {
 /// GitHub's secondary limit: a refusal with `Retry-After`.
 fn secondary_limit(response: &ureq::http::Response<ureq::Body>) -> bool {
     matches!(response.status().as_u16(), 403 | 429) && response.headers().contains_key("retry-after")
+}
+
+/// GitHub's secondary limit with no wait in its headers: only the answer's message names it.
+fn unmarked_secondary_limit(response: &mut ureq::http::Response<ureq::Body>) -> bool {
+    matches!(response.status().as_u16(), 403 | 429)
+        && bounded_read(response.body_mut().as_reader(), METADATA_LIMIT).is_ok_and(|body| {
+            String::from_utf8_lossy(&body)
+                .to_ascii_lowercase()
+                .contains("secondary rate limit")
+        })
 }
 
 fn primary_limit(response: &ureq::http::Response<ureq::Body>) -> bool {

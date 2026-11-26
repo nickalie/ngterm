@@ -141,7 +141,7 @@ Windows binaries are under `ngterm/bin`; the macOS binary archive has `bin` and 
 under `/opt/ngterm` and put all four commands on `PATH`. The macOS PKG installs `ngterm.app` into `/Applications`;
 the app's Help menu can install the CLI. Windows ZIPs include the same app-local VC++ runtime as the MSI.
 
-Every official release checks GitHub for stable updates at launch and hourly. Updates download in the background and are verified against the release's
+Every official release checks GitHub for stable updates at launch and every six hours. Updates download in the background and are verified against the release's
 `SHA256SUMS`, whose minisign signature must match the key the running build was released with
 (`crates/ngterm-update/trust/minisign.pub`). Choose **Install Update** in the titlebar, or **Help → Check for Updates…**, to install after the
 normal quit save and reopen ngterm. Ready updates also install on an ordinary quit, without reopening the app.
@@ -160,10 +160,15 @@ Release metadata is requested anonymously first. A primary GitHub API limit (`40
 `X-RateLimit-Remaining: 0`, without `Retry-After`) permits one authenticated retry using `GH_TOKEN`, then
 `GITHUB_TOKEN`, then `gh auth token --hostname github.com`. Only a check that the user starts (Check for Updates)
 runs gh: gh runs with its prompts disabled, but a token that gh keeps in a locked OS keyring can still ask the user
-to unlock the keyring, so the hourly background checks use only the two variables. The gh lookup is limited to three
+to unlock the keyring, so the background checks use only the two variables. The gh lookup is limited to three
 seconds and creates no console window on Windows. When GitHub refuses the token on the retry, the error says so. Credentials are kept in memory, used only for the fixed GitHub
 metadata endpoint, and never attached to release downloads or redirects. A missing credential or exhausted limit
-leaves manual downloads available; when GitHub supplies a reset timestamp, the error includes the remaining wait.
+leaves manual downloads available. A secondary limit (`403` or `429` with `Retry-After`, or a message that names a
+secondary rate limit) is also a rate limit. The wait is `Retry-After`, else `X-RateLimit-Reset` against the answer's
+`Date` (the local clock only without one), else one minute for a secondary limit, and never more than an hour. A
+background check keeps a rate limit, a lost connection or a server error quiet: no alert and no titlebar button.
+After a rate limit with a wait, the next background check runs 30 seconds after that wait and the six-hour interval
+continues from it. Only Check for Updates reports the limit, with the wait.
 
 Disable background checks and downloads in **Settings → General → Updates** (`autoUpdate: false` in `settings.json`);
 manual checks remain available. Archive installs must stay together in a dedicated directory named `ngterm`, with
