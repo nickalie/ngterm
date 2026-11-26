@@ -26,7 +26,7 @@ from agterm_conformance.releases_api import (
     server_error,
     too_many_requests,
 )
-from agterm_conformance.wait import wait_until
+from agterm_conformance.wait import WaitTimeout, wait_until
 
 pytestmark = [
     pytest.mark.skipif(
@@ -60,13 +60,21 @@ def _assert_quiet(ui) -> None:
     assert RELEASE_DOWNLOADS not in tree, tree
 
 
-def _stay_quiet(ui, until) -> None:
-    """Checks the titlebar and the alerts again and again until `until()` is true."""
+def _stay_quiet(ui, until, timeout: float):
+    """Checks the titlebar and the alerts again and again until `until()` is true, and returns its value."""
+    deadline = time.monotonic() + timeout
     while True:
         _assert_quiet(ui)
-        if until():
-            return
+        if value := until():
+            return value
+        if time.monotonic() >= deadline:
+            raise WaitTimeout(f"the app stayed quiet, but the condition did not hold within {timeout}s")
         time.sleep(0.5)
+
+
+def _stay_quiet_for(ui, seconds: float) -> None:
+    deadline = time.monotonic() + seconds
+    _stay_quiet(ui, lambda: time.monotonic() > deadline, seconds + CHECK_TIMEOUT)
 
 
 @pytest.mark.covers("ui:update-status")
@@ -82,16 +90,15 @@ def test_an_automatic_check_waits_out_a_rate_limit_with_no_button(launch, ui_for
         ui = ui_for(ctl)
         wait_until(lambda: stand_in.received(1), timeout=CHECK_TIMEOUT)
         wait_until(lambda: DEFERRED in _log(ctl), timeout=CHECK_TIMEOUT)
-        _stay_quiet(ui, lambda: stand_in.received(2))
-        first, second = stand_in.received(2)
+        first, second = _stay_quiet(ui, lambda: stand_in.received(2), RETRY_MARGIN + RESET_IN + CHECK_TIMEOUT)[:2]
         # The next check returns to a quiet, current app: nothing to show.
-        deadline = time.monotonic() + 3
-        _stay_quiet(ui, lambda: time.monotonic() > deadline)
+        _stay_quiet_for(ui, 3)
 
     gap = second.at - first.at
     assert RETRY_MARGIN + RESET_IN - 1 <= gap <= RETRY_MARGIN + RESET_IN + 10, gap
     assert stand_in.count() == 2
-    assert "release update failed" not in _log(ctl)
+    log = _log(ctl)
+    assert log.count(DEFERRED) == 1 and "release update failed" not in log, log
 
 
 def test_an_automatic_check_keeps_a_server_error_quiet(launch, ui_for):
@@ -101,8 +108,7 @@ def test_an_automatic_check_keeps_a_server_error_quiet(launch, ui_for):
         ui = ui_for(ctl)
         wait_until(lambda: stand_in.received(1), timeout=CHECK_TIMEOUT)
         wait_until(lambda: DEFERRED in _log(ctl), timeout=CHECK_TIMEOUT)
-        deadline = time.monotonic() + 3
-        _stay_quiet(ui, lambda: time.monotonic() > deadline)
+        _stay_quiet_for(ui, 3)
 
     # A server error names no wait: the next automatic check comes at the six-hour interval.
     assert stand_in.count() == 1
