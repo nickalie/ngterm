@@ -160,7 +160,7 @@ fn terminal_config(env: &dyn Env, resources: Option<&Path>) -> GhosttyConfig {
 }
 
 /// The live-session host (the GPUI frontend's `session_host::install`): a server of an older build hands its sessions
-/// over to this one first, then the core takes the host, and the launch reap runs.
+/// over to this one first, then the core takes the host, the launch reap runs, and a previous run's scratches end.
 fn install_live(core: &mut Core, runtime: &Runtime) {
     let directory = ngterm_core::live::socket_directory(&runtime.state_dir);
     let endpoint = ControlLiveEndpoint {
@@ -204,6 +204,11 @@ fn install_live(core: &mut Core, runtime: &Runtime) {
         outdated_before,
     });
     core.run_live_launch();
+    // a scratch never outlives the server that started it: what a previous run left ends here
+    let ended = core.end_unowned_scratches(&std::collections::BTreeSet::new());
+    if !ended.is_empty() {
+        tracing::info!(count = ended.len(), "ended the scratches of a previous run");
+    }
 }
 
 /// The process seam of the hooks and custom commands: each exit comes back as a main-loop task that settles.

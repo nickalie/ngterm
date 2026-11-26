@@ -32,6 +32,7 @@ mod hud;
 mod keymap;
 mod live;
 mod live_capture;
+mod live_scratch;
 mod markdown_links;
 mod messages;
 mod metadata;

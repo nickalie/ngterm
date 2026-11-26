@@ -281,11 +281,13 @@ impl Core {
                 return Some(PANES_CHANGED.to_owned());
             }
         }
-        // a session's scratch has no live identity of its own here yet: it reads `none`
+        let current = session
+            .scratch_identity
+            .map_or_else(|| "none".to_owned(), crate::pane_env::uuid_string);
         let scratch_changed = args
             .scratch
             .as_deref()
-            .is_some_and(|expected| !expected.eq_ignore_ascii_case("none"));
+            .is_some_and(|expected| !expected.eq_ignore_ascii_case(&current));
         scratch_changed.then(|| SCRATCH_CHANGED.to_owned())
     }
 

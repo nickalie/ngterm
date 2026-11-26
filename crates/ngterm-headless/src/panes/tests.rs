@@ -560,3 +560,188 @@ fn clipboard_unblocks(sequence: &str) {
     }
     panes.teardown_all();
 }
+
+/// A server's core over one window, its session laid out by nobody yet: a served catalog over a fake session host
+/// whose wrap cannot build, so a scratch runs as an ordinary terminal. The session's id and the host.
+#[cfg(unix)]
+fn scratch_core() -> (Core, Uuid, Arc<ngterm_host::fakes::FakeSessionHost>) {
+    let library = ngterm_core::model::WindowLibrary::seeded("/home/u");
+    let mut core = Core::new(
+        ngterm_core::CoreConfig {
+            app: crate::identity(),
+            capabilities: Vec::new(),
+        },
+        ngterm_core::CoreState {
+            library,
+            ..ngterm_core::CoreState::default()
+        },
+    );
+    let host = Arc::new(ngterm_host::fakes::FakeSessionHost::new());
+    core.install_live_sessions(ngterm_core::LiveInstall {
+        host: Arc::clone(&host) as Arc<dyn ngterm_host::SessionHost>,
+        endpoint: ngterm_proto::ControlLiveEndpoint {
+            peer: None,
+            attach_bridge: None,
+            executable: String::new(),
+            socket_directory: String::new(),
+        },
+        wrap: ngterm_core::live::support::Inputs::default(),
+        state_dir: PathBuf::new(),
+        outdated_before: None,
+    });
+    core.serve_catalog(Uuid::new_v4(), None);
+    let session = core.library().all_open_sessions()[0].id();
+    (core, session, host)
+}
+
+#[cfg(unix)]
+fn session_mut(core: &mut Core, session: Uuid) -> &mut Session {
+    core.library_mut()
+        .store_for_session_mut(session)
+        .and_then(|store| store.session_mut(session))
+        .unwrap()
+}
+
+/// Shows `session`'s scratch with `command`, as `session scratch on --command` leaves the model.
+#[cfg(unix)]
+fn show_scratch(core: &mut Core, session: Uuid, command: &str) {
+    let found = session_mut(core, session);
+    found.scratch_command = Some(command.to_owned());
+    found.scratch_active = true;
+    found.scratch_identity = Some(Uuid::new_v4());
+}
+
+#[cfg(unix)]
+fn scratch_token(core: &Core, session: Uuid) -> Option<String> {
+    core.library()
+        .store_for_session(session)?
+        .session(session)?
+        .scratch_surface
+        .get()
+        .map(|surface| surface.pane_token().to_owned())
+}
+
+#[cfg(unix)]
+fn scratch_surface(panes: &Panes, session: Uuid, token: &str) -> HeadlessSurface {
+    let key = Key {
+        session,
+        token: token.to_owned(),
+    };
+    HeadlessSurface(Rc::clone(&panes.scratches[&key]))
+}
+
+/// After upstream's `theScratchStartsInTheSessionCwdAsTheScratchPane` and `onOffOnShowsTheSameDaemon`, on an ended
+/// session, which keeps its scratch: one terminal in the session's directory as the scratch pane, which a hide keeps
+/// and a quit leaves running.
+#[cfg(unix)]
+#[test]
+fn an_ended_sessions_scratch_starts_once_in_its_directory_and_a_hide_keeps_it() {
+    let (mut core, session, host) = scratch_core();
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap().to_string_lossy().into_owned();
+    session_mut(&mut core, session).current_cwd = Some(cwd.clone());
+    assert!(
+        core.library_mut()
+            .store_for_session_mut(session)
+            .unwrap()
+            .mark_session_ended(session)
+    );
+    show_scratch(
+        &mut core,
+        session,
+        "printf 'PANE=%s ID=%s\\n' \"$NGTERM_PANE\" \"$NGTERM_PANE_ID\"; pwd; exec cat",
+    );
+    let (sender, wake) = std::sync::mpsc::channel();
+    let mut panes = Panes::new(
+        shell_environment(),
+        Arc::new(move |_, _| {
+            let _ = sender.send(());
+        }),
+    );
+
+    panes.sync(&mut core);
+
+    assert_eq!(panes.len(), 1);
+    let token = scratch_token(&core, session).unwrap();
+    let found = session_mut(&mut core, session);
+    assert_eq!(found.scratch_cwd.as_deref(), Some(cwd.as_str()));
+    assert_eq!(found.scratch_command, None);
+    assert_eq!(found.scratch_identity, None, "no wrap: an ordinary terminal");
+    let surface = scratch_surface(&panes, session, &token);
+    wait_surface(&surface, &format!("PANE=scratch ID={token}"), &wake);
+    wait_surface(&surface, &cwd, &wake);
+    session_mut(&mut core, session).scratch_active = false;
+    panes.sync(&mut core);
+    assert_eq!(panes.len(), 1);
+    assert_eq!(scratch_token(&core, session), Some(token));
+    assert!(surface.is_realized());
+    panes.teardown_all();
+    assert!(panes.is_empty());
+    assert!(host.kills().is_empty());
+}
+
+/// After upstream's `closingTheSessionEndsItsScratch` and `onWithACommandReplacesTheScratch`: what drops a live
+/// scratch ends its live session by the scratch name.
+#[cfg(unix)]
+#[test]
+fn a_dropped_live_scratch_ends_its_live_session() {
+    let (mut core, session, host) = scratch_core();
+    session_mut(&mut core, session).ended = true;
+    let mut panes = Panes::new(shell_environment(), Arc::new(|_, _| {}));
+    show_scratch(&mut core, session, "exec cat");
+    panes.sync(&mut core);
+    let first = scratch_token(&core, session).unwrap();
+    scratch_surface(&panes, session, &first).0.live.set(true);
+
+    // the replacement: the close, then the show with the new command
+    let store = core.library_mut().store_for_session_mut(session).unwrap();
+    assert!(store.close_scratch(session, true));
+    show_scratch(&mut core, session, "exec cat");
+    panes.sync(&mut core);
+    let second = scratch_token(&core, session).unwrap();
+    assert_ne!(second, first);
+    scratch_surface(&panes, session, &second).0.live.set(true);
+    let name = |token: &str| ngterm_core::live::scratch_daemon_name(Uuid::parse_str(token).unwrap());
+    assert_eq!(host.kills(), [(name(&first), true)]);
+
+    core.library_mut()
+        .store_for_session_mut(session)
+        .unwrap()
+        .close_session(session);
+    panes.sync(&mut core);
+    assert!(panes.is_empty());
+    assert_eq!(host.kills(), [(name(&first), true), (name(&second), true)]);
+}
+
+/// A scratch whose program exited closes, and its live session, gone with it, is not ended again.
+#[cfg(unix)]
+#[test]
+fn an_exited_scratch_closes_without_a_kill() {
+    let (mut core, session, host) = scratch_core();
+    session_mut(&mut core, session).ended = true;
+    let (sender, wake) = std::sync::mpsc::channel();
+    let mut panes = Panes::new(
+        shell_environment(),
+        Arc::new(move |_, _| {
+            let _ = sender.send(());
+        }),
+    );
+    show_scratch(&mut core, session, "exit 0");
+    panes.sync(&mut core);
+    let token = scratch_token(&core, session).unwrap();
+    scratch_surface(&panes, session, &token).0.live.set(true);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut reports = Vec::new();
+    while !reports.contains(&Report::Exited) {
+        wake.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
+        reports.extend(panes.drain(session, &token));
+    }
+
+    assert!(core.pane_exited(session, &token));
+    panes.sync(&mut core);
+
+    assert!(panes.is_empty());
+    assert!(!session_mut(&mut core, session).scratch_active);
+    assert!(host.kills().is_empty());
+}

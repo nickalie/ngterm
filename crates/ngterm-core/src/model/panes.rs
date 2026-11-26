@@ -343,6 +343,8 @@ impl AppStore {
         let Some(session) = self.session_mut(id) else {
             return false;
         };
+        // a server scratch chosen but not started yet ends with the close too
+        session.scratch_identity = None;
         if !session.scratch_surface.is_present() {
             return false;
         }

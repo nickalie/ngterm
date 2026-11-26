@@ -15,8 +15,13 @@
 //! - The terminal's events reach the core as the deck's reports do: title, working directory, notification, exit.
 //!   The rest (bell, clipboard, colors, progress, search) has nothing to show it here.
 //!
-//! The scratch terminal, overlays and the HUD are drawn things and are not mounted: a command that waits for one
-//! answers as for an unrealized surface.
+//! - A session's scratch, once shown, is a terminal of its own whose live session has the scratch name shape
+//!   ([`ngterm_core::live::scratch_daemon_name`], upstream's server scratch). A hide keeps it. Its session's close, a
+//!   `session scratch --command` replacement or its window's close ends that live session; its own exit and a quit
+//!   do not need to. The next start ends what a quit left ([`Core::end_unowned_scratches`]).
+//!
+//! Overlays and the HUD are drawn things and are not mounted: a command that waits for one answers as for an
+//! unrealized surface.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -82,6 +87,8 @@ struct Cell_ {
     points: f32,
     /// A drain is queued on the main loop: the IO thread's wakes until it runs post nothing more.
     drain_queued: Arc<AtomicBool>,
+    /// The program exited or never started, so no live session is left to end.
+    ended: Cell<bool>,
 }
 
 /// The core's surface over a [`Cell_`].
@@ -315,12 +322,54 @@ fn carries(core: &Core, spec: &PaneSpec) -> bool {
         .is_some_and(|session| session.pane_role_for_token(&spec.token).is_some())
 }
 
+/// A session's scratch as the model lays it out: the token its terminal carries, or none while one is to start.
+struct ScratchSlot {
+    window: Uuid,
+    workspace: Uuid,
+    session: Uuid,
+    token: Option<String>,
+}
+
+/// The scratch of every terminal session of the open windows that shows one, keeps one hidden, or has one chosen
+/// ([`ngterm_core::model::Session::scratch_identity`]). A scratch runs here, also on an attached row, and an ended
+/// session keeps its scratch.
+fn scratch_slots(core: &Core) -> Vec<ScratchSlot> {
+    let library = core.library();
+    let mut slots = Vec::new();
+    for window in library.open_ids() {
+        let Some(store) = library.store(window) else {
+            continue;
+        };
+        for session in store.sessions() {
+            let token = session
+                .scratch_surface
+                .get()
+                .map(|surface| surface.pane_token().to_owned());
+            let wanted = token.is_some() || session.scratch_active || session.scratch_identity.is_some();
+            if !wanted || session.content() != ngterm_core::model::SessionContent::Terminal {
+                continue;
+            }
+            if let Some(workspace) = store.workspace_for_session(session.id()) {
+                slots.push(ScratchSlot {
+                    window,
+                    workspace: workspace.id(),
+                    session: session.id(),
+                    token,
+                });
+            }
+        }
+    }
+    slots
+}
+
 /// The registry of the terminals (module docs).
 pub struct Panes {
     environment: PaneEnvironment,
     drain: DrainPoster,
     cells: HashMap<Key, Rc<Cell_>>,
     specs: HashMap<Key, PaneSpec>,
+    /// The scratch terminals, kept apart from the session panes the layout drives.
+    scratches: HashMap<Key, Rc<Cell_>>,
     /// The terminals that did not start since the last sync, reported to the core as lost.
     failed: RefCell<Vec<Key>>,
 }
@@ -333,6 +382,7 @@ impl Panes {
             drain,
             cells: HashMap::new(),
             specs: HashMap::new(),
+            scratches: HashMap::new(),
             failed: RefCell::new(Vec::new()),
         }
     }
@@ -340,12 +390,12 @@ impl Panes {
     /// How many terminals are mounted.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.cells.len()
+        self.cells.len() + self.scratches.len()
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
+        self.cells.is_empty() && self.scratches.is_empty()
     }
 
     /// Brings the terminals in line with the model: the replacements the core asked for, the panes it dropped torn
@@ -390,15 +440,111 @@ impl Panes {
             let PaneSpawn { session, token, seed } = grant;
             self.launch_seeded(&session, &token, &seed);
         }
+        self.sync_scratches(core, &held);
         let failed = std::mem::take(&mut *self.failed.borrow_mut());
         if !failed.is_empty() {
             for key in failed {
                 changed |= core.pane_lost(key.session, &key.token);
             }
-            // a session the failures ended lays out no pane any more
+            // a session the failures ended lays out no pane any more, and a scratch that did not start is closed
             self.retain(&layout(core), &held);
+            self.sync_scratches(core, &held);
         }
         changed
+    }
+
+    /// Ends the scratches the model dropped and starts the ones it shows without a terminal (module docs). A session
+    /// held by a pending close keeps its scratch until the close is final or undone.
+    fn sync_scratches(&mut self, core: &mut Core, held: &std::collections::HashSet<Uuid>) {
+        let slots = scratch_slots(core);
+        let gone: Vec<Key> = self
+            .scratches
+            .keys()
+            .filter(|key| {
+                !held.contains(&key.session)
+                    && !slots
+                        .iter()
+                        .any(|slot| slot.session == key.session && slot.token.as_deref() == Some(key.token.as_str()))
+            })
+            .cloned()
+            .collect();
+        for key in gone {
+            let Some(cell) = self.scratches.remove(&key) else {
+                continue;
+            };
+            cell.pane.borrow_mut().take();
+            if cell.live.get()
+                && !cell.ended.get()
+                && let Ok(identity) = Uuid::parse_str(&key.token)
+            {
+                core.end_scratch(identity);
+            }
+        }
+        for slot in slots.iter().filter(|slot| slot.token.is_none()) {
+            self.mount_scratch(core, slot);
+        }
+    }
+
+    /// A fresh scratch terminal for `slot`, in its slot and started, in the session's directory and running the
+    /// command the model holds for it once: the live session the model named, or an ordinary terminal when it named
+    /// none or this instance cannot wrap it.
+    fn mount_scratch(&mut self, core: &mut Core, slot: &ScratchSlot) {
+        let Some(chosen) = core
+            .library()
+            .store(slot.window)
+            .and_then(|store| store.session(slot.session))
+            .map(|session| session.scratch_identity)
+        else {
+            return;
+        };
+        let identity = chosen.unwrap_or_else(Uuid::new_v4);
+        let command = core
+            .library_mut()
+            .store_mut(slot.window)
+            .and_then(|store| store.session_mut(slot.session))
+            .and_then(|session| session.scratch_command.take());
+        let seed = chosen.and_then(|identity| core.scratch_seed(identity, command.as_deref()));
+        let token = pane_env::uuid_string(identity);
+        let cell = self.cell(&token);
+        let Some(session) = core
+            .library_mut()
+            .store_mut(slot.window)
+            .and_then(|store| store.session_mut(slot.session))
+        else {
+            return;
+        };
+        if seed.is_none() {
+            session.scratch_identity = None;
+        }
+        let cwd = session.effective_cwd().to_owned();
+        session.scratch_cwd = Some(cwd.clone());
+        if let Some(previous) = session
+            .scratch_surface
+            .replace(Box::new(HeadlessSurface(Rc::clone(&cell))))
+        {
+            previous.teardown();
+        }
+        let spec = PaneSpec {
+            window: slot.window,
+            workspace: slot.workspace,
+            session: slot.session,
+            pane: StatusPane::Scratch,
+            token: token.clone(),
+            cwd,
+        };
+        let seed = seed.unwrap_or(LaunchSeed {
+            command,
+            ..LaunchSeed::default()
+        });
+        let launch = Launch::from_seed(&seed, Some(PathBuf::from(&spec.cwd)), &spec.env(&self.environment));
+        self.scratches.insert(
+            Key {
+                session: slot.session,
+                token,
+            },
+            Rc::clone(&cell),
+        );
+        self.start(&cell, slot.session, &launch, seed.live);
     }
 
     /// Tears down the terminals no pane the model lays out carries (a session held by a pending close keeps its
@@ -450,6 +596,7 @@ impl Panes {
             ran: Cell::new(Ran::default()),
             points: self.environment.config.font.size,
             drain_queued: Arc::new(AtomicBool::new(false)),
+            ended: Cell::new(false),
         })
     }
 
@@ -481,6 +628,7 @@ impl Panes {
                 tracing::info!(%session, token = cell.token, live, "headless terminal started");
             }
             Err(error) => {
+                cell.ended.set(true);
                 tracing::error!(%session, token = cell.token, %error, "a headless terminal did not start");
                 self.failed.borrow_mut().push(Key {
                     session,
@@ -575,7 +723,7 @@ impl Panes {
             session,
             token: token.to_owned(),
         };
-        let Some(cell) = self.cells.get(&key) else {
+        let Some(cell) = self.cells.get(&key).or_else(|| self.scratches.get(&key)) else {
             return Vec::new();
         };
         cell.drain_queued.store(false, Ordering::Release);
@@ -588,6 +736,7 @@ impl Panes {
         let ran = cell.ran.get();
         for event in &events {
             match event {
+                PaneEvent::Exited(_) => cell.ended.set(true),
                 PaneEvent::ClipboardRead(read) => pane.answer_clipboard_read(read.id, ClipboardAnswer::Denied),
                 PaneEvent::ClipboardWrite(write) => pane.answer_clipboard_write(
                     write.id,
@@ -607,11 +756,12 @@ impl Panes {
 
     /// Drops every terminal (the quit): each live client detaches, and its daemon keeps the session.
     pub fn teardown_all(&mut self) {
-        for cell in self.cells.values() {
+        for cell in self.cells.values().chain(self.scratches.values()) {
             cell.pane.borrow_mut().take();
         }
         self.cells.clear();
         self.specs.clear();
+        self.scratches.clear();
     }
 }
 

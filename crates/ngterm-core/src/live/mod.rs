@@ -65,12 +65,31 @@ pub fn pane_identity(name: &str) -> Option<Uuid> {
 /// unclaimed app daemon and be pruned. ASCII digits only: fullwidth ones are hex to Unicode, never emitted.
 #[must_use]
 pub fn is_daemon_name(name: &str) -> bool {
-    name.strip_prefix(NAME_PREFIX).is_some_and(|body| {
-        body.len() == 32
-            && body
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
+    name.strip_prefix(NAME_PREFIX).is_some_and(is_identity_hex)
+}
+
+/// The prefix of the daemon behind a session's scratch on `ngterm-headless` (upstream's `scratchNamePrefix`).
+pub const SCRATCH_NAME_PREFIX: &str = "ngterm-scratch-";
+
+/// The daemon behind the server scratch `identity` (upstream's `scratchDaemonName`). It is never [`is_daemon_name`], so
+/// nothing that adopts, maps or prunes pane daemons ever claims one.
+#[must_use]
+pub fn scratch_daemon_name(identity: Uuid) -> String {
+    format!("{SCRATCH_NAME_PREFIX}{}", identity.simple())
+}
+
+/// Whether `name` is exactly the shape [`scratch_daemon_name`] emits.
+#[must_use]
+pub fn is_scratch_daemon_name(name: &str) -> bool {
+    name.strip_prefix(SCRATCH_NAME_PREFIX).is_some_and(is_identity_hex)
+}
+
+/// Whether `body` is an identity's 32 lower-case hex digits, as [`Uuid::simple`] writes them.
+fn is_identity_hex(body: &str) -> bool {
+    body.len() == 32
+        && body
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// The prefix this app's daemons had before the build took its own name, `agterm-`. A server of that time hands its
@@ -453,6 +472,33 @@ mod tests {
             assert!(!is_daemon_name(name), "{name}");
             assert_eq!(pane_identity(name), None, "{name}");
         }
+    }
+
+    // after ServerPanesTests.onlyTheEmittedShapeIsAScratchName
+    #[test]
+    fn only_the_emitted_shape_is_a_scratch_name() {
+        for (name, scratch) in [
+            (format!("ngterm-scratch-{}", "a".repeat(32)), true),
+            (format!("ngterm-scratch-{}", "A".repeat(32)), false),
+            (format!("ngterm-scratch-{}", "a".repeat(31)), false),
+            ("ngterm-scratch-".to_owned(), false),
+        ] {
+            assert_eq!(is_scratch_daemon_name(&name), scratch, "{name}");
+            assert!(!is_daemon_name(&name), "{name}");
+        }
+    }
+
+    // after ServerPanesTests.anEmittedScratchNameIsAScratchNameAndNoPaneName
+    #[test]
+    fn an_emitted_scratch_name_is_a_scratch_name_and_no_pane_name() {
+        let identity = Uuid::parse_str("ABCDEF01-2345-6789-ABCD-EF0123456789").unwrap();
+        let name = scratch_daemon_name(identity);
+
+        assert_eq!(name, "ngterm-scratch-abcdef0123456789abcdef0123456789");
+        assert!(is_scratch_daemon_name(&name));
+        assert!(!is_daemon_name(&name));
+        assert_eq!(pane_identity(&name), None);
+        assert_eq!(renamed_legacy_daemon(&name), None);
     }
 
     #[test]

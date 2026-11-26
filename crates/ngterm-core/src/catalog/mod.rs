@@ -27,8 +27,8 @@ use ngterm_proto::ControlLiveEndpoint;
 use uuid::Uuid;
 
 use self::frames::{
-    CatalogFrame, CatalogPage, CatalogPane, CatalogSession, CatalogSessionFields, CatalogSnapshot, CatalogWorkspace,
-    Lifecycle,
+    CatalogFrame, CatalogPage, CatalogPane, CatalogScratch, CatalogSession, CatalogSessionFields, CatalogSnapshot,
+    CatalogWorkspace, Lifecycle,
 };
 use self::hub::{CatalogHub, CatalogSink, CloseReason, SubscriberId};
 use self::operations::CatalogOperationTable;
@@ -186,7 +186,14 @@ fn catalog_session(session: &Session, endpoint: &ControlLiveEndpoint) -> Catalog
         } else {
             Lifecycle::Live
         },
-        scratch: None,
+        scratch: session.scratch_identity.map(|identity| CatalogScratch {
+            pane: CatalogPane {
+                identity,
+                daemon: crate::live::scratch_daemon_name(identity),
+                endpoint: endpoint.clone(),
+            },
+            shown: session.scratch_active,
+        }),
         page,
         custom_name: Some(session.custom_name.clone().unwrap_or_default()),
     };

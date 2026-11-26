@@ -167,3 +167,62 @@ def test_a_session_whose_live_session_is_lost_stays_ended(remote_origin):
     assert_error(origin.request("session.split", sid, mode="on"), "session has ended")
     assert_error(origin.request("session.companion.new", sid, noSelect=True), "session has ended")
     assert_ok(origin.request("session.close", sid))
+
+
+def _live_daemons(origin):
+    vocabulary = origin.vocabulary
+    rows = assert_ok(origin.request(vocabulary.command("live.list")))[vocabulary.result_key]["entries"]
+    return {row["daemon"]: row for row in rows}
+
+
+def _catalog_entry(origin, sid):
+    with origin.stream("catalog.subscribe") as stream:
+        assert stream.reply.ok, stream.reply.raw
+        stream.send({"kind": "hello", "hello": {"version": 1}})
+        return _entry(_frame(stream, "snapshot")["snapshot"], sid)
+
+
+def _scratch_of(origin, sid):
+    return _catalog_entry(origin, sid).get("scratch")
+
+
+@pytest.mark.covers("catalog.subscribe", "session.new", "session.scratch", "session.close", "live.list",
+                    streams=("catalog.subscribe",))
+def test_the_scratch_is_a_live_session_of_its_own_that_a_hide_keeps_and_the_close_ends(remote_origin):
+    """Upstream's `onOffOnShowsTheSameDaemon`, `onWithACommandReplacesTheScratch` and
+    `closingTheSessionEndsItsScratch`: the server's scratch runs in a live session of its own name shape, which the
+    catalog lists as the session's scratch. A hide keeps it, a `--command` replaces it, and the session's close ends
+    it."""
+    origin = Ctl(remote_origin.instance)
+    sid = assert_ok(origin.request("session.new"))["id"]
+    assert _scratch_of(origin, sid) is None
+
+    assert_ok(origin.request("session.scratch", sid, mode="on"))
+    entry = _catalog_entry(origin, sid)
+    scratch = entry.get("scratch")
+    assert scratch is not None and scratch["shown"] is True, entry
+    daemon = scratch["pane"]["daemon"]
+    assert "scratch-" in daemon and daemon not in {pane["daemon"] for pane in entry["panes"]}, entry
+    deadline = time.monotonic() + 30
+    while daemon not in _live_daemons(origin) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert _live_daemons(origin)[daemon]["observation"] == "running"
+
+    assert_ok(origin.request("session.scratch", sid, mode="off"))
+    hidden = _scratch_of(origin, sid)
+    assert hidden["pane"]["daemon"] == daemon and hidden["shown"] is False, hidden
+    assert daemon in _live_daemons(origin)
+
+    assert_ok(origin.request("session.scratch", sid, mode="on", command="exec cat"))
+    replaced = _scratch_of(origin, sid)["pane"]["daemon"]
+    assert replaced != daemon
+    deadline = time.monotonic() + 30
+    while (daemon in (listed := _live_daemons(origin)) or replaced not in listed) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert daemon not in listed and replaced in listed, sorted(listed)
+
+    assert_ok(origin.request("session.close", sid))
+    deadline = time.monotonic() + 30
+    while replaced in _live_daemons(origin) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert replaced not in _live_daemons(origin)

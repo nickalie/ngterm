@@ -280,6 +280,10 @@ pub struct Session {
     pub split_surface: SurfaceSlot,
     /// The scratch terminal, created on its first show and kept while hidden; freed when its shell exits.
     pub scratch_surface: SurfaceSlot,
+    /// The server scratch's identity, which names its live session ([`crate::live::scratch_daemon_name`]): chosen
+    /// when a served catalog's `session.scratch` shows a scratch, before its terminal starts. Cleared when the
+    /// scratch closes. Ephemeral.
+    pub scratch_identity: Option<Uuid>,
     /// The scratch shell's start or reported directory. Cleared when the scratch closes.
     pub scratch_cwd: Option<String>,
     /// The in-terminal search. Ephemeral.
@@ -383,6 +387,7 @@ impl Session {
             surface: SurfaceSlot::default(),
             split_surface: SurfaceSlot::default(),
             scratch_surface: SurfaceSlot::default(),
+            scratch_identity: None,
             scratch_cwd: None,
             search: SearchState::default(),
             overlay: OverlaySlot::default(),
@@ -775,6 +780,7 @@ impl Session {
         self.surface.teardown();
         self.split_surface.teardown();
         self.scratch_surface.teardown();
+        self.scratch_identity = None;
         self.scratch_cwd = None;
         self.search.clear();
     }

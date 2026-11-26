@@ -354,6 +354,7 @@ fn lead(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
 /// Showing never selects; `--follow` does, as on `session.overlay.open`: the deck mounts every session, and an
 /// unselected session's scratch spawns there without taking the keyboard, which it gets once its session is selected.
 fn scratch(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
+    let live = core.scratch_runs_live();
     let (store, id) = session_store(core, target, args.window.as_deref())?;
     let mode = ToggleMode::parse(args.mode.as_deref()).ok_or_else(|| {
         ControlError::rejected(format!(
@@ -381,6 +382,12 @@ fn scratch(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     }
     if store.session(id).is_some_and(|session| session.scratch_active != want) {
         store.toggle_scratch(id, !respawning_visible);
+    }
+    // the server names the scratch's live session now, so the catalog lists it with this command's receipt
+    if let Some(session) = store.session_mut(id).filter(|session| {
+        live && session.scratch_active && !session.scratch_surface.is_present() && session.scratch_identity.is_none()
+    }) {
+        session.scratch_identity = Some(Uuid::new_v4());
     }
     Ok(with_id(id))
 }

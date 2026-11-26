@@ -33,7 +33,7 @@ fn rev(fixture: &Fixture) -> i64 {
 }
 
 /// `cmd` sent with `op` at the catalog's epoch.
-fn serve(fixture: &mut Fixture, cmd: Command, target: Option<&str>, base: Args, op: &str) -> Response {
+pub(super) fn serve(fixture: &mut Fixture, cmd: Command, target: Option<&str>, base: Args, op: &str) -> Response {
     let epoch = epoch(fixture);
     serve_at(fixture, cmd, target, base, op, Some(&epoch))
 }
@@ -61,7 +61,7 @@ fn lookup(fixture: &mut Fixture, op: &str, sent: Option<CatalogPosition>) -> Res
     fixture.send(Command::Catalog(CatalogCmd::Op), Some(op), args)
 }
 
-fn receipt_of(response: &Response) -> Option<CatalogReceipt> {
+pub(super) fn receipt_of(response: &Response) -> Option<CatalogReceipt> {
     serde_json::from_value(response.result.as_ref()?.get("receipt")?.clone()).ok()
 }
 

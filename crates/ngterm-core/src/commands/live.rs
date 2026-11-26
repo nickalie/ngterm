@@ -12,12 +12,14 @@
 //! - [`launch`]: a pane's launch disposition and the live seed, the leader cache behind a live pane's foreground, and
 //!   the launch reap;
 //! - [`live_reset`]: `live.reset`, its marker at quit and its consumption at the next launch.
+//! - [`scratch`]: the server's scratch as a live session of its own, its seed and its end.
 
 mod claims;
 mod inventory;
 pub(crate) mod launch;
 mod lead;
 mod live_reset;
+mod scratch;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

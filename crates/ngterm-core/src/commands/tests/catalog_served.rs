@@ -47,7 +47,7 @@ impl Wire {
             .collect()
     }
 
-    fn snapshot(&self) -> CatalogSnapshot {
+    pub(super) fn snapshot(&self) -> CatalogSnapshot {
         self.frames()
             .into_iter()
             .find_map(|frame| match frame {
@@ -100,7 +100,7 @@ pub(super) fn subscribed(fixture: &mut Fixture, page_rows: bool) -> Rc<Wire> {
     stream
 }
 
-fn entry(snapshot: &CatalogSnapshot, id: Uuid) -> CatalogSession {
+pub(super) fn entry(snapshot: &CatalogSnapshot, id: Uuid) -> CatalogSession {
     snapshot.session(id).cloned().expect("the session's entry")
 }
 
