@@ -458,8 +458,8 @@ fn a_viewer_of_an_origin_that_reads_apc_frames_pastes_and_replies_as_apc() {
 fn only_the_bridges_connection_turns_apc_on_and_a_new_hello_turns_it_off() {
     let fixture = peer_framing(false, false);
     fixture.feed.deliver(b"\x1b[?2004h");
-    fixture.feed.deliver(&envelope("forged", Message::ApcInput).encode());
     fixture.feed.deliver(&envelope("connection", Message::Hello).encode());
+    fixture.feed.deliver(&envelope("forged", Message::ApcInput).encode());
     fixture.feed.deliver(b"ready-1");
     fixture.screen_until("ready-1");
     fixture

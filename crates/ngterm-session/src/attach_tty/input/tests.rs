@@ -218,6 +218,10 @@ fn a_bridge_envelope_is_read_as_an_osc_or_an_apc_wherever_it_is_cut() {
     // another APC is still dropped, a Kitty graphics answer still read
     let mut parser = InputParser::new(true);
     assert_eq!(parser.feed(b"\x1b_778;ngterm-attach;e30=\x1b\\z"), [input(b"z")]);
+    assert_eq!(
+        parser.feed(b"\x1b_Gi=1;OK\x1b\\"),
+        [answer(Answer::Kitty(b"\x1b_Gi=1;OK\x1b\\".to_vec()))]
+    );
 }
 
 #[test]
