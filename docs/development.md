@@ -166,11 +166,12 @@ metadata endpoint, and never attached to release downloads or redirects. A missi
 leaves manual downloads available. A secondary limit (`403` or `429` with `Retry-After`, or a message that names a
 secondary rate limit) is also a rate limit. The wait is `Retry-After` (seconds or an HTTP date against the answer's
 `Date`). Without it, a primary limit waits until `X-RateLimit-Reset` against `Date` (the local clock only without
-one), and a secondary limit waits one minute. No wait is longer than an hour. A background check keeps a rate limit,
-a lost connection or a server error quiet: no alert and no titlebar button. After a rate limit with a wait, the next
-background check runs 30 seconds after that wait and the six-hour interval continues from it. Each rate limit in a
-row doubles that delay, up to six hours; any other result, or turning automatic checks back on, starts again from
-the wait that GitHub gives. Only Check for Updates reports the limit, with the wait.
+one), and a secondary limit waits one minute. No wait is longer than an hour. A background check keeps a rate limit, a
+lost connection or a server error quiet: no alert and no titlebar button. After a rate limit with a wait, on a
+background check or on Check for Updates, the next background check runs 30 seconds after that wait and the six-hour
+interval continues from it. Each rate limit in a row doubles that delay, up to six hours; any other result, or turning
+automatic checks back on, starts again from the wait that GitHub gives. Only Check for Updates reports the limit, with
+the wait.
 
 Disable background checks and downloads in **Settings → General → Updates** (`autoUpdate: false` in `settings.json`);
 manual checks remain available. Archive installs must stay together in a dedicated directory named `ngterm`, with

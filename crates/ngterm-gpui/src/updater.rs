@@ -182,21 +182,18 @@ fn poll(delay: Duration, cx: &mut App) -> Task<()> {
     })
 }
 
-/// An automatic check keeps a transient failure quiet. After a rate limit, the next check waits until it resets,
-/// and a limit that continues doubles the delay, up to [`INTERVAL`], as GitHub asks of clients.
-fn defer_automatic(error: &ngterm_update::Error, cx: &mut App) {
-    tracing::info!(%error, "automatic update check deferred");
+/// After a rate limit on any check, the next automatic check waits until it resets, and a limit that continues
+/// doubles the delay, up to [`INTERVAL`], as GitHub asks of clients.
+fn defer_polling(wait: Duration, cx: &mut App) {
     let updater = cx.global_mut::<Updater>();
-    updater.status = Status::Idle;
-    if let Some(wait) = error.retry_after()
-        && updater.polling.is_some()
-    {
-        let backoff = 2_u32.saturating_pow(updater.deferrals);
-        updater.deferrals = updater.deferrals.saturating_add(1);
-        let delay = wait.saturating_add(RETRY_MARGIN).saturating_mul(backoff).min(INTERVAL);
-        let task = poll(delay, cx);
-        cx.global_mut::<Updater>().polling = Some(task);
+    if updater.polling.is_none() {
+        return;
     }
+    let backoff = 2_u32.saturating_pow(updater.deferrals);
+    updater.deferrals = updater.deferrals.saturating_add(1);
+    let delay = wait.saturating_add(RETRY_MARGIN).saturating_mul(backoff).min(INTERVAL);
+    let task = poll(delay, cx);
+    cx.global_mut::<Updater>().polling = Some(task);
 }
 
 /// Help > Check for Updates. A ready update opens its install confirmation.
@@ -281,7 +278,8 @@ fn finish_check(
     let updater = cx.global_mut::<Updater>();
     updater.job.take();
     updater.cancelled.take();
-    if !matches!(&result, Err(error) if error.retry_after().is_some()) {
+    let wait = result.as_ref().err().and_then(ngterm_update::Error::retry_after);
+    if wait.is_none() {
         updater.deferrals = 0;
     }
     if result.is_ok() {
@@ -294,11 +292,17 @@ fn finish_check(
             updater.status = Status::Ready(version);
         }
         Ok(None) => updater.status = Status::Current,
-        Err(error) if manual.is_none() && error.is_transient() => defer_automatic(&error, cx),
+        Err(error) if manual.is_none() && error.is_transient() => {
+            tracing::info!(%error, "automatic update check deferred");
+            updater.status = Status::Idle;
+        }
         Err(error) => {
             tracing::warn!(%error, "release update failed");
             updater.status = Status::Failed(error.to_string());
         }
+    }
+    if let Some(wait) = wait {
+        defer_polling(wait, cx);
     }
     cx.refresh_windows();
     if let Some(window) = manual {
@@ -1637,6 +1641,42 @@ mod tests {
             7,
             "turning checks back on starts the wait again"
         );
+        assert_eq!(front(cx), None);
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_rate_limit_on_a_manual_check_also_holds_back_the_automatic_check(cx: &mut TestAppContext) {
+        let fixture = Fixture::new();
+        fixture.server.publish("0.1.0", &[]);
+        let cx = host(cx);
+        let _state = cx.update(|_, cx| fixture.start(true, cx));
+        cx.run_until_parked();
+        assert_eq!(fixture.server.requests().len(), 1);
+
+        advance(cx, INTERVAL.saturating_sub(Duration::from_secs(60)));
+        fixture
+            .server
+            .route("/latest", "429 Too Many Requests\r\nRetry-After: 600", "{}");
+        cx.update(check);
+        cx.run_until_parked();
+        assert_eq!(
+            front(cx).map(|alert| alert.heading),
+            Some("Update needs attention".into())
+        );
+        press(cx, "OK");
+        assert_eq!(fixture.server.requests().len(), 2);
+
+        fixture.server.publish("0.1.0", &[]);
+        advance(cx, Duration::from_secs(629));
+        assert_eq!(
+            fixture.server.requests().len(),
+            2,
+            "the six-hour check waits until the limit resets"
+        );
+        advance(cx, Duration::from_secs(1));
+        assert_eq!(fixture.server.requests().len(), 3);
+        assert_eq!(status(cx), Status::Current);
         assert_eq!(front(cx), None);
     }
 
