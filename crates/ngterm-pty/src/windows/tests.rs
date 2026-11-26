@@ -696,7 +696,6 @@ fn pid_of(process: &OwnedHandle) -> u32 {
 fn escaped_into_another_job(
     hold: impl FnOnce(OwnedHandle) -> Arc<Job>,
 ) -> (Escaped, OwnedHandle, OwnedHandle, OwnedHandle) {
-    use windows_sys::Win32::System::Threading::{PROCESS_SET_QUOTA, PROCESS_TERMINATE};
     let package = package_job();
     let mut found = None;
     let prepare = |inner: u32| {
@@ -790,10 +789,11 @@ fn a_process_that_got_the_id_of_a_listed_child_is_not_taken() {
     bystander.wait().expect("the bystander's exit");
 }
 
-/// What a process of the tree starts outside the job as the kill ends it is taken back once the tree ended, and
-/// ended too: the tree holds that process open, so its id still names it.
+/// What a process of the tree starts outside the job as the kill ends it ends once the tree ended: the second pass
+/// takes it back into the job, or ends it outside the job when the job refuses it. The tree holds that process open,
+/// so its id still names it.
 #[test]
-fn what_a_process_started_as_its_tree_was_killed_is_taken_back() {
+fn what_a_process_started_as_its_tree_was_killed_ends_after_the_tree() {
     let escaped = Escaped::new("ping -n 300 127.0.0.1 >nul", "ping.exe");
     let ping = watched(child_of(escaped.shell.id(), "ping.exe")).expect("the ping");
     let shell = watched(escaped.shell.id()).expect("the shell");

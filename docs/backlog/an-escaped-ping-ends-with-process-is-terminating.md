@@ -6,7 +6,7 @@ added: 2026-11-18
 # An escaped ping sometimes ends with STATUS_PROCESS_IS_TERMINATING
 
 On Windows 11 (build 26100), the ngterm-pty tests that take back an escaped ping (the `Escaped` tests, for example
-`what_a_process_started_as_its_tree_was_killed_is_taken_back` and `the_close_of_a_job_ends_what_escaped_it`)
+`what_a_process_started_as_its_tree_was_killed_ends_after_the_tree` and `the_close_of_a_job_ends_what_escaped_it`)
 sometimes see the exit code 0xC000010A (`STATUS_PROCESS_IS_TERMINATING`) for the ping. They expect 1 (the kill) or
 0 (the job's close). The ping did end, a short time after the tree's end. It occurred in about 1 of 6 runs of
 `cargo test -p ngterm-pty --lib` while another build loaded the VM, also on 26de1c67, before the change that watches
