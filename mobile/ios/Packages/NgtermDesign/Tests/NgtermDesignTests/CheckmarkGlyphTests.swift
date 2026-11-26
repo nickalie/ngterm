@@ -32,12 +32,10 @@ internal struct CheckmarkGlyphTests {
 
     // the badge drawn at 3x on the grouped ground of `scheme`, as its raw RGBA bytes and size
     private static func pixels(of badge: AgentStatusBadge, in scheme: ColorScheme) throws -> Rendered {
-        let rendered = try pixels(
+        try pixels(
             of: badge.ngtermTheme().padding().background(Color(uiColor: .systemGroupedBackground)),
             in: scheme
         )
-        try #require(ink(of: rendered) > 0, "the badge drew nothing, not even its ground")
-        return rendered
     }
 
     // a glyph drawn at 3x on no ground, so that only its own pixels are opaque
@@ -48,11 +46,13 @@ internal struct CheckmarkGlyphTests {
     // drawn by CoreGraphics: `cgImage` goes through the simulator's Metal, blank on an overloaded host
     private static func pixels(of content: some View, in scheme: ColorScheme) throws -> Rendered {
         let renderer = ImageRenderer(content: content.environment(\.colorScheme, scheme))
-        var rendered: Rendered?
+        var drawn: Rendered?
         renderer.render(rasterizationScale: Self.scale) { size, draw in
-            rendered = bitmap(width: pixelCount(size.width), height: pixelCount(size.height), draw: draw)
+            drawn = bitmap(width: pixelCount(size.width), height: pixelCount(size.height), draw: draw)
         }
-        return try #require(rendered, "the view did not render")
+        let rendered = try #require(drawn, "the view did not render")
+        try #require(ink(of: rendered) > 0, "the view drew nothing")
+        return rendered
     }
 
     private static func pixelCount(_ points: CGFloat) -> Int {
@@ -107,7 +107,6 @@ internal struct CheckmarkGlyphTests {
     @Test("the checkmark glyph alone is a check of its own", arguments: [ColorScheme.light, .dark])
     internal func checkmarkGlyphIsItsOwnShape(scheme: ColorScheme) throws {
         let checkmark = try Self.pixels(of: StatusShape.checkmark, in: scheme)
-        #expect(Self.ink(of: checkmark) > 0, "the checkmark glyph drew nothing")
         for other in StatusShape.allCases where other != .checkmark {
             #expect(try Self.pixels(of: other, in: scheme) != checkmark, "the checkmark glyph drew the \(other)")
         }
