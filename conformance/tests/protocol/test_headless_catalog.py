@@ -143,8 +143,8 @@ def test_a_lookup_fences_an_unseen_id_and_a_changed_target_is_refused(remote_ori
 def test_a_session_whose_live_session_is_lost_stays_ended(remote_origin):
     """Upstream's `aLostLastPaneLeavesTheSessionEnded` and `anEndedSessionIsSkippedAndCannotGrowASplit`: a session
     whose last pane's live session is lost, not ended by its shell, stays in the tree and the catalog marked ended with
-    no pane, refuses a split and a companion, and leaves with its close. Here the instance's session server dies with
-    its sessions."""
+    no pane, refuses a split, and leaves with its close. It also refuses a companion, as the `!parent.ended` guard in
+    upstream's `createCompanion` does. Here the instance's session server dies with its sessions."""
     origin = Ctl(remote_origin.instance)
     sid = assert_ok(origin.request("session.new"))["id"]
     instance = remote_origin.instance
