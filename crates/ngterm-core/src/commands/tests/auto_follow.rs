@@ -297,6 +297,21 @@ fn fire_follows_a_right_pane_block_only_while_a_right_pane_overlay_runs() {
     assert!(!consumed(&fixture, left));
 }
 
+/// A left pane block is kept by an overlay on the left pane, not by one on the right pane.
+#[test]
+fn fire_follows_a_left_pane_block_only_while_a_left_pane_overlay_runs() {
+    let mut fixture = Fixture::new(0);
+    let current = fixture.sessions[0];
+    let right = ended_split(&mut fixture, Some(StatusPane::Left), Some(OverlayPane::Right));
+    let left = ended_split(&mut fixture, Some(StatusPane::Left), Some(OverlayPane::Left));
+    select(&mut fixture, current);
+
+    assert_eq!(fire(&mut fixture).map(|followed| followed.session), Some(left));
+    select(&mut fixture, current);
+    assert_eq!(fire(&mut fixture), None, "a right pane overlay does not keep it");
+    assert!(!consumed(&fixture, right));
+}
+
 /// An overlay over the whole row keeps a block of either pane followed.
 #[test]
 fn fire_follows_an_ended_split_pane_block_under_a_session_overlay() {

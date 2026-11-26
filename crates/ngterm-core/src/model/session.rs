@@ -125,7 +125,8 @@ pub struct AgentIndicator {
     pub color: Option<String>,
     /// A silhouette for this glyph only; `None` is the configured shape, else a circle.
     pub shape: Option<StatusShape>,
-    /// Which pane set the status; `None` reads as the main pane.
+    /// Which pane set the status. `None` reads as the main pane for keystroke clearing, and as any overlay for local
+    /// work, since an overlay's program sets no pane.
     pub status_pane: Option<StatusPane>,
 }
 
