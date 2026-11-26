@@ -48,7 +48,7 @@ impl Server {
     /// Runs the command.
     pub fn execute(&self) -> Result<(), Failure> {
         match &self.command {
-            ServerCommand::Install(command) => match command.run(&mut LiveEffects)? {
+            ServerCommand::Install(command) => match command.run(&mut LiveEffects::github())? {
                 0 => Ok(()),
                 code => Err(Failure::Exit(ExitCode::from(code))),
             },
@@ -142,8 +142,20 @@ trait Effects {
     fn print(&mut self, line: &str);
 }
 
-/// The process's effects: ssh on the terminal, GitHub's releases.
-struct LiveEffects;
+/// The process's effects: ssh on the terminal, the releases of `source` checked against `trust`.
+struct LiveEffects {
+    source: Source,
+    trust: Result<Trust, String>,
+}
+
+impl LiveEffects {
+    fn github() -> Self {
+        Self {
+            source: Source::github(),
+            trust: Trust::release().map_err(|error| error.to_string()),
+        }
+    }
+}
 
 impl Effects for LiveEffects {
     fn release(&self) -> Option<Version> {
@@ -156,18 +168,18 @@ impl Effects for LiveEffects {
     }
 
     fn checksum(&mut self, version: &Version, asset: &str) -> Result<String, String> {
-        let trust = Trust::release().map_err(|error| error.to_string())?;
-        Source::github()
-            .published_checksum(version, asset, &trust)
+        let trust = self.trust.as_ref().map_err(Clone::clone)?;
+        self.source
+            .published_checksum(version, asset, trust)
             .map_err(|error| error.to_string())
     }
 
     fn asset_url(&self, version: &Version, asset: &str) -> String {
-        Source::github().asset_url(version, asset)
+        self.source.asset_url(version, asset)
     }
 
     fn download(&mut self, version: &Version, asset: &str, file: &Path) -> Result<(), String> {
-        Source::github()
+        self.source
             .fetch_asset(version, asset, file, DOWNLOAD_LIMIT)
             .map_err(|error| error.to_string())
     }
@@ -210,7 +222,7 @@ impl Installer<'_> {
             .checksum(&version, &asset)
             .map_err(|error| format!("release v{version} has no usable checksum for {asset}: {error}"))?;
 
-        let directory = tempfile::tempdir().map_err(|error| format!("could not make a private directory: {error}"))?;
+        let directory = tempfile::tempdir().map_err(failed("could not make a private directory".to_owned()))?;
         let file = directory.path().join(&asset);
         match self.source {
             Some(source) => snapshot(source, &file)?,
@@ -221,14 +233,14 @@ impl Installer<'_> {
                 )
             })?,
         }
-        let actual = file_sha256(&file).map_err(|error| format!("could not read {}: {error}", file.display()))?;
+        let actual = file_sha256(&file).map_err(failed(format!("could not read {}", file.display())))?;
         if actual != expected {
             return Err(format!(
                 "{asset} does not match the sha256 release v{version} was published with; nothing was installed"
             ));
         }
 
-        let archive = File::open(&file).map_err(|error| format!("could not read {}: {error}", file.display()))?;
+        let archive = File::open(&file).map_err(failed(format!("could not read {}", file.display())))?;
         let unpack = [prefix.clone(), vec![server_install::unpack_command()]].concat();
         let (unpacked, _) = self
             .effects
@@ -279,6 +291,11 @@ impl Installer<'_> {
     }
 }
 
+/// The message of an I/O step that failed, `what` then the OS error.
+fn failed(what: String) -> impl FnOnce(io::Error) -> String {
+    move |error| format!("{what}: {error}")
+}
+
 /// Copies `source` through one checked descriptor into the private `file`, which alone is hashed and streamed: a copy
 /// of the path would follow a symlink whose target can change between the hash and the unpack.
 fn snapshot(source: &str, file: &Path) -> Result<(), String> {
@@ -292,7 +309,7 @@ fn snapshot(source: &str, file: &Path) -> Result<(), String> {
     if metadata.len() > DOWNLOAD_LIMIT {
         return Err(too_large());
     }
-    let mut output = create_private(file).map_err(|error| format!("could not write {}: {error}", file.display()))?;
+    let mut output = create_private(file).map_err(failed(format!("could not write {}", file.display())))?;
     let copied = io::copy(&mut (&mut input).take(DOWNLOAD_LIMIT + 1), &mut output).map_err(|_| unreadable())?;
     if copied > DOWNLOAD_LIMIT {
         return Err(too_large());

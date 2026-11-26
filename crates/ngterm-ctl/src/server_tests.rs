@@ -7,7 +7,10 @@ use ngterm_core::remote::server_install::{self, DOWNLOAD_LIMIT, INSTALLER_COMMAN
 use semver::Version;
 use sha2::{Digest as _, Sha256};
 
-use super::{Effects, Install, NOT_A_RELEASE, ServerCommand, release_of};
+use ngterm_update::Trust;
+use ngterm_update::fakes::{Server, manifest};
+
+use super::{Effects, Install, LiveEffects, NOT_A_RELEASE, ServerCommand, release_of};
 use crate::terminfo::{Connection, Input, InstallFailure, Outcome, ssh_command};
 use crate::{Failure, Ngtermctl};
 
@@ -47,6 +50,7 @@ struct Fake {
     download_fails: bool,
     unpack: Outcome,
     installer: Outcome,
+    spawn_fails: Option<&'static str>,
     before_unpack: Option<Box<dyn FnMut()>>,
     calls: Vec<Call>,
     printed: Vec<String>,
@@ -63,6 +67,7 @@ impl Fake {
             download_fails: false,
             unpack: Outcome::Exited(0),
             installer: Outcome::Exited(0),
+            spawn_fails: None,
             before_unpack: None,
             calls: Vec::new(),
             printed: Vec::new(),
@@ -73,14 +78,8 @@ impl Fake {
     fn phases(&self) -> Vec<&'static str> {
         self.calls.iter().map(|call| call.phase).collect()
     }
-}
 
-impl Effects for Fake {
-    fn release(&self) -> Option<Version> {
-        self.release.clone()
-    }
-
-    fn ssh(&mut self, argv: &[String], input: Input<'_>) -> Result<(Outcome, Vec<u8>), InstallFailure> {
+    fn answer(&mut self, argv: &[String], input: Input<'_>) -> (Outcome, Vec<u8>) {
         match input {
             Input::Capture => {
                 self.calls.push(Call {
@@ -88,7 +87,7 @@ impl Effects for Fake {
                     argv: argv.to_vec(),
                     detail: String::new(),
                 });
-                Ok((self.probe.0, self.probe.1.to_vec()))
+                (self.probe.0, self.probe.1.to_vec())
             }
             Input::File(mut file) => {
                 if let Some(before) = &mut self.before_unpack {
@@ -102,7 +101,7 @@ impl Effects for Fake {
                     argv: argv.to_vec(),
                     detail: detail.to_owned(),
                 });
-                Ok((self.unpack, Vec::new()))
+                (self.unpack, Vec::new())
             }
             Input::Null => {
                 self.calls.push(Call {
@@ -110,10 +109,28 @@ impl Effects for Fake {
                     argv: argv.to_vec(),
                     detail: String::new(),
                 });
-                Ok((self.installer, Vec::new()))
+                (self.installer, Vec::new())
             }
             Input::Bytes(_) => panic!("server install sends no bytes from memory"),
         }
+    }
+}
+
+impl Effects for Fake {
+    fn release(&self) -> Option<Version> {
+        self.release.clone()
+    }
+
+    fn ssh(&mut self, argv: &[String], input: Input<'_>) -> Result<(Outcome, Vec<u8>), InstallFailure> {
+        let answer = self.answer(argv, input);
+        let phase = self.calls.last().map(|call| call.phase);
+        if phase.is_some() && phase == self.spawn_fails {
+            return Err(InstallFailure::SpawnFailed {
+                operation: "posix_spawnp".to_owned(),
+                reason: "No such file or directory".to_owned(),
+            });
+        }
+        Ok(answer)
     }
 
     fn checksum(&mut self, version: &Version, asset: &str) -> Result<String, String> {
@@ -283,6 +300,25 @@ fn a_failed_unpack_never_runs_the_installer() {
         Err("unpacking on box failed: exited(2)".to_owned())
     );
     assert_eq!(fake.phases(), ["probe", "checksum", "download", "unpack"]);
+}
+
+#[test]
+fn ssh_that_cannot_start_stops_the_install_at_that_phase() {
+    let phases: [&[&str]; 3] = [
+        &["probe"],
+        &["probe", "checksum", "download", "unpack"],
+        &["probe", "checksum", "download", "unpack", "installer"],
+    ];
+    for expected in phases {
+        let mut fake = Fake::new(b"x86_64\n");
+        fake.spawn_fails = expected.last().copied();
+        assert_eq!(
+            install(&mut fake, &["box"]),
+            Err("could not start ssh: posix_spawnp failed with No such file or directory".to_owned())
+        );
+        assert_eq!(fake.phases(), expected);
+        assert!(fake.printed.is_empty());
+    }
 }
 
 #[test]
@@ -462,4 +498,110 @@ fn a_release_bundle_has_a_release() {
     assert_eq!(release_of(&client), None);
     std::fs::write(contents.join("Resources/update-format"), "macos-bundle\n").unwrap();
     assert_eq!(release_of(&client), Some(Version::new(1, 2, 3)));
+}
+
+const ASSET: &str = "ngterm-1.2.3-linux-x86_64.tar.gz";
+
+fn live(server: &Server, trust: Result<Trust, String>) -> LiveEffects {
+    LiveEffects {
+        source: server.source(),
+        trust,
+    }
+}
+
+#[test]
+fn the_live_effects_read_the_checksum_and_the_archive_the_release_published() {
+    let server = Server::start().unwrap();
+    let sums = manifest(&[(ASSET, RELEASE)]);
+    server.publish("1.2.3", &[(ASSET, RELEASE), ("SHA256SUMS", &sums)]);
+    let mut effects = live(&server, Ok(Trust::default()));
+    let version = Version::new(1, 2, 3);
+
+    assert_eq!(effects.checksum(&version, ASSET), Ok(digest(RELEASE)));
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(ASSET);
+    effects.download(&version, ASSET, &file).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), RELEASE);
+    assert_eq!(
+        effects.asset_url(&version, ASSET),
+        server.url(&format!("/download/v1.2.3/{ASSET}"))
+    );
+}
+
+#[test]
+fn the_live_effects_refuse_a_release_that_is_not_published() {
+    let server = Server::start().unwrap();
+    let mut effects = live(&server, Ok(Trust::default()));
+    let version = Version::new(1, 2, 3);
+
+    assert!(effects.checksum(&version, ASSET).is_err());
+    let dir = tempfile::tempdir().unwrap();
+    assert!(effects.download(&version, ASSET, &dir.path().join(ASSET)).is_err());
+}
+
+#[test]
+fn the_live_effects_refuse_an_unsigned_manifest_under_the_release_key() {
+    let server = Server::start().unwrap();
+    let sums = manifest(&[(ASSET, RELEASE)]);
+    server.publish("1.2.3", &[(ASSET, RELEASE), ("SHA256SUMS", &sums)]);
+    let mut effects = live(&server, LiveEffects::github().trust);
+
+    assert!(effects.checksum(&Version::new(1, 2, 3), ASSET).is_err());
+}
+
+#[test]
+fn the_live_effects_report_an_unusable_key_without_a_request() {
+    let server = Server::start().unwrap();
+    let mut effects = live(&server, Err("bad key".to_owned()));
+
+    assert_eq!(
+        effects.checksum(&Version::new(1, 2, 3), ASSET),
+        Err("bad key".to_owned())
+    );
+    assert_eq!(server.requests(), Vec::<String>::new());
+}
+
+#[test]
+fn a_development_build_runs_no_install() {
+    let parsed = Ngtermctl::try_parse_from(["ngtermctl", "server", "install", "host"]).unwrap();
+    let crate::Command::Server(group) = parsed.command else {
+        panic!("not a server command")
+    };
+    match group.execute() {
+        Err(Failure::Local(message)) => assert_eq!(message, NOT_A_RELEASE),
+        other => panic!("not refused as a development build: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+fn shell(script: &str) -> Vec<String> {
+    vec!["sh".to_owned(), "-c".to_owned(), script.to_owned()]
+}
+
+#[cfg(unix)]
+#[test]
+fn the_live_ssh_captures_what_the_probe_prints() {
+    let (outcome, output) = LiveEffects::github()
+        .ssh(&shell("printf x86_64"), Input::Capture)
+        .unwrap();
+    assert_eq!((outcome, output.as_slice()), (Outcome::Exited(0), &b"x86_64"[..]));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_live_ssh_streams_the_archive_on_stdin_and_reports_the_exit_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(ASSET);
+    std::fs::write(&file, RELEASE).unwrap();
+    let mut effects = LiveEffects::github();
+
+    let archive = std::fs::File::open(&file).unwrap();
+    let (streamed, _) = effects
+        .ssh(&shell(r#"test "$(cat)" = release"#), Input::File(archive))
+        .unwrap();
+    assert_eq!(streamed, Outcome::Exited(0));
+    let (nothing, _) = effects.ssh(&shell(r#"test -z "$(cat)""#), Input::Null).unwrap();
+    assert_eq!(nothing, Outcome::Exited(0));
+    let (failed, _) = effects.ssh(&shell("exit 3"), Input::Null).unwrap();
+    assert_eq!(failed, Outcome::Exited(3));
 }
