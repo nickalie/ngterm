@@ -9,7 +9,7 @@ scripts/vendor-gpui.sh applies this after 0004.
 diff -ruN a/src/elements/div.rs b/src/elements/div.rs
 --- a/src/elements/div.rs
 +++ b/src/elements/div.rs
-@@ -1408,6 +1408,20 @@
+@@ -1455,6 +1455,20 @@
          self
      }
  
@@ -30,7 +30,7 @@ diff -ruN a/src/elements/div.rs b/src/elements/div.rs
      /// Set the numeric value for this element.
      fn aria_numeric_value(mut self, value: f64) -> Self {
          self.interactivity().aria.numeric_value = Some(value);
-@@ -2111,6 +2125,8 @@
+@@ -2201,6 +2215,8 @@
      pub(crate) selected: Option<bool>,
      pub(crate) expanded: Option<bool>,
      pub(crate) toggled: Option<accesskit::Toggled>,
@@ -39,7 +39,7 @@ diff -ruN a/src/elements/div.rs b/src/elements/div.rs
      pub(crate) numeric_value: Option<f64>,
      pub(crate) min_numeric_value: Option<f64>,
      pub(crate) max_numeric_value: Option<f64>,
-@@ -3549,6 +3565,12 @@
+@@ -3658,6 +3674,12 @@
          if let Some(toggled) = self.aria.toggled {
              node.set_toggled(toggled);
          }
@@ -52,7 +52,7 @@ diff -ruN a/src/elements/div.rs b/src/elements/div.rs
          if let Some(value) = self.aria.numeric_value {
              node.set_numeric_value(value);
          }
-@@ -5263,6 +5285,27 @@
+@@ -5444,6 +5466,27 @@
      }
  
      #[test]

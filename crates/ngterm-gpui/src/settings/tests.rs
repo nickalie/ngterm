@@ -1502,10 +1502,10 @@ fn assert_appearance_fits(h: &mut Harness, cx: &mut VisualTestContext, case: &st
         last.origin.y >= page.origin.y && last.bottom() <= page.bottom(),
         "{case}: the last control fits: {last:?} in {page:?}"
     );
-    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollEvent {
         position: last.center(),
         delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0., -12.)),
-        ..gpui_kit::ScrollWheelEvent::default()
+        ..gpui_kit::ScrollEvent::default()
     });
     h.settle(cx);
     assert_eq!(
@@ -1612,10 +1612,10 @@ fn the_interface_grid_keeps_the_info_picker_and_quick_terminal_size_visible(cx: 
         );
     }
     let size_before_scroll = bounds(cx, "settings-quick-terminal-size");
-    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollEvent {
         position: size_before_scroll.center(),
         delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0., -12.)),
-        ..gpui_kit::ScrollWheelEvent::default()
+        ..gpui_kit::ScrollEvent::default()
     });
     h.settle(cx);
     assert_eq!(
@@ -1689,10 +1689,10 @@ fn badge_reset_picker_applies_each_mode(cx: &mut TestAppContext) {
     let page = bounds(cx, "settings-page");
     let last = bounds(cx, "settings-attention-button");
     assert!(last.origin.y >= page.origin.y && last.bottom() <= page.bottom());
-    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollEvent {
         position: last.center(),
         delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0., -12.)),
-        ..gpui_kit::ScrollWheelEvent::default()
+        ..gpui_kit::ScrollEvent::default()
     });
     h.settle(cx);
     assert_eq!(bounds(cx, "settings-attention-button"), last);

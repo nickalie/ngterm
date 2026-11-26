@@ -9,8 +9,8 @@ takes the keyboard. scripts/vendor-gpui.sh applies this to the verified crates.i
 diff -ruN a/src/window.rs b/src/window.rs
 --- a/src/window.rs
 +++ b/src/window.rs
-@@ -991,6 +991,9 @@
-                 let () = msg_send![class!(NSWindow), setAllowsAutomaticWindowTabbing: NO];
+@@ -1069,6 +1069,9 @@
+                 let () = msg_send![class!(NSWindow), setAllowsAutomaticWindowTabbing: Bool::NO];
              }
  
 +            // A pop-up without a title bar is a borderless panel: no system title bar, so its content
@@ -18,24 +18,24 @@ diff -ruN a/src/window.rs b/src/window.rs
 +            let borderless = titlebar.is_none() && kind == WindowKind::PopUp;
              let mut style_mask;
              if let Some(titlebar) = titlebar.as_ref() {
-                 style_mask =
-@@ -1007,6 +1010,8 @@
+                 style_mask = NSWindowStyleMask::Closable | NSWindowStyleMask::Titled;
+@@ -1084,6 +1087,8 @@
                  if titlebar.appears_transparent {
-                     style_mask |= NSWindowStyleMask::NSFullSizeContentViewWindowMask;
+                     style_mask |= NSWindowStyleMask::FullSizeContentView;
                  }
 +            } else if borderless {
-+                style_mask = NSWindowStyleMask::NSBorderlessWindowMask;
++                style_mask = NSWindowStyleMask::Borderless;
              } else {
-                 style_mask = NSWindowStyleMask::NSTitledWindowMask
-                     | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
-@@ -1232,6 +1237,10 @@
+                 style_mask = NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView;
+             }
+@@ -1312,6 +1317,10 @@
                      add_mouse_tracking_area(tracking_view);
  
-                     native_window.setLevel_(NSPopUpWindowLevel);
+                     let _: () = msg_send![native_window, setLevel: NSPopUpWindowLevel];
 +                    if borderless {
 +                        // A borderless window has no shadow until it asks for one.
-+                        let _: () = msg_send![native_window, setHasShadow: YES];
++                        let _: () = msg_send![native_window, setHasShadow: Bool::YES];
 +                    }
                      let _: () = msg_send![
                          native_window,
-                         setAnimationBehavior: NSWindowAnimationBehaviorUtilityWindow
+                         setAnimationBehavior: NSWindowAnimationBehavior::UtilityWindow

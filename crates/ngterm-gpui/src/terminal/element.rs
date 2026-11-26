@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use gpui_kit::{
     App, BorderStyle, Bounds, ContentMask, Context, DevicePixels, Element, ElementId, Entity, FontId, GlobalElementId,
-    GlyphId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, Point,
+    GlyphId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, LayoutId, PathBuilder, Pixels, Point,
     RenderAlphaMaskParams, Style, TextRun as GpuiRun, Window, WindowTextSystem, fill, outline, point, px, relative,
     size,
 };
@@ -117,14 +117,6 @@ impl TerminalElement {
     #[must_use]
     pub fn new(view: Entity<TerminalView>, focused: bool) -> Self {
         Self { view, focused }
-    }
-}
-
-impl IntoElement for TerminalElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
     }
 }
 

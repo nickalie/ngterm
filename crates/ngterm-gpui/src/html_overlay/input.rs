@@ -171,7 +171,7 @@ mod tests {
     use super::*;
 
     fn stroke(text: &str) -> Keystroke {
-        Keystroke::parse(text).unwrap()
+        crate::parse_keystroke(text)
     }
 
     #[test]

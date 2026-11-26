@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui_kit::{Keystroke, TestAppContext, VisualTestContext, div};
+use gpui_kit::{TestAppContext, VisualTestContext, div};
 
 use super::*;
 
@@ -54,7 +54,7 @@ fn the_palette_fits_the_terminal_area_and_centers_over_it() {
 
 #[test]
 fn keys_navigate_as_upstreams_key_catcher() {
-    let key = |source: &str| nav_key(&Keystroke::parse(source).unwrap());
+    let key = |source: &str| nav_key(&crate::parse_keystroke(source));
     assert_eq!(key("tab"), Some(NavKey::Forward));
     assert_eq!(key("shift-tab"), Some(NavKey::Backward));
     for forward in ["right", "down"] {

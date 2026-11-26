@@ -8,7 +8,7 @@ this after 0001.
 diff -ruN a/src/text_system.rs b/src/text_system.rs
 --- a/src/text_system.rs
 +++ b/src/text_system.rs
-@@ -514,6 +514,13 @@
+@@ -484,6 +484,13 @@
          self.read_metrics(font_id, |metrics| metrics.descent(font_size))
      }
  

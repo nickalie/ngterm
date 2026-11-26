@@ -158,10 +158,10 @@ fn readonly_wheel_scrolls_history_without_sending_mouse_reports(cx: &mut TestApp
     );
     assert!(f.perform("toggle_readonly"));
     let view = f.view.clone();
-    let wheel = ScrollWheelEvent {
+    let wheel = ScrollEvent {
         position: Fixture::at(1, 1),
         delta: ScrollDelta::Lines(point(0., 3.)),
-        ..ScrollWheelEvent::default()
+        ..ScrollEvent::default()
     };
     let original = f.text();
     f.cx.update(|_, cx| view.update(cx, |view, cx| view.scroll_wheel(&wheel, Fixture::bounds(), cx)));

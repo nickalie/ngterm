@@ -429,7 +429,7 @@ fn a_press_focuses_the_page_goes_in_at_its_content_and_still_closes_a_popover(cx
 fn keys_go_in_while_the_page_holds_the_keyboard_and_a_paste_hands_the_clipboard_over_first(cx: &mut TestAppContext) {
     let (harness, cx) = harness(cx);
     let key = |text: &str, cx: &mut VisualTestContext| {
-        let keystroke = gpui_kit::Keystroke::parse(text).unwrap();
+        let keystroke = crate::parse_keystroke(text);
         let source = crate::terminal::input::Source::Keystroke;
         let stroke = crate::terminal::input::KeyStroke::new(&keystroke, &source, false);
         cx.update(|window, cx| registry::key_down(&keystroke, &stroke, window, cx))
@@ -1231,7 +1231,7 @@ fn wheel_events_keep_local_coordinates_precision_and_the_end_phase(cx: &mut Test
     let (harness, cx) = harness(cx);
     harness.web.take();
     harness.element.update(cx, |element, _| {
-        element.scroll(&gpui_kit::ScrollWheelEvent {
+        element.scroll(&gpui_kit::ScrollEvent {
             position: point(px(30.), px(TOP + STRIP + 20.)),
             delta: gpui_kit::ScrollDelta::Pixels(point(px(2.5), px(-3.5))),
             touch_phase: gpui_kit::TouchPhase::Ended,
@@ -1277,7 +1277,7 @@ fn a_selects_keyboard_moves_and_picks_and_engine_close_does_not_answer_again(cx:
     harness.web.take();
     harness.element.update(cx, |element, cx| {
         for key in ["down", "up", "down", "enter"] {
-            assert!(element.menu_key(&gpui_kit::Keystroke::parse(key).unwrap(), cx));
+            assert!(element.menu_key(&crate::parse_keystroke(key), cx));
         }
         assert!(!element.menu_key(&gpui_kit::Keystroke::parse("down").unwrap(), cx));
     });

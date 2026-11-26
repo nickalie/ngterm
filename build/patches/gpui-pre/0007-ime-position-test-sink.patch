@@ -6,7 +6,7 @@ terminal focus-switch and output regressions check delivery to the platform.
 diff -ruN a/src/app/test_context.rs b/src/app/test_context.rs
 --- a/src/app/test_context.rs
 +++ b/src/app/test_context.rs
-@@ -1060,6 +1060,11 @@
+@@ -1085,6 +1085,11 @@
          self.background_executor.run_until_parked();
      }
  
@@ -21,7 +21,7 @@ diff -ruN a/src/app/test_context.rs b/src/app/test_context.rs
 diff -ruN a/src/platform/test/window.rs b/src/platform/test/window.rs
 --- a/src/platform/test/window.rs
 +++ b/src/platform/test/window.rs
-@@ -53,6 +53,7 @@
+@@ -59,6 +59,7 @@
      input_handler: Option<PlatformInputHandler>,
      text_input_configurations: Vec<TextInputConfiguration>,
      text_input_state_changes: Vec<TextInputStateChange>,
@@ -29,7 +29,7 @@ diff -ruN a/src/platform/test/window.rs b/src/platform/test/window.rs
      is_fullscreen: bool,
      scale_factor: f32,
      appearance: WindowAppearance,
-@@ -131,6 +132,7 @@
+@@ -144,6 +145,7 @@
              input_handler: None,
              text_input_configurations: Vec::new(),
              text_input_state_changes: Vec::new(),
@@ -37,7 +37,7 @@ diff -ruN a/src/platform/test/window.rs b/src/platform/test/window.rs
              is_fullscreen: false,
              // Preserve the test platform's historical 2x default.
              scale_factor: 2.0,
-@@ -230,6 +232,11 @@
+@@ -251,6 +253,11 @@
          self.0.lock().text_input_state_changes.clone()
      }
  
@@ -49,7 +49,7 @@ diff -ruN a/src/platform/test/window.rs b/src/platform/test/window.rs
      pub fn simulate_resize(&mut self, size: Size<Pixels>) {
          let scale_factor = self.scale_factor();
          let mut lock = self.0.lock();
-@@ -617,7 +624,9 @@
+@@ -744,7 +751,9 @@
          state.start_external_drag_result
      }
  

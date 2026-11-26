@@ -156,7 +156,12 @@ mod keys {
 
     /// The press of the key at macOS key code `code` with `flags`, as the keyboard sends it or as a process posts it
     /// (its Quartz string what the key types with no modifier, as Quartz fills it in), as the terminal reads it.
-    fn press(name: &str, code: u16, flags: NSEventModifierFlags, posted_by_us: bool) -> Result<KeyStroke, String> {
+    fn press(
+        name: &'static str,
+        code: u16,
+        flags: NSEventModifierFlags,
+        posted_by_us: bool,
+    ) -> Result<KeyStroke, String> {
         let plain = match code {
             0 => "a",
             1 => "s",

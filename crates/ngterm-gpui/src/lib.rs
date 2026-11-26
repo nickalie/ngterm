@@ -71,3 +71,16 @@ pub mod windows;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+
+/// GPUI's keystroke syntax read with this host's `secondary-`, as GPUI's own test contexts read it (tests).
+#[cfg(test)]
+pub(crate) fn parse_keystroke(text: &str) -> gpui_kit::Keystroke {
+    let os = if cfg!(target_os = "macos") {
+        gpui_kit::OperatingSystem::Mac
+    } else if cfg!(windows) {
+        gpui_kit::OperatingSystem::Windows
+    } else {
+        gpui_kit::OperatingSystem::Linux
+    };
+    gpui_kit::Keystroke::parse_with_os(text, os).unwrap()
+}

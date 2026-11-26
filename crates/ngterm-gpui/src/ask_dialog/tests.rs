@@ -50,7 +50,7 @@ fn ask(style: AskStyle) -> PendingAsk {
 
 #[test]
 fn keys_map_as_upstreams_key_catcher() {
-    let key = |source: &str| ask_key(&Keystroke::parse(source).unwrap(), &Source::Keystroke);
+    let key = |source: &str| ask_key(&crate::parse_keystroke(source), &Source::Keystroke);
     assert_eq!(key("tab"), Some(AskKey::Forward));
     assert_eq!(key("shift-tab"), Some(AskKey::Backward));
     assert_eq!(key("right"), Some(AskKey::Forward));
@@ -63,7 +63,7 @@ fn keys_map_as_upstreams_key_catcher() {
 
 #[test]
 fn letters_are_hotkeys_and_modified_keys_go_to_the_window() {
-    let key = |source: &str| ask_key(&Keystroke::parse(source).unwrap(), &Source::Keystroke);
+    let key = |source: &str| ask_key(&crate::parse_keystroke(source), &Source::Keystroke);
     assert_eq!(key("y"), Some(AskKey::Hotkey("y".to_owned())));
     assert_eq!(key("shift-y"), Some(AskKey::Hotkey("y".to_owned())));
     assert_eq!(key("space"), Some(AskKey::Toggle), "Space flips a list's row");
@@ -156,7 +156,7 @@ fn the_dialog_takes_a_hotkey_from_the_key_position_on_a_cyrillic_layout() {
     // Ctrl, Alt and Super still go on to the window, whatever the key resolves to
     for modified in ["ctrl-щ", "alt-щ", "super-щ"] {
         assert_eq!(
-            ask_key(&Keystroke::parse(modified).unwrap(), &native(32, Some('щ'), false)),
+            ask_key(&crate::parse_keystroke(modified), &native(32, Some('щ'), false)),
             None,
             "{modified}"
         );

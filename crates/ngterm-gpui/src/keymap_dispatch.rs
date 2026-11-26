@@ -506,7 +506,7 @@ pub(crate) fn load_keymap(keymap: &ngterm_core::keymap::Keymap) {
 /// (tests).
 #[cfg(test)]
 pub(crate) fn release_simulated(text: &str) -> bool {
-    let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+    let keystroke = crate::parse_keystroke(text).with_simulated_ime();
     let stroke = KeyStroke::new(&keystroke, &input::current_source(&keystroke), true);
     ROUTER.with_borrow_mut(|router| router.release(stroke.identity, Instant::now()))
 }
@@ -516,7 +516,7 @@ pub(crate) fn release_simulated(text: &str) -> bool {
 #[cfg(test)]
 #[cfg(all(feature = "html", windows))]
 pub(crate) fn press_dispatched(text: &str) -> Option<bool> {
-    let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+    let keystroke = crate::parse_keystroke(text).with_simulated_ime();
     if !takes(&page_stroke(&keystroke, 0, false)) {
         return None;
     }

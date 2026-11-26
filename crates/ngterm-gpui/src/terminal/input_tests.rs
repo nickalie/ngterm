@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{
     AppContext as _, ClipboardItem, Context, Entity, EntityInputHandler as _, InteractiveElement as _, IntoElement,
-    Keystroke, Modifiers, MouseButton, ParentElement as _, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
+    Keystroke, Modifiers, MouseButton, ParentElement as _, Pixels, Point, Render, ScrollDelta, ScrollEvent,
     Styled as _, TestAppContext, VisualTestContext, Window, div, point, px, size,
 };
 use ngterm_core::clipboard_policy::{ClipboardAccess, ClipboardDecision};
@@ -34,7 +34,7 @@ const DEADLINE: Duration = Duration::from_secs(20);
 // key events
 
 fn keystroke(text: &str) -> Keystroke {
-    Keystroke::parse(text).unwrap().with_simulated_ime()
+    crate::parse_keystroke(text).with_simulated_ime()
 }
 
 #[test]
@@ -1011,11 +1011,11 @@ fn the_wheel_scrolls_the_viewport_back(cx: &mut TestAppContext) {
     let script = "i=0; while [ $i -lt 60 ]; do echo line-$i; i=$((i+1)); done; printf ready; exec sleep 30";
     let mut f = fixture(cx, script, config(""));
     assert!(!f.painted().contains("line-30"));
-    f.cx.simulate_event(ScrollWheelEvent {
+    f.cx.simulate_event(ScrollEvent {
         position: Fixture::at(3, 3),
         // one notch up, as GPUI's Linux backends hand it (three lines)
         delta: ScrollDelta::Lines(point(0., 3. * 4.)),
-        ..ScrollWheelEvent::default()
+        ..ScrollEvent::default()
     });
     f.wait_painted("line-30");
 }
@@ -1030,10 +1030,10 @@ fn the_wheel_scrolls_after_typing_with_the_pointer_still(cx: &mut TestAppContext
     f.cx.simulate_mouse_move(Fixture::at(3, 3), None, Modifiers::default());
     f.type_keys("x");
     assert!(!f.painted().contains("line-30"));
-    f.cx.simulate_event(ScrollWheelEvent {
+    f.cx.simulate_event(ScrollEvent {
         position: Fixture::at(3, 3),
         delta: ScrollDelta::Lines(point(0., 3. * 4.)),
-        ..ScrollWheelEvent::default()
+        ..ScrollEvent::default()
     });
     f.wait_painted("line-30");
 }

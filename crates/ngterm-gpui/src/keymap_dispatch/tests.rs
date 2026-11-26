@@ -11,7 +11,7 @@ use super::{Fired, Press, Router};
 use crate::terminal::input::{self, KeyStroke, NativeKey, Source};
 
 fn stroke(text: &str) -> KeyStroke {
-    let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
+    let keystroke = crate::parse_keystroke(text).with_simulated_ime();
     KeyStroke::new(&keystroke, &Source::Keystroke, false)
 }
 
@@ -549,7 +549,7 @@ fn a_web_view_hands_over_full_screen_unless_it_ends_a_live_leader() {
 
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn dispatched(text: &str) -> Keystroke {
-    Keystroke::parse(text).unwrap().with_simulated_ime()
+    crate::parse_keystroke(text).with_simulated_ime()
 }
 
 /// The platform's record of `text`, a letter chord or Escape: what `NSApp.currentEvent` holds while a key a web view handed over
@@ -1235,7 +1235,7 @@ fn a_key_typed_in_a_page_closes_a_repeat_window_opened_before_it() {
 /// The physical identity carried with a Windows page's report, shared by its later native window events.
 #[cfg(all(feature = "html", windows))]
 fn windows_page_stroke(text: &str, repeat: bool) -> KeyStroke {
-    let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
+    let keystroke = crate::parse_keystroke(text).with_simulated_ime();
     let code = if keystroke.key.len() == 1 {
         format!("Key{}", keystroke.key.to_ascii_uppercase())
     } else {
@@ -1280,7 +1280,7 @@ fn a_simulated_page_dispatch_keeps_ownership() {
     ] {
         load_monitor(keymap);
         assert_eq!(super::press_dispatched(text), Some(fired), "{text}");
-        let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
+        let keystroke = crate::parse_keystroke(text).with_simulated_ime();
         assert!(super::takes(&super::page_stroke(&keystroke, 0, true)), "{text}");
         assert!(super::release_simulated(text), "{text}");
     }
@@ -1508,7 +1508,7 @@ fn an_autorepeat_behind_its_queued_press_is_owned() {
 #[cfg(all(feature = "html", windows))]
 fn autorepeats_behind_the_switcher_and_a_cancelling_escape_are_owned() {
     let page_stroke = |text: &str, code: &str, repeat| {
-        let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
+        let keystroke = crate::parse_keystroke(text).with_simulated_ime();
         super::page_stroke(&keystroke, crate::terminal::input::xkb_keycode(code).unwrap(), repeat)
     };
     load_monitor("command \"g\" ctrl+a>g true\n");
@@ -1540,7 +1540,7 @@ mod page_dispatch_tests {
     use super::*;
 
     fn dispatch(text: &str, repeat: bool, cx: &mut VisualTestContext) {
-        let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
+        let keystroke = crate::parse_keystroke(text).with_simulated_ime();
         cx.update(|window, cx| {
             super::super::dispatch_page_key(
                 &keystroke,

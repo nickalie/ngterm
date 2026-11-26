@@ -48,7 +48,7 @@ fn dispatch(cx: &mut VisualTestContext, keystroke: Keystroke) {
 }
 
 fn typed(text: &str) -> Keystroke {
-    Keystroke::parse(text).unwrap().with_simulated_ime()
+    crate::parse_keystroke(text).with_simulated_ime()
 }
 
 /// Upstream's Esc in a page: it abandons a half-typed leader and is the keymap's only then.

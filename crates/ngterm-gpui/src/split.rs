@@ -793,14 +793,6 @@ impl PageElement {
     }
 }
 
-impl IntoElement for PageElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 /// A whole number of logical pixels, rounded down, never negative.
 fn whole(value: Pixels) -> i32 {
     let value = f32::from(value).floor().max(0.0);

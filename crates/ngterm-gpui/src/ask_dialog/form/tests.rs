@@ -8,7 +8,7 @@ use ngterm_proto::AskChoice;
 use super::*;
 
 fn key(source: &str) -> Keystroke {
-    Keystroke::parse(source).unwrap()
+    crate::parse_keystroke(source)
 }
 
 #[test]

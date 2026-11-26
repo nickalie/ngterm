@@ -2461,10 +2461,10 @@ fn the_search_cursor_scrolls_into_view_when_the_field_gets_the_keyboard_back(cx:
     let first = s.cx.debug_bounds("row:proj00").expect("the first match is drawn");
     // the list's top: the workspace's header row, above the first match before any scroll
     let top = s.cx.debug_bounds("row:workspace 1").expect("the header is drawn").top();
-    s.cx.simulate_event(gpui_kit::ScrollWheelEvent {
+    s.cx.simulate_event(gpui_kit::ScrollEvent {
         position: first.center(),
         delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0., -100.)),
-        ..gpui_kit::ScrollWheelEvent::default()
+        ..gpui_kit::ScrollEvent::default()
     });
     s.settle();
     let out_of_view = |s: &mut Shell| {
@@ -2525,7 +2525,7 @@ fn a_live_leader_that_the_search_chord_does_not_advance_ends_and_the_field_takes
 #[gpui_kit::test]
 fn a_stopped_tail_typed_before_the_search_chord_fires_and_skips_the_field(cx: &mut TestAppContext) {
     let page_key = |text: &str, code: &str| {
-        let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+        let keystroke = crate::parse_keystroke(text).with_simulated_ime();
         let keycode = crate::terminal::input::xkb_keycode(code).unwrap();
         (keystroke, keycode)
     };

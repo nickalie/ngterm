@@ -40,6 +40,9 @@ use wayland_client::{
         wl_shm_pool, wl_surface,
     },
 };
+use wayland_protocols::ext::background_effect::v1::client::{
+    ext_background_effect_manager_v1, ext_background_effect_surface_v1,
+};
 use wayland_protocols::wp::pointer_gestures::zv1::client::{
     zwp_pointer_gesture_pinch_v1, zwp_pointer_gestures_v1,
 };
@@ -93,7 +96,7 @@ use crate::linux::{
     wayland::{
         clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE},
         cursor::Cursor,
-        serial::{Serial, SerialKind, SerialTracker},
+        serial::{ActivationContext, Serial, SerialKind, SerialTracker},
         to_shape,
         window::WaylandWindow,
     },
@@ -105,8 +108,8 @@ use gpui::{
     KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
     MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformDisplay,
     PlatformFrameSignal, PlatformInput, PlatformKeyboardLayout, PlatformWindow, Point, ScrollDelta,
-    ScrollWheelEvent, SharedString, Size, TouchPhase, WindowButtonLayout, WindowKind, WindowParams,
-    point, px, size,
+    ScrollEvent, ScrollSource, SharedString, Size, TouchPhase, WindowButtonLayout, WindowKind,
+    WindowParams, point, px, size,
 };
 use gpui_wgpu::{CompositorGpuHint, GpuContext};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
@@ -282,7 +285,9 @@ pub struct Globals {
         Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
     pub decoration_manager: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
-    pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
+    pub kde_blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
+    pub background_effects_manager:
+        Option<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1>,
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
@@ -334,7 +339,8 @@ impl Globals {
             fractional_scale_manager: globals.bind(&qh, 1..=1, ()).ok(),
             decoration_manager: globals.bind(&qh, 1..=1, ()).ok(),
             layer_shell: globals.bind(&qh, 1..=5, ()).ok(),
-            blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            kde_blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            background_effects_manager: globals.bind(&qh, 1..=1, ()).ok(),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
@@ -460,7 +466,6 @@ pub(crate) struct WaylandClientState {
     data_offers: Vec<DataOffer<WlDataOffer>>,
     primary_data_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>,
     cursor: Cursor,
-    pending_activation: HashMap<ObjectId, PendingActivation>,
     startup_activation_token: Option<String>,
     /// The environment this connection was made in, without its activation token.
     graphical_environment: GraphicalEnvironment,
@@ -608,25 +613,6 @@ pub(crate) enum PendingActivation {
     Window(ObjectId),
 }
 
-// Allocate and register together: callers cannot accidentally key a target by its surface.
-fn request_activation(
-    activation: &xdg_activation_v1::XdgActivationV1,
-    qh: &QueueHandle<WaylandClientStatePtr>,
-    pending: &mut HashMap<ObjectId, PendingActivation>,
-    target: PendingActivation,
-) -> xdg_activation_token_v1::XdgActivationTokenV1 {
-    let token = activation.get_activation_token(qh, ());
-    pending.insert(token.id(), target);
-    token
-}
-
-fn complete_activation(
-    pending: &mut HashMap<ObjectId, PendingActivation>,
-    token: &xdg_activation_token_v1::XdgActivationTokenV1,
-) -> Option<PendingActivation> {
-    pending.remove(&token.id())
-}
-
 impl WaylandClientState {
     fn consume_startup_activation_token(&mut self, surface: &wl_surface::WlSurface) {
         let Some(startup_activation_token) = self.startup_activation_token.take() else {
@@ -730,6 +716,14 @@ impl WaylandClientStatePtr {
         self.0.upgrade().unwrap().borrow().serial_tracker.get(kind)
     }
 
+    pub fn activation_context(&self) -> Option<ActivationContext> {
+        self.0
+            .upgrade()?
+            .borrow()
+            .serial_tracker
+            .activation_context()
+    }
+
     pub fn start_external_drag(
         &self,
         surface: &wl_surface::WlSurface,
@@ -768,22 +762,6 @@ impl WaylandClientStatePtr {
             window,
         });
         true
-    }
-
-    pub fn request_window_activation(
-        &self,
-        activation: &xdg_activation_v1::XdgActivationV1,
-        window: ObjectId,
-    ) -> xdg_activation_token_v1::XdgActivationTokenV1 {
-        let client = self.get_client();
-        let mut state = client.borrow_mut();
-        let qh = state.globals.qh.clone();
-        request_activation(
-            activation,
-            &qh,
-            &mut state.pending_activation,
-            PendingActivation::Window(window),
-        )
     }
 
     pub fn enable_ime(&self) {
@@ -1075,7 +1053,6 @@ impl WaylandConnection {
         let mut in_progress_outputs = HashMap::default();
         #[allow(clippy::mutable_key_type)]
         let mut wl_outputs: HashMap<ObjectId, wl_output::WlOutput> = HashMap::default();
-        #[allow(clippy::mutable_key_type)]
         let mut output_globals: HashMap<u32, ObjectId> = HashMap::default();
         globals.contents().with_list(|list| -> anyhow::Result<()> {
             for global in list {
@@ -1218,7 +1195,6 @@ impl WaylandConnection {
             data_offers: Vec::new(),
             primary_data_offer: None,
             cursor,
-            pending_activation: HashMap::default(),
             startup_activation_token: activation_token,
             graphical_environment: GraphicalEnvironment {
                 activation_token: None,
@@ -1485,21 +1461,15 @@ impl WaylandConnection {
     }
 
     pub(crate) fn open_uri(&self, uri: &str) {
-        let mut state = self.0.borrow_mut();
-        if let (Some(activation), Some(window)) = (
+        let state = self.0.borrow();
+        if let (Some(activation), Some(context)) = (
             state.globals.activation.clone(),
-            state.mouse_focused_window.clone(),
+            state.serial_tracker.activation_context(),
         ) {
-            let qh = state.globals.qh.clone();
-            let token = request_activation(
-                &activation,
-                &qh,
-                &mut state.pending_activation,
-                PendingActivation::Uri(uri.to_string()),
-            );
-            let serial = state.serial_tracker.get(SerialKind::MousePress);
-            token.set_serial(serial.as_raw(), &state.wl_seat);
-            token.set_surface(&window.surface());
+            let token = activation
+                .get_activation_token(&state.globals.qh, PendingActivation::Uri(uri.to_string()));
+            token.set_serial(context.serial.as_raw(), &state.wl_seat);
+            token.set_surface(&context.requesting_surface);
             token.commit();
         } else {
             let executor = state.common.borrow().background_executor.clone();
@@ -1508,21 +1478,15 @@ impl WaylandConnection {
     }
 
     pub(crate) fn reveal_path(&self, path: PathBuf) {
-        let mut state = self.0.borrow_mut();
-        if let (Some(activation), Some(window)) = (
+        let state = self.0.borrow();
+        if let (Some(activation), Some(context)) = (
             state.globals.activation.clone(),
-            state.mouse_focused_window.clone(),
+            state.serial_tracker.activation_context(),
         ) {
-            let qh = state.globals.qh.clone();
-            let token = request_activation(
-                &activation,
-                &qh,
-                &mut state.pending_activation,
-                PendingActivation::Path(path),
-            );
-            let serial = state.serial_tracker.get(SerialKind::MousePress);
-            token.set_serial(serial.as_raw(), &state.wl_seat);
-            token.set_surface(&window.surface());
+            let token =
+                activation.get_activation_token(&state.globals.qh, PendingActivation::Path(path));
+            token.set_serial(context.serial.as_raw(), &state.wl_seat);
+            token.set_surface(&context.requesting_surface);
             token.commit();
         } else {
             let executor = state.common.borrow().background_executor.clone();
@@ -1871,6 +1835,8 @@ delegate_noop!(WaylandClientStatePtr: ignore zwlr_layer_shell_v1::ZwlrLayerShell
 delegate_noop!(WaylandClientStatePtr: ignore zxdg_output_manager_v1::ZxdgOutputManagerV1);
 delegate_noop!(WaylandClientStatePtr: ignore xdg_positioner::XdgPositioner);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur_manager::OrgKdeKwinBlurManager);
+delegate_noop!(WaylandClientStatePtr: ignore ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1);
+delegate_noop!(WaylandClientStatePtr: ignore ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1);
 delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextInputManagerV3);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
@@ -1892,45 +1858,12 @@ impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
         };
         drop(state);
 
-        if let wl_callback::Event::Done { callback_data } = event {
-            window.frame_callback_fired(PlatformFrameSignal::capture(|| {
-                frame_callback_signal_at(callback_data)
-            }));
+        // The callback's timestamp uses a clock the protocol leaves unspecified,
+        // so frame timing measures from receipt, as the other platforms do.
+        if let wl_callback::Event::Done { .. } = event {
+            window.frame_callback_fired(PlatformFrameSignal::capture(Instant::now));
         }
     }
-}
-
-fn frame_callback_signal_at(callback_data: u32) -> Instant {
-    let mut monotonic = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // wl_surface.frame specifies an unspecified epoch. Mutter and Sway use
-    // CLOCK_MONOTONIC, but reject implausible ages for other compositor clocks.
-    let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut monotonic) };
-    let received_at = Instant::now();
-    if result != 0 || monotonic.tv_sec < 0 || !(0..1_000_000_000).contains(&monotonic.tv_nsec) {
-        return received_at;
-    }
-    let monotonic_millis =
-        (monotonic.tv_sec as u64 * 1_000 + monotonic.tv_nsec as u64 / 1_000_000) as u32;
-    frame_callback_instant(callback_data, monotonic_millis, received_at)
-}
-
-fn frame_callback_instant(
-    callback_data: u32,
-    monotonic_millis: u32,
-    received_at: Instant,
-) -> Instant {
-    // The wire timestamp wraps every ~49 days. A future timestamp also wraps
-    // when subtracted, so the bound rejects it without guessing another epoch.
-    let age_millis = monotonic_millis.wrapping_sub(callback_data);
-    if age_millis > 60_000 {
-        return received_at;
-    }
-    received_at
-        .checked_sub(Duration::from_millis(u64::from(age_millis)))
-        .unwrap_or(received_at)
 }
 
 pub(crate) fn get_window(
@@ -2177,36 +2110,38 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for WaylandClientStatePtr {
     }
 }
 
-impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, ()> for WaylandClientStatePtr {
+impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, PendingActivation>
+    for WaylandClientStatePtr
+{
     fn event(
         this: &mut Self,
         token: &xdg_activation_token_v1::XdgActivationTokenV1,
         event: <xdg_activation_token_v1::XdgActivationTokenV1 as Proxy>::Event,
-        _: &(),
+        pending_activation: &PendingActivation,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         let client = this.get_client();
         let mut state = client.borrow_mut();
 
-        let target = complete_activation(&mut state.pending_activation, token);
         if let xdg_activation_token_v1::Event::Done { token } = event {
             let executor = state.common.borrow().background_executor.clone();
             let environment = state.graphical_environment.clone();
-            match target {
-                Some(PendingActivation::Uri(uri)) => {
-                    open_uri_internal(executor, &uri, Some(token), environment)
+            match pending_activation {
+                PendingActivation::Uri(uri) => {
+                    open_uri_internal(executor, uri, Some(token), environment)
                 }
-                Some(PendingActivation::Path(path)) => {
-                    reveal_path_internal(executor, path, Some(token), environment)
+                PendingActivation::Path(path) => {
+                    reveal_path_internal(executor, path.clone(), Some(token), environment)
                 }
-                Some(PendingActivation::Window(window)) => {
-                    if let Some(window) = get_window(&mut state, &window) {
-                        let activation = state.globals.activation.as_ref().unwrap();
+                PendingActivation::Window(window) => {
+                    let activation = state.globals.activation.clone();
+                    if let (Some(window), Some(activation)) =
+                        (get_window(&mut state, window), activation)
+                    {
                         activation.activate(token, &window.surface());
                     }
                 }
-                None => log::error!("activation token received with no pending activation"),
             }
         }
 
@@ -2397,7 +2332,15 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 ..
             } => {
                 if key_state == wl_keyboard::KeyState::Pressed {
-                    state.serial_tracker.update(SerialKind::KeyPress, serial);
+                    let focused_surface = state
+                        .keyboard_focused_window
+                        .as_ref()
+                        .map(|window| window.surface());
+                    state.serial_tracker.update_with_focused_surface(
+                        SerialKind::KeyPress,
+                        serial,
+                        focused_surface,
+                    );
                 }
 
                 let focused_window = state.keyboard_focused_window.clone();
@@ -2668,9 +2611,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                 if let Some(window) = get_window(&mut state, &surface.id()) {
                     state.mouse_focused_window = Some(window.clone());
 
-                    if state.enter_token.is_some() {
-                        state.enter_token = None;
-                    }
+                    state.enter_token = None;
                     state.restore_cursor_after_hide();
                     if let Some(style) = state.cursor_style {
                         if let Some(cursor_shape_device) = &state.cursor_shape_device {
@@ -2776,7 +2717,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                 // Record presses only. Requests referencing this serial (popup grabs,
                 // interactive moves) are declined when given a release serial.
                 if button_state == wl_pointer::ButtonState::Pressed {
-                    state.serial_tracker.update(SerialKind::MousePress, serial);
+                    let focused_surface = state
+                        .mouse_focused_window
+                        .as_ref()
+                        .map(|window| window.surface());
+                    state.serial_tracker.update_with_focused_surface(
+                        SerialKind::MousePress,
+                        serial,
+                        focused_surface,
+                    );
                 }
                 let button = linux_button_to_gpui(button);
                 let Some(button) = button else { return };
@@ -2956,11 +2905,12 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                     let discrete = state.discrete_scroll_delta.take();
                     if let Some(continuous) = continuous {
                         if let Some(window) = state.mouse_focused_window.clone() {
-                            let input = PlatformInput::ScrollWheel(ScrollWheelEvent {
+                            let input = PlatformInput::Scroll(ScrollEvent {
                                 position: state.mouse_location.unwrap(),
                                 delta: ScrollDelta::Pixels(continuous),
                                 modifiers: state.modifiers,
                                 touch_phase: TouchPhase::Moved,
+                                source: ScrollSource::Pointer,
                             });
                             drop(state);
                             window.handle_input(input);
@@ -2968,11 +2918,12 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                     } else if let Some(discrete) = discrete
                         && let Some(window) = state.mouse_focused_window.clone()
                     {
-                        let input = PlatformInput::ScrollWheel(ScrollWheelEvent {
+                        let input = PlatformInput::Scroll(ScrollEvent {
                             position: state.mouse_location.unwrap(),
                             delta: ScrollDelta::Lines(discrete),
                             modifiers: state.modifiers,
                             touch_phase: TouchPhase::Moved,
+                            source: ScrollSource::Pointer,
                         });
                         drop(state);
                         window.handle_input(input);
@@ -3494,43 +3445,6 @@ mod tests {
         assert_eq!(wl_output_version(2).expect("minimum output version"), 2);
     }
 
-    #[test]
-    fn frame_callback_timestamp_preserves_queue_delay() {
-        let received_at = Instant::now();
-        assert_eq!(
-            frame_callback_instant(1_000, 1_025, received_at),
-            received_at - Duration::from_millis(25),
-        );
-        assert_eq!(
-            frame_callback_instant(1_000, 1_000, received_at),
-            received_at,
-        );
-    }
-
-    #[test]
-    fn frame_callback_timestamp_wraps() {
-        let received_at = Instant::now();
-        assert_eq!(
-            frame_callback_instant(u32::MAX - 9, 15, received_at),
-            received_at - Duration::from_millis(25),
-        );
-    }
-
-    #[test]
-    fn frame_callback_timestamp_rejects_implausible_clock() {
-        let received_at = Instant::now();
-        for (callback_data, monotonic_millis) in [(1_001, 1_000), (0, 60_001), (0, u32::MAX)] {
-            assert_eq!(
-                frame_callback_instant(callback_data, monotonic_millis, received_at),
-                received_at,
-            );
-        }
-        assert_eq!(
-            frame_callback_instant(0, 60_000, received_at),
-            received_at - Duration::from_secs(60),
-        );
-    }
-
     #[derive(Clone)]
     struct FakeDataOffer {
         name: &'static str,
@@ -3656,62 +3570,6 @@ mod tests {
         assert!(!data_offer_b.destroyed.get());
         assert_eq!(drag.data_offer.as_ref().map(|offer| offer.name), Some("B"));
         assert_eq!(drag.window, Some("window B"));
-    }
-
-    #[test]
-    fn outstanding_link_activations_keep_their_own_uri_when_tokens_finish_out_of_order() {
-        // Allocate real client proxies without a compositor or a roundtrip. Both requests
-        // belong to the same activation global, but receive distinct token object IDs.
-        let (socket, _server) = UnixStream::pair().unwrap();
-        let connection = Connection::from_socket(socket).unwrap();
-        let queue = connection.new_event_queue::<WaylandClientStatePtr>();
-        let qh = queue.handle();
-        struct Registry;
-        impl Dispatch<wl_registry::WlRegistry, ()> for Registry {
-            fn event(
-                _: &mut Self,
-                _: &wl_registry::WlRegistry,
-                _: wl_registry::Event,
-                _: &(),
-                _: &Connection,
-                _: &QueueHandle<Self>,
-            ) {
-            }
-        }
-        let registry_queue = connection.new_event_queue::<Registry>();
-        let registry = connection
-            .display()
-            .get_registry(&registry_queue.handle(), ());
-        let activation = registry.bind::<xdg_activation_v1::XdgActivationV1, _, _>(1, 1, &qh, ());
-        let mut pending = HashMap::default();
-        let first = request_activation(
-            &activation,
-            &qh,
-            &mut pending,
-            PendingActivation::Uri("https://one.example/".into()),
-        );
-        let second = request_activation(
-            &activation,
-            &qh,
-            &mut pending,
-            PendingActivation::Uri("https://two.example/".into()),
-        );
-        assert_ne!(first.id(), second.id());
-        for (request, uri) in [
-            (&second, "https://two.example/"),
-            (&first, "https://one.example/"),
-        ] {
-            let Some(PendingActivation::Uri(actual)) = complete_activation(&mut pending, request)
-            else {
-                panic!("lost URI for token request {:?}", request.id());
-            };
-            assert_eq!(actual, uri);
-            assert!(
-                complete_activation(&mut pending, request).is_none(),
-                "a token completes only once"
-            );
-        }
-        assert!(pending.is_empty());
     }
 
     #[derive(Default)]

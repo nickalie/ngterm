@@ -25,17 +25,15 @@
 #                  published to AccessKit on initialization and geometry changes (E2E coverage Task 4, 0005); the
 #                  native key of a key with no symbols read on the effective layout, never `XKB_LAYOUT_INVALID`,
 #                  which libxkbcommon before 1.8 indexes out of bounds with (0006); outward IME rectangle rounding and
-#                  refresh sink tests, activation targets keyed by token request with launcher/portal token sink
-#                  tests (Ghostty v1.4.0 parity, 0007); per-MIME clipboard and primary selection reads, writes and
+#                  refresh sink tests, launcher/portal token sink tests (Ghostty v1.4.0 parity, 0007); per-MIME clipboard and primary selection reads, writes and
 #                  type listings for the Kitty clipboard protocol on Wayland and X11 (0008)
 #   gpui-pre-windows the native key behind each key event GPUI dispatches on Windows (its scan code, the layout's
 #                  unshifted character, the modifiers with Shift and those the layout used up, the text before Ctrl
 #                  transformations), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings and the
-#                  Kitty keyboard protocol (Task 4 of docs/plans/20261029-windows-support.md, 0001); the
-#                  DirectComposition target beneath the window's child windows, so the HTML overlays' WebView2 pages
-#                  show over GPUI (Task 6, 0002); `zoom` restoring a maximized window, as GPUI's other platforms toggle
-#                  it (Task 8, 0003); `start_window_move` and `show_window_menu` for the app's own title bar over the
-#                  hidden system one (0004)
+#                  Kitty keyboard protocol (Task 4 of docs/plans/20261029-windows-support.md, 0001); `zoom`
+#                  restoring a maximized window, as GPUI's other platforms toggle it (Task 8, 0002);
+#                  `start_window_move` and `show_window_menu` for the app's own title bar over the hidden system one
+#                  (0003)
 #   gpui-pre-macos the platform lock released for a menu item whose tag names no action, which deadlocked the main
 #                  thread on ngterm's own AppKit menu bar (0001); a pop-up window without a title bar opened as a
 #                  borderless panel with a shadow, the quick terminal's (0002), at the floating level (0003)
@@ -59,13 +57,13 @@
 set -euo pipefail
 shopt -s nullglob
 
-GPUI_VERSION="0.3.9"
+GPUI_VERSION="0.3.14"
 declare -A SHA256=(
-  [gpui-pre]="34f61c1cfd36fc9c436af09308c963822ae27a45a84feb21a77ba5c9e051f1c0"
-  [gpui-pre-wgpu]="5b1cdb26c1503bf9662ee8fbc5ab0b44b2deeee4b5c12dc67491ba6fb5fc544b"
-  [gpui-pre-linux]="e28213c3fde6f13e91ba0b74b90cbaadec9373e36a031eda98561d31059870f3"
-  [gpui-pre-windows]="513d4f0fc7d596d3bdef2a73a524ffb83dabc95bf484f2855a698e7f431290a9"
-  [gpui-pre-macos]="c7c988b7e49775cc8542dbe48d5a10e073d8e898a023ef3ff3d24f33363e9863"
+  [gpui-pre]="ab22c23c1304a0b3f34f64568f59a4ce2abbfab3727273a90c66b37924d31089"
+  [gpui-pre-wgpu]="2bbfee2ae183cf4bf5b1ee3a73f2b8fd726f0b78861b0c950308f6e9d0a33f2c"
+  [gpui-pre-linux]="9515d52d8378c5dda95b3b2536d3d05ea2431bc25d1d8bb4cdeb32f21090f4a1"
+  [gpui-pre-windows]="8badbaa4129a88e4d2fdaa1615fc61b2a59d4ebb2ac36e5de51f75598f0dd992"
+  [gpui-pre-macos]="23eeb64494000782e17b0ae0ec2c402ba7d76e5918a6af4759e60094fc8d6dcf"
 )
 CRATES=(gpui-pre gpui-pre-wgpu gpui-pre-linux gpui-pre-windows gpui-pre-macos)
 

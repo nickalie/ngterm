@@ -5,11 +5,12 @@ tag hung the main thread on its own non-reentrant mutex. ngterm builds its AppKi
 whenever a terminal has the focus. The lock is now released on both paths: the item validates as disabled and a click
 does nothing. scripts/vendor-gpui.sh applies this to the verified crates.io archive.
 
+diff -ruN a/src/platform.rs b/src/platform.rs
 --- a/src/platform.rs
 +++ b/src/platform.rs
-@@ -1504,9 +1504,9 @@
-         if let Some(mut callback) = lock.menu_command.take() {
-             let tag: NSInteger = msg_send![item, tag];
+@@ -1569,9 +1569,9 @@
+                 msg_send![item, tag]
+             };
              let index = tag as usize;
 -            if let Some(action) = lock.menu_actions.get(index) {
 -                let action = action.boxed_clone();
@@ -20,9 +21,9 @@ does nothing. scripts/vendor-gpui.sh applies this to the verified crates.io arch
                  callback(&*action);
              }
              platform.0.lock().menu_command.get_or_insert(callback);
-@@ -1522,9 +1522,9 @@
-         if let Some(mut callback) = lock.validate_menu_command.take() {
-             let tag: NSInteger = msg_send![item, tag];
+@@ -1591,9 +1591,9 @@
+                 msg_send![item, tag]
+             };
              let index = tag as usize;
 -            if let Some(action) = lock.menu_actions.get(index) {
 -                let action = action.boxed_clone();

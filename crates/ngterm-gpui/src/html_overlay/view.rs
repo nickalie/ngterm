@@ -36,7 +36,7 @@ use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, DmaBufPlane, DmaBuffer, ElementInputHandler,
     EntityInputHandler, FocusHandle, Focusable, HitboxBehavior, InteractiveElement as _, IntoElement, KeyUpEvent,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, PixelRect,
-    Pixels, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Pixels, Render, ScrollEvent, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
     UTF16Selection, Window, canvas, div, point, px, size,
 };
 use ngterm_wpe_client::{
@@ -569,7 +569,7 @@ impl PageView {
         }
     }
 
-    fn scroll(&mut self, event: &ScrollWheelEvent) {
+    fn scroll(&mut self, event: &ScrollEvent) {
         let Some(bounds) = self.bounds else { return };
         let (x, y) = input::local(event.position, bounds.origin);
         let (delta_x, delta_y, precise) = input::scroll(event.delta);
@@ -681,7 +681,7 @@ fn listen(view: &gpui_kit::Entity<PageView>, hitbox: &gpui_kit::Hitbox, window: 
         }
     });
     let (target, over) = (view.downgrade(), hitbox.clone());
-    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+    window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
         if phase == DispatchPhase::Bubble && over.should_handle_scroll(window) {
             let _ = target.update(cx, |view, _| view.scroll(event));
         }

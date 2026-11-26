@@ -214,7 +214,7 @@ diff -ruN a/src/linux/native_key.rs b/src/linux/native_key.rs
 diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
 --- a/src/linux/wayland/client.rs
 +++ b/src/linux/wayland/client.rs
-@@ -87,10 +87,11 @@
+@@ -90,10 +90,11 @@
  use crate::linux::{
      DOUBLE_CLICK_INTERVAL, LinuxCommon, LinuxKeyboardLayout, PIPE_READ_TIMEOUT, SCROLL_LINES,
      capslock_from_xkb, cursor_style_to_icon_names, get_xkb_compose_state, is_within_click_distance,
@@ -227,9 +227,9 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
 -        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
 +        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE},
          cursor::Cursor,
-         serial::{Serial, SerialKind, SerialTracker},
+         serial::{ActivationContext, Serial, SerialKind, SerialTracker},
          to_shape,
-@@ -1446,7 +1447,7 @@
+@@ -1450,7 +1451,7 @@
                  return;
              };
              let data_source = primary_selection_manager.create_source(&state.globals.qh, ());
@@ -238,7 +238,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
                  data_source.offer(mime_type.to_string());
              }
              data_source.offer(state.clipboard.self_mime());
-@@ -1472,7 +1473,7 @@
+@@ -1476,7 +1477,7 @@
              };
              let data_source = data_device_manager
                  .create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
@@ -247,7 +247,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
                  data_source.offer(mime_type.to_string());
              }
              data_source.offer(state.clipboard.self_mime());
-@@ -2166,10 +2167,12 @@
+@@ -2149,10 +2150,12 @@
                      wl_keyboard::KeyState::Pressed if !keysym.is_modifier_key() => {
                          let mut keystroke =
                              keystroke_from_xkb(keymap_state, state.modifiers, keycode);
@@ -260,7 +260,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
                                      keystroke.key_char = None;
                                      state.pre_edit_text =
                                          compose.utf8().or(keystroke_underlying_dead_key(keysym));
-@@ -2206,6 +2209,13 @@
+@@ -2189,6 +2192,13 @@
                              }
                              state.compose_state = Some(compose);
                          }
@@ -274,7 +274,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
                          let input = PlatformInput::KeyDown(KeyDownEvent {
                              keystroke: keystroke.clone(),
                              is_held: false,
-@@ -2226,6 +2236,10 @@
+@@ -2209,6 +2219,10 @@
                                      is_held: true,
                                      prefer_character_input: false,
                                  });
@@ -285,7 +285,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
                                  let this = this.clone();
                                  move |event_timestamp, _metadata, _| {
                                      let Some(client) = this.0.upgrade() else {
-@@ -2244,6 +2258,9 @@
+@@ -2227,6 +2241,9 @@
                                          state.keyboard_focused_window.as_ref().unwrap().clone();
  
                                      drop(state);
@@ -295,7 +295,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
                                      focused_window.handle_input(input.clone());
  
                                      // If the new scheduled time is in the past the event will repeat as soon as possible
-@@ -2253,18 +2270,21 @@
+@@ -2236,18 +2253,21 @@
                              .unwrap();
  
                          drop(state);
@@ -320,7 +320,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
                          focused_window.handle_input(input);
                      }
                      _ => {}
-@@ -2306,6 +2326,7 @@
+@@ -2289,6 +2309,7 @@
                      // IBus Intercepts keys like `a`, `b`, but those keys are needed for vim mode.
                      // We should only send ASCII characters to Zed, otherwise a user could remap a letter like `か` or `相`.
                      if commit_text.len() == 1 {
@@ -504,7 +504,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
                  window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
              }
              Event::XinputButtonPress(event) => {
-@@ -1606,6 +1624,7 @@
+@@ -1608,6 +1626,7 @@
  
      fn handle_keyboard_layout_change(&self) {
          let mut state = self.0.borrow_mut();
@@ -512,7 +512,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
          let layout_idx = state.xkb.serialize_layout(STATE_LAYOUT_EFFECTIVE);
          let keymap = state.xkb.get_keymap();
          let layout_name = keymap.layout_get_name(layout_idx);
-@@ -1827,8 +1846,9 @@
+@@ -1829,8 +1848,9 @@
          let state = self.0.borrow_mut();
          state
              .clipboard
@@ -523,7 +523,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
                  clipboard::ClipboardKind::Primary,
                  clipboard::WaitConfig::None,
              )
-@@ -1840,8 +1860,9 @@
+@@ -1842,8 +1862,9 @@
          let mut state = self.0.borrow_mut();
          state
              .clipboard
@@ -590,9 +590,9 @@ diff -ruN a/src/linux.rs b/src/linux.rs
  mod keyboard;
 +mod native_key;
  mod platform;
- mod system_notifications;
  #[cfg(any(feature = "wayland", feature = "x11"))]
-@@ -14,7 +16,14 @@
+ mod power;
+@@ -16,7 +18,14 @@
  #[cfg(any(feature = "wayland", feature = "x11"))]
  mod xdg_desktop_portal;
  

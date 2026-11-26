@@ -11,7 +11,7 @@ platforms are unchanged. scripts/vendor-gpui.sh applies this to the verified cra
 diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
 --- a/src/linux/wayland/client.rs
 +++ b/src/linux/wayland/client.rs
-@@ -783,7 +783,9 @@
+@@ -791,7 +791,9 @@
          update_ime_cursor_rectangle(&text_input, &mut state.last_ime_cursor_rectangle, bounds);
      }
  
@@ -22,7 +22,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
          let client = self.get_client();
          let mut state = client.borrow_mut();
          let changed = if let Some(keymap_state) = &state.keymap_state {
-@@ -803,7 +805,7 @@
+@@ -811,7 +813,7 @@
              changed
          };
  
@@ -31,7 +31,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
              .then(|| {
                  state
                      .common
-@@ -2173,7 +2175,8 @@
+@@ -2148,7 +2150,8 @@
                  state.compose_state = get_xkb_compose_state(&xkb_context);
                  drop(state);
  
@@ -41,7 +41,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
              }
              wl_keyboard::Event::Enter { surface, .. } => {
                  state.keyboard_focused_window = get_window(&mut state, &surface.id());
-@@ -2230,7 +2233,7 @@
+@@ -2205,7 +2208,7 @@
                  }
  
                  if group != old_layout {
@@ -72,7 +72,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
                  }
              }
              Event::KeyPress(event) => {
-@@ -1623,13 +1624,15 @@
+@@ -1625,13 +1626,15 @@
          Some(())
      }
  

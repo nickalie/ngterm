@@ -6,7 +6,7 @@ scripts/vendor-gpui.sh applies this to the verified crates.io archive.
 diff -ruN a/src/window.rs b/src/window.rs
 --- a/src/window.rs
 +++ b/src/window.rs
-@@ -947,7 +947,9 @@
+@@ -949,7 +949,9 @@
      fn zoom(&self) {
          unsafe {
              if IsWindowVisible(self.0.hwnd).as_bool() {

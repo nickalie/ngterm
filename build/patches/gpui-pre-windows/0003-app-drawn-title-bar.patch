@@ -12,24 +12,26 @@ scripts/vendor-gpui.sh applies this to the verified crates.io archive.
 diff -ruN a/src/events.rs b/src/events.rs
 --- a/src/events.rs
 +++ b/src/events.rs
-@@ -29,6 +29,8 @@
+@@ -28,6 +28,8 @@
+ pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
  pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
- pub(crate) const WM_GPUI_KEYDOWN: u32 = WM_USER + 8;
  pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
 +// The window menu a title bar the app draws asks for, at the screen point its LPARAM packs.
 +pub(crate) const WM_GPUI_SHOW_WINDOW_MENU: u32 = WM_USER + 11;
  
  const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
  
-@@ -160,6 +162,7 @@
-             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
-             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
-             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
-+            WM_GPUI_SHOW_WINDOW_MENU => self.handle_show_window_menu(handle, lparam),
-             DM_POINTERHITTEST => self.handle_dm_pointer_hit_test(wparam),
+@@ -159,7 +161,8 @@
              WM_GETOBJECT => self.handle_wm_getobject(wparam, lparam),
+             WM_GPUI_CURSOR_STYLE_CHANGED
+             | WM_GPUI_FORCE_UPDATE_WINDOW
+-            | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(handle, msg, wparam, lparam),
++            | WM_GPUI_GPU_DEVICE_LOST
++            | WM_GPUI_SHOW_WINDOW_MENU => self.handle_gpui_events(handle, msg, wparam, lparam),
              _ => None,
-@@ -1055,6 +1058,11 @@
+         };
+         if let Some(n) = handled {
+@@ -1074,6 +1077,11 @@
          wparam: WPARAM,
          lparam: LPARAM,
      ) -> Option<isize> {
@@ -41,7 +43,7 @@ diff -ruN a/src/events.rs b/src/events.rs
          if let Some(mut func) = self.state.callbacks.input.take() {
              let scale_factor = self.state.scale_factor.get();
              let mut cursor_point = POINT {
-@@ -1076,6 +1084,9 @@
+@@ -1095,6 +1103,9 @@
              self.state.callbacks.input.set(Some(func));
  
              if handled {
@@ -51,8 +53,13 @@ diff -ruN a/src/events.rs b/src/events.rs
                  return Some(0);
              }
          } else {
-@@ -1298,6 +1309,50 @@
-             .detach();
+@@ -1331,10 +1342,55 @@
+             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
+             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
+             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
++            WM_GPUI_SHOW_WINDOW_MENU => self.handle_show_window_menu(handle, lparam),
+             _ => unreachable!(),
+         }
      }
  
 +    /// The system menu at the screen point `lparam` packs, its items enabled for the window's state as a caption's
@@ -100,12 +107,12 @@ diff -ruN a/src/events.rs b/src/events.rs
 +    }
 +
      fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
-         let devices = lparam.0 as *const DirectXDevices;
-         let devices = unsafe { &*devices };
+         if lparam.0 == 0 {
+             return None;
 diff -ruN a/src/window.rs b/src/window.rs
 --- a/src/window.rs
 +++ b/src/window.rs
-@@ -944,6 +944,48 @@
+@@ -946,6 +946,48 @@
          unsafe { ShowWindowAsync(self.0.hwnd, SW_MINIMIZE).ok().log_err() };
      }
  
@@ -144,7 +151,7 @@ diff -ruN a/src/window.rs b/src/window.rs
 +            PostMessageW(
 +                Some(self.0.hwnd),
 +                WM_GPUI_SHOW_WINDOW_MENU,
-+                WPARAM(0),
++                WPARAM(self.0.validation_number),
 +                LPARAM(packed as isize),
 +            )
 +            .log_err();

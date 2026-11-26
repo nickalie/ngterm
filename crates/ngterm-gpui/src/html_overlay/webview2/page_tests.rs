@@ -1983,7 +1983,7 @@ fn told_keys(view: &Probe) -> Vec<Vec<u32>> {
 /// A press of `key` the page's accelerator reports, as `wire_keys` hands it over.
 #[cfg(windows)]
 fn accelerator_key(driven: &Driven, visual: &mut VisualTestContext, key: &str) {
-    let keystroke = gpui_kit::Keystroke::parse(key).unwrap();
+    let keystroke = crate::parse_keystroke(key);
     assert!(crate::keymap_dispatch::takes(&crate::keymap_dispatch::page_stroke(
         &keystroke, 0, false
     )));

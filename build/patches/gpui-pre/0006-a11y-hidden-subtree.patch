@@ -14,7 +14,7 @@ scripts/vendor-gpui.sh applies this after 0005.
 diff -ruN a/src/app/test_context.rs b/src/app/test_context.rs
 --- a/src/app/test_context.rs
 +++ b/src/app/test_context.rs
-@@ -1060,6 +1060,26 @@
+@@ -1085,6 +1085,26 @@
          self.background_executor.run_until_parked();
      }
  
@@ -44,7 +44,7 @@ diff -ruN a/src/app/test_context.rs b/src/app/test_context.rs
 diff -ruN a/src/element.rs b/src/element.rs
 --- a/src/element.rs
 +++ b/src/element.rs
-@@ -425,7 +425,7 @@
+@@ -433,7 +433,7 @@
  
                  let bounds = window.layout_bounds(layout_id);
                  let mut pushed_a11y_node = false;
@@ -56,7 +56,7 @@ diff -ruN a/src/element.rs b/src/element.rs
 diff -ruN a/src/elements/div.rs b/src/elements/div.rs
 --- a/src/elements/div.rs
 +++ b/src/elements/div.rs
-@@ -2043,7 +2043,9 @@
+@@ -2141,7 +2141,9 @@
                      return hitbox;
                  }
  
@@ -67,7 +67,7 @@ diff -ruN a/src/elements/div.rs b/src/elements/div.rs
                      window.with_element_offset(scroll_offset, |window| {
                          if let Some(order_fn) = &self.prepaint_order_fn {
                              let order = order_fn(window, cx);
-@@ -2058,6 +2060,13 @@
+@@ -2156,6 +2158,13 @@
                              }
                          }
                      });
@@ -84,8 +84,8 @@ diff -ruN a/src/elements/div.rs b/src/elements/div.rs
 diff -ruN a/src/platform/test/window.rs b/src/platform/test/window.rs
 --- a/src/platform/test/window.rs
 +++ b/src/platform/test/window.rs
-@@ -58,6 +58,10 @@
-     appearance: WindowAppearance,
+@@ -65,6 +65,10 @@
+     decorations: Decorations,
      external_drag_files: Vec<(PathBuf, bool)>,
      start_external_drag_result: bool,
 +    /// The callbacks GPUI connected assistive technology through, and the tree update it sent last (ngterm patch
@@ -95,16 +95,16 @@ diff -ruN a/src/platform/test/window.rs b/src/platform/test/window.rs
  }
  
  #[derive(Clone)]
-@@ -133,6 +137,8 @@
-             appearance: WindowAppearance::Light,
+@@ -147,6 +151,8 @@
+             decorations: Decorations::default(),
              external_drag_files: Vec::new(),
              start_external_drag_result: false,
 +            a11y_callbacks: None,
 +            a11y_tree_update: None,
          })))
      }
-     pub fn simulate_scheduled_frame(&self) -> bool {
-@@ -572,6 +578,14 @@
+     pub fn simulate_close(&self) {
+@@ -699,6 +705,14 @@
          }
      }
  

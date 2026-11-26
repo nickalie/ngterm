@@ -603,7 +603,7 @@ fn a_web_views_reports_and_policy_reach_its_page_through_the_pump(cx: &mut TestA
 }
 
 fn takes_page_key(text: &str) -> bool {
-    let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+    let keystroke = crate::parse_keystroke(text).with_simulated_ime();
     crate::keymap_dispatch::takes(&crate::terminal::input::KeyStroke::new(
         &keystroke,
         &crate::terminal::input::Source::Keystroke,
@@ -613,7 +613,7 @@ fn takes_page_key(text: &str) -> bool {
 
 /// Takes a page key and posts exactly the report its native callback would post.
 fn queued_key(id: Uuid, text: &str) {
-    let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+    let keystroke = crate::parse_keystroke(text).with_simulated_ime();
     assert!(takes_page_key(text), "{text}");
     #[cfg(windows)]
     let report = Report::Key(keystroke, 0, false);

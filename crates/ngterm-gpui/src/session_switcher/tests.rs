@@ -1,7 +1,7 @@
 //! The walk (ported from the GTK build's `session_switcher.rs` tests) and the keys it reads; the walk through a
 //! window's keys and its Control release is in `window/tests.rs`.
 
-use gpui_kit::{Keystroke, TestAppContext};
+use gpui_kit::TestAppContext;
 
 use super::*;
 use crate::terminal::input::Source;
@@ -42,7 +42,7 @@ fn the_highlight_wraps_both_ways_and_a_reset_selects_nothing() {
 }
 
 fn key(source: &str) -> Option<SwitchKey> {
-    let keystroke = Keystroke::parse(source).unwrap();
+    let keystroke = crate::parse_keystroke(source);
     switch_key(&KeyStroke::new(&keystroke, &Source::Keystroke, false))
 }
 

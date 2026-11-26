@@ -8,7 +8,7 @@ scripts/vendor-gpui.sh applies this after 0003.
 diff -ruN a/src/platform.rs b/src/platform.rs
 --- a/src/platform.rs
 +++ b/src/platform.rs
-@@ -1503,6 +1503,12 @@
+@@ -1640,6 +1640,12 @@
      fn prewarm_fonts(&self, _font_ids: &[FontId]) {}
      /// Get metrics for a font.
      fn font_metrics(&self, font_id: FontId) -> FontMetrics;
@@ -24,7 +24,7 @@ diff -ruN a/src/platform.rs b/src/platform.rs
 diff -ruN a/src/text_system.rs b/src/text_system.rs
 --- a/src/text_system.rs
 +++ b/src/text_system.rs
-@@ -521,6 +521,12 @@
+@@ -491,6 +491,12 @@
          self.read_metrics(font_id, |metrics| *metrics)
      }
  

@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 
-use gpui_kit::{Keystroke, TestAppContext};
+use gpui_kit::TestAppContext;
 
 use super::*;
 use crate::terminal::input::Source;
@@ -119,7 +119,7 @@ fn a_row_answers_with_its_callers_index_or_the_typed_text() {
 
 /// The key a GPUI keystroke spells, read off a US keyboard as without a native record.
 fn key(source: &str) -> Option<PickKey> {
-    let keystroke = Keystroke::parse(source).unwrap();
+    let keystroke = crate::parse_keystroke(source);
     pick_key(&KeyStroke::new(&keystroke, &Source::Keystroke, false))
 }
 
@@ -155,7 +155,7 @@ fn keypad_arrows_move_only_with_num_lock_off() {
             ..NativeKey::default()
         };
         pick_key(&KeyStroke::new(
-            &Keystroke::parse(name).unwrap(),
+            &crate::parse_keystroke(name),
             &Source::Native(native),
             false,
         ))

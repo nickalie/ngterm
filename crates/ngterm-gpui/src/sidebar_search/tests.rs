@@ -1,13 +1,11 @@
 //! The search field's own keys; the field in a window (its chord, typing, Return, Escape, the clear button) is in
 //! `window/tests.rs`.
 
-use gpui_kit::Keystroke;
-
 use super::*;
 use crate::terminal::input::Source;
 
 fn key(source: &str) -> Option<FieldKey> {
-    let keystroke = Keystroke::parse(source).unwrap();
+    let keystroke = crate::parse_keystroke(source);
     field_key(&KeyStroke::new(&keystroke, &Source::Keystroke, false))
 }
 

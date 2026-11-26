@@ -26,14 +26,6 @@ pub struct Inert {
     inert: bool,
 }
 
-impl IntoElement for Inert {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl Element for Inert {
     type RequestLayoutState = ();
     type PrepaintState = ();

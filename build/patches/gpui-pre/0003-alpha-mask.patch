@@ -10,7 +10,7 @@ needs them pixel for pixel in the cell. Every platform atlas takes the key uncha
 diff -ruN a/src/platform.rs b/src/platform.rs
 --- a/src/platform.rs
 +++ b/src/platform.rs
-@@ -1700,6 +1700,16 @@
+@@ -1837,6 +1837,16 @@
      Glyph(RenderGlyphParams),
      Svg(RenderSvgParams),
      Image(RenderImageParams),
@@ -27,7 +27,7 @@ diff -ruN a/src/platform.rs b/src/platform.rs
  }
  
  impl AtlasKey {
-@@ -1715,7 +1725,7 @@
+@@ -1852,7 +1862,7 @@
                      AtlasTextureKind::Monochrome
                  }
              }
@@ -36,7 +36,7 @@ diff -ruN a/src/platform.rs b/src/platform.rs
              AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
          }
      }
-@@ -1739,6 +1749,12 @@
+@@ -1876,6 +1886,12 @@
      }
  }
  
@@ -52,16 +52,16 @@ diff -ruN a/src/platform.rs b/src/platform.rs
 diff -ruN a/src/window.rs b/src/window.rs
 --- a/src/window.rs
 +++ b/src/window.rs
-@@ -15,7 +15,7 @@
-     MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
-     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-     PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
+@@ -17,7 +17,7 @@
+     MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, PaintedPath, Path,
+     Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
+     Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
 -    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
 +    RenderAlphaMaskParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
      SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
-     StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
-     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
-@@ -4896,6 +4896,56 @@
+     SpriteAnimation, SpriteAnimationId, StrikethroughStyle, Style, SubpixelSprite, Subscription,
+     SystemWindowTab, SystemWindowTabController, TabStopMap, Task, TextInputConfiguration,
+@@ -5366,6 +5366,56 @@
          Ok(())
      }
  
@@ -105,7 +105,7 @@ diff -ruN a/src/window.rs b/src/window.rs
 +        let content_mask = self.snapped_content_mask();
 +        self.next_frame.scene.insert_primitive(MonochromeSprite {
 +            order: 0,
-+            pad: 0,
++            animation: SpriteAnimationId::NONE,
 +            bounds,
 +            content_mask,
 +            color: color.opacity(element_opacity),
@@ -116,5 +116,5 @@ diff -ruN a/src/window.rs b/src/window.rs
 +    }
 +
      fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
-         if self.platform_window.background_appearance() != WindowBackgroundAppearance::Opaque {
-             return false;
+         // Checked first because it's cheap, while some platforms lock the window to read its
+         // background appearance, and this runs for every glyph.

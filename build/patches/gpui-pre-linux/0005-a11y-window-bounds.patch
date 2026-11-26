@@ -16,15 +16,15 @@ scripts/vendor-gpui.sh applies this to the verified crates.io archive.
 diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
 --- a/src/linux/wayland/window.rs
 +++ b/src/linux/wayland/window.rs
-@@ -1163,6 +1163,7 @@
+@@ -1187,6 +1187,7 @@
  
              let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;
-             drop(state);
+             update_window(state);
 +            self.a11y_update_window_bounds();
              if initial_configure {
                  self.frame(None, FrameRequestSource::NativeCallback);
              } else {
-@@ -1504,6 +1505,21 @@
+@@ -1528,6 +1529,21 @@
          bounds
      }
  
@@ -46,7 +46,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
      pub fn set_size_and_scale(&self, size: Option<Size<Pixels>>, scale: Option<f32>) {
          let (size, scale) = {
              let mut state = self.state.borrow_mut();
-@@ -1525,6 +1541,7 @@
+@@ -1549,6 +1565,7 @@
              (state.bounds.size, state.scale)
          };
  
@@ -54,7 +54,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
          let callback = self.callbacks.borrow_mut().resize.take();
          if let Some(mut fun) = callback {
              fun(size, scale);
-@@ -2248,6 +2265,7 @@
+@@ -2296,6 +2313,7 @@
              accesskit_unix::Adapter::new(activation_handler, action_handler, deactivation_handler);
  
          self.borrow_mut().accesskit_adapter = Some(adapter);
@@ -62,7 +62,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
      }
  
      fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
-@@ -2258,7 +2276,7 @@
+@@ -2306,7 +2324,7 @@
      }
  
      fn a11y_update_window_bounds(&self) {
@@ -88,7 +88,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
 diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
 --- a/src/linux/x11/window.rs
 +++ b/src/linux/x11/window.rs
-@@ -1297,6 +1297,39 @@
+@@ -1319,6 +1319,39 @@
          bounds.map(|b| b.scale(scale_factor))
      }
  
@@ -128,7 +128,7 @@ diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
      pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<()> {
          let (is_resize, content_size, scale_factor) = {
              let mut state = self.state.borrow_mut();
-@@ -1327,6 +1360,7 @@
+@@ -1349,6 +1382,7 @@
              result
          };
  
@@ -136,7 +136,7 @@ diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
          let mut callbacks = self.callbacks.borrow_mut();
          if let Some(ref mut fun) = callbacks.resize {
              fun(content_size, scale_factor)
-@@ -2021,6 +2055,7 @@
+@@ -2052,6 +2086,7 @@
              accesskit_unix::Adapter::new(activation_handler, action_handler, deactivation_handler);
  
          self.0.state.borrow_mut().accesskit_adapter = Some(adapter);
@@ -144,7 +144,7 @@ diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
      }
  
      fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
-@@ -2031,33 +2066,7 @@
+@@ -2062,33 +2097,7 @@
      }
  
      fn a11y_update_window_bounds(&self) {

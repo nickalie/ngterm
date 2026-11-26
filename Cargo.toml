@@ -147,17 +147,17 @@ soup-sys = { package = "soup3-sys", version = "0.9" }
 glib = "0.22"
 gio = "0.22"
 # The GPUI frontend (ngterm-gpui): Zed's GPUI through gpui-kit, which pins the `gpui-pre` snapshot it re-exports
-# (`=0.3.9`, wgpu 29.0.4). Default features: its components and assets, never `gpui-fast` (longbridge's own backend).
-gpui-kit = "=0.7.3"
+# (`=0.3.14`, wgpu 30.0.1). Default features: its components and assets, never `gpui-fast` (longbridge's own backend).
+gpui-kit = "=0.11.0"
 # ngterm-gpui's tests measure a real font through GPUI's Linux text system (`CosmicTextSystem`), the crate gpui-kit
 # already links at the version its `gpui-pre` pins.
-gpui-pre-wgpu = "=0.3.9"
+gpui-pre-wgpu = "=0.3.14"
 # ngterm-gpui reads the native key behind a key event (`current_native_input`, a patch of ours) from GPUI's Linux
 # platform, the crate gpui-kit already links.
-gpui-pre-linux = { version = "=0.3.9", default-features = false }
+gpui-pre-linux = { version = "=0.3.14", default-features = false }
 # ngterm-gpui reads the native key behind a key event (`current_native_input`, a patch of ours) from GPUI's Windows
 # platform, the crate gpui-kit already links there.
-gpui-pre-windows = { version = "=0.3.9", default-features = false }
+gpui-pre-windows = { version = "=0.3.14", default-features = false }
 # ngterm-gpui's procedural sprites (box drawing, blocks, powerline, braille) fill and stroke their paths with it, as
 # Ghostty's sprite font does with z2d. No PNG codec (`png-format`): the sprites only rasterize.
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
@@ -281,9 +281,8 @@ gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
 # Windows Task 4 (docs/plans/20261029-windows-support.md): the native key behind each key event GPUI dispatches on
 # Windows (its scan code, the layout's unshifted character, the modifiers with Shift and those the layout used up),
-# the Windows form of gpui-pre-linux's; Task 6: its DirectComposition target beneath the window's child windows, so the
-# HTML overlays' WebView2 pages show: vendor/gpui-pre-windows is the verified crates.io source plus
-# build/patches/gpui-pre-windows.
+# the Windows form of gpui-pre-linux's; `zoom` toggles and the app's own title bar's move and window menu:
+# vendor/gpui-pre-windows is the verified crates.io source plus build/patches/gpui-pre-windows.
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 # A menu item whose tag names no action no longer deadlocks the main thread, as ngterm's own AppKit menu bar's Edit items
 # did; a pop-up window without a title bar is a borderless panel at the floating level, the quick terminal's:

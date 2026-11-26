@@ -1,7 +1,6 @@
 //! The bar's keys, which search it shows, and its input landing only on the search it was typed for (ported from the
 //! GTK build's `search.rs` tests); the bar in a window, its focus and counter, is in `window/tests.rs`.
 
-use gpui_kit::Keystroke;
 use ngterm_core::model::{SearchReport, StatusPane, WindowLibrary};
 use ngterm_core::{CoreConfig, CoreState};
 use ngterm_proto::AppIdentity;
@@ -10,7 +9,7 @@ use super::*;
 use crate::terminal::input::Source;
 
 fn key(source: &str) -> Option<SearchInput> {
-    let keystroke = Keystroke::parse(source).unwrap();
+    let keystroke = crate::parse_keystroke(source);
     field_key(&KeyStroke::new(&keystroke, &Source::Keystroke, false))
 }
 

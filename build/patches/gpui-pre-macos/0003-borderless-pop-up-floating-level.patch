@@ -7,17 +7,18 @@ with a title bar stays at `NSPopUpWindowLevel`. scripts/vendor-gpui.sh applies t
 diff -ruN a/src/window.rs b/src/window.rs
 --- a/src/window.rs
 +++ b/src/window.rs
-@@ -1236,7 +1236,12 @@
+@@ -1316,7 +1316,13 @@
                  WindowKind::PopUp | WindowKind::AnchoredPopup(_) => {
                      add_mouse_tracking_area(tracking_view);
  
--                    native_window.setLevel_(NSPopUpWindowLevel);
+-                    let _: () = msg_send![native_window, setLevel: NSPopUpWindowLevel];
 +                    // A borderless panel floats over normal windows, not over other apps' floating panels.
-+                    native_window.setLevel_(if borderless {
++                    let level = if borderless {
 +                        NSFloatingWindowLevel
 +                    } else {
 +                        NSPopUpWindowLevel
-+                    });
++                    };
++                    let _: () = msg_send![native_window, setLevel: level];
                      if borderless {
                          // A borderless window has no shadow until it asks for one.
-                         let _: () = msg_send![native_window, setHasShadow: YES];
+                         let _: () = msg_send![native_window, setHasShadow: Bool::YES];

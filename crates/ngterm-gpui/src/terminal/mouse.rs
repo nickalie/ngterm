@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{
     App, Bounds, Context, CursorStyle, DispatchPhase, ElementInputHandler, Entity, Hitbox, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent, Task, Window,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollEvent, Task, Window,
 };
 use ngterm_core::ghostty_config::binds::{Action, CopyFormat, Mods};
 use ngterm_core::ghostty_config::{MiddleClickAction, MouseShiftCapture, RightClickAction};
@@ -88,7 +88,7 @@ impl TerminalView {
         });
         let target = view.downgrade();
         let over = hitbox.clone();
-        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+        window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
             // not `is_hovered`, which is false while the last input was a key: a wheel turned after typing, the
             // pointer unmoved, would be lost
             if phase == DispatchPhase::Bubble && over.should_handle_scroll(window) {
@@ -694,7 +694,7 @@ impl TerminalView {
         self.refresh_link(&pane, position, cx);
     }
 
-    pub(super) fn scroll_wheel(&mut self, event: &ScrollWheelEvent, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn scroll_wheel(&mut self, event: &ScrollEvent, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
         let Some(pane) = self.live_pane() else {
             return;
         };
