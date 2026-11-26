@@ -7,17 +7,23 @@ instance gets a fake token and none of the run's."""
 
 from __future__ import annotations
 
-import json
 import sys
-import threading
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler
 
 import pytest
 from agterm_conformance import llvm_profiles
 from agterm_conformance.loopback import serve
+from agterm_conformance.releases_api import (
+    API_PATH,
+    FAKE_TOKEN,
+    NEWER_RELEASE,
+    StandIn,
+    bad_credentials,
+    rate_limited,
+    release,
+    server_error,
+    too_many_requests,
+)
 from agterm_conformance.wait import wait_until
 
 pytestmark = [
@@ -28,67 +34,7 @@ pytestmark = [
     pytest.mark.skipif(sys.platform == "darwin", reason="no update format fits a private install on macOS"),
 ]
 
-API_PATH = "/repos/nickalie/ngterm/releases/latest"
-FAKE_TOKEN = "conformance-fake-github-token"
-# Below every release: the check finds no newer one and downloads nothing.
-OLD_RELEASE = {"tag_name": "v0.0.1", "draft": False, "prerelease": False, "assets": []}
 CHECK_TIMEOUT = 30.0
-
-Answer = tuple[int, dict[str, str], bytes]
-
-
-def rate_limited() -> Answer:
-    reset = str(int(time.time()) + 600)
-    headers = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": reset}
-    return 403, headers, b'{"message": "API rate limit exceeded"}'
-
-
-def release() -> Answer:
-    return 200, {"Content-Type": "application/json"}, json.dumps(OLD_RELEASE).encode()
-
-
-def bad_credentials() -> Answer:
-    return 401, {}, b'{"message": "Bad credentials"}'
-
-
-@dataclass(frozen=True)
-class Request:
-    path: str
-    headers: dict[str, str]
-
-
-class StandIn:
-    """GitHub's releases API: it records each request and gives the next answer of `answers`, then a rate limit."""
-
-    def __init__(self, answers: list[Callable[[], Answer]]) -> None:
-        self.answers = answers
-        self.requests: list[Request] = []
-        self.lock = threading.Lock()
-
-    def handler(self) -> type[BaseHTTPRequestHandler]:
-        stand_in = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802 - http.server's name
-                with stand_in.lock:
-                    index = len(stand_in.requests)
-                    stand_in.requests.append(Request(self.path, {k.lower(): v for k, v in self.headers.items()}))
-                status, headers, body = (stand_in.answers[index] if index < len(stand_in.answers) else rate_limited)()
-                self.send_response(status)
-                for name, value in headers.items():
-                    self.send_header(name, value)
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - http.server's signature
-                pass
-
-        return Handler
-
-    def received(self, count: int) -> list[Request] | None:
-        with self.lock:
-            return list(self.requests) if len(self.requests) >= count else None
 
 
 @pytest.mark.parametrize("second", [release, bad_credentials], ids=["token-accepted", "token-refused"])
@@ -107,3 +53,52 @@ def test_a_rate_limited_check_asks_again_with_the_local_token(launch, second):
         assert request.headers["user-agent"].startswith("ngterm/")
     assert "authorization" not in first.headers
     assert retry.headers["authorization"] == f"Bearer {FAKE_TOKEN}"
+
+
+# The updater's RETRY_MARGIN: how long after the limit resets the automatic check tries again.
+RETRY_MARGIN = 30.0
+# The reset in seconds that a limit names here; `Date` and the reset have whole seconds, so the wait is off by one.
+RESET_IN = 2
+DEFERRED = "automatic update check deferred"
+FAILED = "release update failed"
+
+
+def _log(ctl) -> str:
+    return ctl.instance.log.read_text(encoding="utf-8", errors="replace")
+
+
+@pytest.mark.parametrize(
+    "limit",
+    [lambda: rate_limited(RESET_IN), lambda: too_many_requests(RESET_IN)],
+    ids=["403-ratelimit-reset", "429-retry-after"],
+)
+def test_an_automatic_check_waits_until_the_rate_limit_resets(launch, limit):
+    stand_in = StandIn([limit, release])
+    with serve(stand_in.handler()) as server:
+        ctl = launch(releases_api=f"http://127.0.0.1:{server.server_port}{API_PATH}")
+        wait_until(lambda: stand_in.received(1), timeout=CHECK_TIMEOUT)
+        wait_until(lambda: DEFERRED in _log(ctl), timeout=CHECK_TIMEOUT)
+        first, second = wait_until(lambda: stand_in.received(2), timeout=RETRY_MARGIN + CHECK_TIMEOUT)[:2]
+        time.sleep(3)
+
+    gap = second.at - first.at
+    assert RETRY_MARGIN + RESET_IN - 1 <= gap <= RETRY_MARGIN + RESET_IN + 10, gap
+    assert stand_in.count() == 2
+    log = _log(ctl)
+    assert log.count(DEFERRED) == 1 and FAILED not in log, log
+
+
+def test_an_automatic_check_defers_a_server_error_and_fails_on_a_missing_asset(launch):
+    quiet = StandIn([server_error], then=release)
+    failing = StandIn([lambda: release(NEWER_RELEASE)])
+    with serve(quiet.handler()) as server, serve(failing.handler()) as other:
+        deferred = launch(releases_api=f"http://127.0.0.1:{server.server_port}{API_PATH}")
+        failed = launch(releases_api=f"http://127.0.0.1:{other.server_port}{API_PATH}")
+        wait_until(lambda: DEFERRED in _log(deferred), timeout=CHECK_TIMEOUT)
+        wait_until(lambda: FAILED in _log(failed), timeout=CHECK_TIMEOUT)
+
+    assert FAILED not in _log(deferred)
+    assert "503" in _log(deferred)
+    assert quiet.count() == 1
+    assert DEFERRED not in _log(failed)
+    assert "Release is missing a unique" in _log(failed)

@@ -151,3 +151,4 @@ rust:
   sidebar-search-clear: {status: uncovered, site: crates/ngterm-gpui/src/sidebar_search.rs}
   sidebar-search-empty: {status: uncovered, site: crates/ngterm-gpui/src/sidebar/view.rs}
   sidebar-search-empty-clear: {status: uncovered, site: crates/ngterm-gpui/src/sidebar/view.rs}
+  update-status: {status: uncovered, site: crates/ngterm-gpui/src/updater.rs}
