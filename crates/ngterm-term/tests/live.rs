@@ -12,6 +12,11 @@
 //! own; PowerShell on Windows. The replies' tests read the program's raw input with a POSIX script, so they run on
 //! Unix (on Windows conhost answers or drops those queries itself, `ngterm-session`'s `server::replies`).
 //!
+//! A pane is also a remote viewer whose own program is the origin's `attach-bridge` client (ssh's place): a paste
+//! reaches the origin's program and the program's clipboard writes reach the viewer one after another, with the
+//! platform's OSC input and without it (Windows' pseudoconsole drops an OSC from its input). `NGTERM_TEST_OLDER_ORIGIN`
+//! names an older build's `ngterm-session` as that origin.
+//!
 //! `NGTERM_TEST_LIVE_LAUNCHES` sets how many fresh live launches must all paint their prompt (default 50, 10 on
 //! Windows, whose PowerShell takes a second to start, then as many again in parallel).
 
@@ -868,4 +873,152 @@ fn a_live_panes_config_reload_reports_its_scheme_to_a_program_that_asked() -> Te
     wait_text(&pane, "reply:^[[?997;2n");
     wait_text(&pane, "NODUP");
     Ok(())
+}
+
+// -- the pane as a remote viewer: its program is an origin's `ngterm-session attach-bridge`, run in the pane's own PTY
+// (a pseudoconsole on Windows) as ssh runs it there, with the viewer's launch nonce. Each case runs with the platform's
+// `bridge_osc_input` and without it, as on Windows, against this build's origin or an older one ([`OLDER_ORIGIN`])
+
+/// The variable that names an older build's `ngterm-session` as the origin's (one from before the APC envelopes).
+const OLDER_ORIGIN: &str = "NGTERM_TEST_OLDER_ORIGIN";
+
+/// The origin's `ngterm-session`, and whether it is an older build's ([`OLDER_ORIGIN`]).
+fn origin_executable(live: &Live) -> (std::path::PathBuf, bool) {
+    std::env::var_os(OLDER_ORIGIN).map_or_else(
+        || (live.runtime.executable.clone(), false),
+        |older| (older.into(), true),
+    )
+}
+
+/// A viewer pane of a fresh session of `live`'s namespace, attached through the bridge by `executable`, its input
+/// carrying an OSC or not (`osc_input`), its prompt painted.
+fn viewer(live: &Live, executable: &Path, osc_input: bool) -> TestResult<Pane> {
+    let lead = LeadAttachment::new(true);
+    let configuration = live.configuration_with(Some(lead.clone()))?;
+    let attach = live_attach(&configuration, None, None, &[] as &[&str]);
+    let mut command = ngterm_term::PaneCommand::new(executable)
+        .arg("attach-bridge")
+        .arg(&attach.session)
+        .args(&attach.argv)
+        .cwd(live.home.path());
+    for name in isolation() {
+        command = command.env_remove(name);
+    }
+    for (key, value) in &configuration.environment {
+        command = command.env(key, value);
+    }
+    command = command.env("HOME", live.home.path()).env(
+        ngterm_core::attach_bridge::VARIABLE,
+        ngterm_core::attach_bridge::variable(&lead.nonce),
+    );
+    let mut config = PaneConfig::new(SIZE);
+    config.attach_bridge = Some(lead.nonce);
+    config.bridge_osc_input = osc_input;
+    let pane = Pane::spawn(&command, &config)?;
+    wait_frame(&pane, prompt_painted);
+    Ok(pane)
+}
+
+/// A paste reaches the origin's program: in an envelope (an APC to a new origin, which a pseudoconsole passes), or, by
+/// a viewer without OSC input of an older origin, as a plain bracketed paste.
+fn paste_reaches_the_origins_program(osc_input: bool) -> TestResult {
+    let live = Live::new()?;
+    let (executable, _) = origin_executable(&live);
+    let pane = viewer(&live, &executable, osc_input)?;
+    let pasted = pane.paste(
+        if cfg!(windows) {
+            "Write-Output ('pasted-' + 'text')"
+        } else {
+            "echo pasted-\"\"text"
+        },
+        ngterm_term::PasteSource::Clipboard,
+        ngterm_term::ClipboardLocation::Standard,
+        false,
+    )?;
+    assert_eq!(pasted, ngterm_term::Paste::Written);
+    pane.write(b"\r")?;
+    wait_text(&pane, "pasted-text");
+    Ok(())
+}
+
+#[test]
+fn a_paste_into_a_viewer_pane_reaches_the_origins_program() -> TestResult {
+    paste_reaches_the_origins_program(PaneConfig::new(SIZE).bridge_osc_input)
+}
+
+#[test]
+fn a_paste_into_a_viewer_pane_without_osc_input_reaches_the_origins_program() -> TestResult {
+    paste_reaches_the_origins_program(false)
+}
+
+/// The next clipboard write the viewer is asked for.
+fn next_write(pane: &Pane) -> ngterm_term::ClipboardWrite {
+    let events = wait_events(pane, |events| {
+        events.iter().any(|event| matches!(event, PaneEvent::ClipboardWrite(_)))
+    });
+    events
+        .into_iter()
+        .find_map(|event| match event {
+            PaneEvent::ClipboardWrite(write) => Some(write),
+            _ => None,
+        })
+        .unwrap_or_else(|| unreachable!("waited for a write"))
+}
+
+/// The text of a program's OSC 52 clipboard write, as the viewer is asked for it.
+fn written_text(write: &ngterm_term::ClipboardWrite) -> String {
+    write
+        .contents
+        .iter()
+        .find(|content| content.mime.starts_with("text/plain"))
+        .map(|content| String::from_utf8_lossy(&content.data).into_owned())
+        .unwrap_or_default()
+}
+
+/// A line that has the session's shell print an OSC 52 write of `base64` to the clipboard.
+fn osc52_write(base64: &str) -> Vec<u8> {
+    typed(
+        &format!("printf '\\033]52;c;{base64}\\007'"),
+        &format!("[Console]::Write([char]27 + ']52;c;{base64}' + [char]7)"),
+    )
+}
+
+/// Two clipboard writes of the origin's program, one after the other, both reach the viewer at once: the origin
+/// delegates the second only after the viewer's reply to the first reached it, else after its 30 s wait.
+fn clipboard_writes_reach_the_viewer_one_after_another(osc_input: bool) -> TestResult {
+    let live = Live::new()?;
+    let (executable, older) = origin_executable(&live);
+    let pane = viewer(&live, &executable, osc_input)?;
+    pane.take_events();
+    // "first" and "second"
+    pane.write(&osc52_write("Zmlyc3Q="))?;
+    let first = next_write(&pane);
+    assert_eq!(written_text(&first), "first");
+    pane.answer_clipboard_write(
+        first.id,
+        ngterm_term::WriteCompletion {
+            status: ngterm_term::ClipboardWriteResult::Success,
+            remember: false,
+        },
+    );
+    if older && cfg!(windows) {
+        // the documented limit: the pseudoconsole drops the OSC reply, so the origin waits out its delegation
+        return Ok(());
+    }
+    let asked = Instant::now();
+    pane.write(&osc52_write("c2Vjb25k"))?;
+    let second = next_write(&pane);
+    assert_eq!(written_text(&second), "second");
+    assert!(asked.elapsed() < Duration::from_secs(20), "{:?}", asked.elapsed());
+    Ok(())
+}
+
+#[test]
+fn an_origins_clipboard_writes_reach_a_viewer_pane_one_after_another() -> TestResult {
+    clipboard_writes_reach_the_viewer_one_after_another(PaneConfig::new(SIZE).bridge_osc_input)
+}
+
+#[test]
+fn an_origins_clipboard_writes_reach_a_viewer_pane_without_osc_input_one_after_another() -> TestResult {
+    clipboard_writes_reach_the_viewer_one_after_another(false)
 }
