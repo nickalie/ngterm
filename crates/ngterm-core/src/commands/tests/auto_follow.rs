@@ -9,7 +9,7 @@ use ngterm_proto::{Args, Command};
 use super::{Fixture, args, wire};
 use crate::Core;
 use crate::auto_follow::{AutoFollowTimer, AutoFollowed, FollowConfig, auto_follow_target, idle_ms};
-use crate::model::{AgentIndicator, AgentStatus, Session, StatusPane};
+use crate::model::{AgentIndicator, AgentStatus, OverlayPane, OverlayProgram, Session, StatusPane};
 use crate::persist::AppSettings;
 use uuid::Uuid;
 
@@ -217,22 +217,56 @@ fn fire_skips_an_ended_session() {
     assert!(fixture.store_mut().unwrap().take_outbox().events.is_empty());
 }
 
-/// An ended session whose scratch still runs (its agent can block there) is still followed.
+/// An ended session whose agent blocked in a scratch that still runs is still followed.
 #[test]
-fn fire_follows_an_ended_session_whose_scratch_runs() {
+fn fire_follows_an_ended_session_blocked_in_its_running_scratch() {
+    let mut fixture = Fixture::new(0);
+    let current = fixture.sessions[0];
+    let ended = ended_with_scratch(&mut fixture, Some(StatusPane::Scratch));
+    select(&mut fixture, current);
+
+    assert_eq!(fire(&mut fixture).map(|followed| followed.session), Some(ended));
+}
+
+/// A scratch does not keep a stale block of the ended main pane: a jump would only show the main pane's exit.
+#[test]
+fn fire_skips_an_ended_session_whose_main_pane_blocked_beside_a_scratch() {
+    let mut fixture = Fixture::new(0);
+    let current = fixture.sessions[0];
+    ended_with_scratch(&mut fixture, None);
+    select(&mut fixture, current);
+
+    assert_eq!(fire(&mut fixture), None);
+    assert_eq!(fixture.selected(), Some(current));
+}
+
+/// An overlay that still runs over the ended main pane keeps the main pane's block followed.
+#[test]
+fn fire_follows_an_ended_session_whose_main_pane_overlay_runs() {
     let mut fixture = Fixture::new(0);
     let current = fixture.sessions[0];
     let ended = add_blocked(&mut fixture, 100);
     let store = fixture.store_mut().unwrap();
     assert!(store.mark_session_ended(ended));
-    store
-        .session_mut(ended)
-        .unwrap()
-        .scratch_surface
-        .replace(Box::new(FakeSurface::new("scratch")));
+    let program = OverlayProgram {
+        command: "top".to_owned(),
+        ..OverlayProgram::default()
+    };
+    store.open_pane_overlay(ended, OverlayPane::Left, program).unwrap();
     select(&mut fixture, current);
 
     assert_eq!(fire(&mut fixture).map(|followed| followed.session), Some(ended));
+}
+
+/// A blocked session, then ended, with a scratch present; `status_pane` names the pane that blocked.
+fn ended_with_scratch(fixture: &mut Fixture, status_pane: Option<StatusPane>) -> Uuid {
+    let ended = add_blocked(fixture, 100);
+    let store = fixture.store_mut().unwrap();
+    assert!(store.mark_session_ended(ended));
+    let session = store.session_mut(ended).unwrap();
+    session.scratch_surface.replace(Box::new(FakeSurface::new("scratch")));
+    session.agent_indicator.status_pane = status_pane;
+    ended
 }
 
 #[test]

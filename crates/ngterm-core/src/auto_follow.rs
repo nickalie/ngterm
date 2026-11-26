@@ -291,7 +291,7 @@ impl Core {
         let blocked: Vec<&Session> = store
             .attention_sessions()
             .into_iter()
-            .filter(|session| session.agent_indicator.status == AgentStatus::Blocked && !has_ended(session))
+            .filter(|session| session.agent_indicator.status == AgentStatus::Blocked && !status_source_ended(session))
             .collect();
         let target = auto_follow_target(store.active_session(), &blocked, stay_on_active)?;
         let indicator = store.select_session(Some(target));
@@ -376,17 +376,16 @@ pub fn auto_follow_target(current: Option<&Session>, blocked: &[&Session], stay_
         .map(|session| session.id())
 }
 
-/// Whether nothing runs in `session` now: its live session was lost, or every pane of a row attached from another
-/// machine holds its exit, and the row holds no local work. Such a companion row can close soon
-/// (`remote::ended_companions`), so a jump to it could show it for a moment and then move the selection back.
-fn has_ended(session: &Session) -> bool {
-    if session.holds_local_work() {
-        return false;
-    }
-    session.ended || session.every_remote_pane_held()
+/// Whether the pane that set `session`'s status runs nothing now: its live session was lost, or every pane of a row
+/// attached from another machine holds its exit, and no local work of that pane (scratch, overlay) still runs. Such a
+/// companion row can close soon (`remote::ended_companions`), so a jump to it could show it for a moment and then move
+/// the selection back.
+fn status_source_ended(session: &Session) -> bool {
+    (session.ended || session.every_remote_pane_held()) && !session.status_pane_holds_local_work()
 }
 
-/// What upstream's attention observation reads: the workspaces, their sessions and each session's indicator.
+/// What upstream's attention observation reads (the workspaces, their sessions and each session's indicator), plus
+/// whether the fire skips each session as ended, so a row that runs again re-arms the fire.
 fn attention_signature(store: &AppStore) -> Vec<AttentionEntry> {
     let mut signature = Vec::new();
     for workspace in store.workspaces() {
@@ -394,7 +393,7 @@ fn attention_signature(store: &AppStore) -> Vec<AttentionEntry> {
         for session in &workspace.sessions {
             signature.push((
                 session.id(),
-                Some((session.agent_indicator.clone(), has_ended(session))),
+                Some((session.agent_indicator.clone(), status_source_ended(session))),
             ));
         }
     }

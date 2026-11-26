@@ -235,15 +235,6 @@ impl Session {
             .all(|pane| state.held_panes.contains(&pane))
     }
 
-    /// Whether the row holds something of this machine's that closing it would end: a scratch shell or an overlay.
-    #[must_use]
-    pub fn holds_local_work(&self) -> bool {
-        self.scratch_surface.is_present()
-            || [None, Some(OverlayPane::Left), Some(OverlayPane::Right)]
-                .into_iter()
-                .any(|pane| self.local_overlay_holds(pane))
-    }
-
     /// The presentation stream's state; `None` for a local session.
     #[must_use]
     pub fn remote_connection(&self) -> Option<&RemoteConnection> {

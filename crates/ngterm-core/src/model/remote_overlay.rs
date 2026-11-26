@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use super::{AppStore, OverlayPane, OverlayPointSize, Session};
+use super::{AppStore, OverlayPane, OverlayPointSize, Session, StatusPane};
 use crate::html::markdown_page::MarkdownLinkGrant;
 use crate::html::{HtmlOverlay, HtmlPageInfo};
 use crate::remote::frames::{PresentationPageAction, PresentationPageCommand, PresentationPageState};
@@ -378,6 +378,28 @@ impl Session {
         match pane {
             None => self.cover_overlay_active(),
             Some(pane) => self.pane_overlay(pane).is_some(),
+        }
+    }
+
+    /// Whether the row holds something of this machine's that closing it would end: a scratch shell or an overlay.
+    #[must_use]
+    pub fn holds_local_work(&self) -> bool {
+        self.scratch_surface.is_present()
+            || [None, Some(OverlayPane::Left), Some(OverlayPane::Right)]
+                .into_iter()
+                .any(|pane| self.local_overlay_holds(pane))
+    }
+
+    /// Whether the pane that set the row's status still holds local work there: the scratch for a scratch status,
+    /// else an overlay on that pane or over the whole row.
+    #[must_use]
+    pub fn status_pane_holds_local_work(&self) -> bool {
+        match self.agent_indicator.status_pane {
+            Some(StatusPane::Scratch) => self.scratch_surface.is_present(),
+            Some(StatusPane::Right) => self.local_overlay_holds(Some(OverlayPane::Right)),
+            Some(StatusPane::Left) | None => {
+                self.local_overlay_holds(None) || self.local_overlay_holds(Some(OverlayPane::Left))
+            }
         }
     }
 }
