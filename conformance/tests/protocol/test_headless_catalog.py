@@ -138,15 +138,6 @@ def test_a_lookup_fences_an_unseen_id_and_a_changed_target_is_refused(remote_ori
     assert_ok(origin.request("session.close", sid))
 
 
-def _session_servers(instance):
-    """The pids of the session servers of `instance`'s live namespace."""
-    server = instance.vocabulary.server
-    return [
-        pid for pid, name, _, words in base._processes()
-        if base.program_name(name) == server and base.serves_namespace(words, instance.live_dir, server)
-    ]
-
-
 @pytest.mark.covers("catalog.subscribe", "session.new", "session.split", "field:tree.session.ended",
                     streams=("catalog.subscribe",))
 def test_a_session_whose_live_session_is_lost_stays_ended(remote_origin):
@@ -155,8 +146,9 @@ def test_a_session_whose_live_session_is_lost_stays_ended(remote_origin):
     no pane, refuses a split, and leaves with its close. Here the instance's session server dies with its sessions."""
     origin = Ctl(remote_origin.instance)
     sid = assert_ok(origin.request("session.new"))["id"]
+    instance = remote_origin.instance
     deadline = time.monotonic() + 30
-    while not (servers := _session_servers(remote_origin.instance)) and time.monotonic() < deadline:
+    while not (servers := base.session_servers(instance.live_dir, instance.vocabulary)) and time.monotonic() < deadline:
         time.sleep(0.2)
     assert servers, "no session server runs the origin's sessions"
     for pid in servers:

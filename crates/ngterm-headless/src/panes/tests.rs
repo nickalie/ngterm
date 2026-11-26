@@ -13,26 +13,24 @@ fn exit(held: bool) -> PaneEvent {
 const SHELL: Ran = Ran {
     command: false,
     wait: false,
-    lost: false,
 };
 const HELD_COMMAND: Ran = Ran {
     command: true,
     wait: true,
-    lost: false,
 };
 
 #[test]
 fn titles_directories_and_notifications_reach_the_model() {
     assert_eq!(
-        report(&PaneEvent::Title("vim".to_owned()), SHELL, "box"),
+        report(&PaneEvent::Title("vim".to_owned()), SHELL, false, "box"),
         Some(Report::Pane(PaneReport::Title("vim".to_owned())))
     );
     assert_eq!(
-        report(&PaneEvent::Pwd("file://box/srv/app".to_owned()), SHELL, "box"),
+        report(&PaneEvent::Pwd("file://box/srv/app".to_owned()), SHELL, false, "box"),
         Some(Report::Pane(PaneReport::Pwd("/srv/app".to_owned())))
     );
     assert_eq!(
-        report(&PaneEvent::Pwd("file://elsewhere/srv".to_owned()), SHELL, "box"),
+        report(&PaneEvent::Pwd("file://elsewhere/srv".to_owned()), SHELL, false, "box"),
         None,
         "another host's directory is not this pane's"
     );
@@ -43,6 +41,7 @@ fn titles_directories_and_notifications_reach_the_model() {
                 body: "build".to_owned()
             },
             SHELL,
+            false,
             "box"
         ),
         Some(Report::Notification {
@@ -50,23 +49,22 @@ fn titles_directories_and_notifications_reach_the_model() {
             body: "build".to_owned()
         })
     );
-    assert_eq!(report(&PaneEvent::Bell, SHELL, "box"), None);
+    assert_eq!(report(&PaneEvent::Bell, SHELL, false, "box"), None);
 }
 
 #[test]
 fn an_exit_closes_the_pane_unless_a_held_command_ended() {
-    assert_eq!(report(&exit(false), SHELL, "box"), Some(Report::Exited));
+    assert_eq!(report(&exit(false), SHELL, false, "box"), Some(Report::Exited));
     // no key will ever close a held exit here
-    assert_eq!(report(&exit(true), SHELL, "box"), Some(Report::Exited));
-    assert_eq!(report(&exit(true), HELD_COMMAND, "box"), Some(Report::Held));
-    assert_eq!(report(&exit(false), HELD_COMMAND, "box"), Some(Report::Exited));
+    assert_eq!(report(&exit(true), SHELL, false, "box"), Some(Report::Exited));
+    assert_eq!(report(&exit(true), HELD_COMMAND, false, "box"), Some(Report::Held));
+    assert_eq!(report(&exit(false), HELD_COMMAND, false, "box"), Some(Report::Exited));
 }
 
 #[test]
 fn an_exit_after_the_live_session_was_lost_reports_the_loss() {
-    let lost = |ran: Ran| Ran { lost: true, ..ran };
-    assert_eq!(report(&exit(false), lost(SHELL), "box"), Some(Report::Lost));
-    assert_eq!(report(&exit(true), lost(HELD_COMMAND), "box"), Some(Report::Lost));
+    assert_eq!(report(&exit(false), SHELL, true, "box"), Some(Report::Lost));
+    assert_eq!(report(&exit(true), HELD_COMMAND, true, "box"), Some(Report::Lost));
 }
 
 #[test]

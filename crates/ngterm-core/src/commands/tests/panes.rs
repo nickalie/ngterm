@@ -907,6 +907,19 @@ fn a_session_whose_last_pane_is_lost_stays_ended_and_refuses_a_split_and_a_compa
         fixture.session(SessionCmd::CompanionNew, Some(&wire(id)), Args::default()),
         refused
     );
+    fixture.core.set_presenter_only();
+    assert_eq!(
+        fixture.session(
+            SessionCmd::CompanionNew,
+            Some(&wire(id)),
+            args(|a| {
+                a.command = Some("true".into());
+                a.wait = Some(true);
+            })
+        ),
+        refused,
+        "an ended parent is refused before a headless --wait"
+    );
 }
 
 #[test]

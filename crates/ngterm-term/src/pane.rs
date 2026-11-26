@@ -670,12 +670,8 @@ impl Pane {
         self.pid
     }
 
-    /// The terminal's foreground process group (`tcgetpgrp` on the PTY, as libghostty's `foreground_pid` read it): the
-    /// pid of the group's leader; `None` once the PTY cannot say (the child side closed). On Windows, whose
-    /// pseudoconsole has no foreground process group, the process that stands in for it, read from the program's job
-    /// (`Tty::foreground_pid`); `None` once the program ended.
-    /// Whether a live pane's session was lost (its connection ended and no attach found the session again) rather
-    /// than its program ending: read once [`PaneEvent::Exited`] came. False for every other pane.
+    /// Whether a live pane's session was lost (no attach reached it: the first, or one after its connection ended)
+    /// rather than its program ending: read once [`PaneEvent::Exited`] came. False for every other pane.
     #[must_use]
     pub fn session_lost(&self) -> bool {
         match &self.io {
@@ -687,6 +683,10 @@ impl Pane {
         }
     }
 
+    /// The terminal's foreground process group (`tcgetpgrp` on the PTY, as libghostty's `foreground_pid` read it): the
+    /// pid of the group's leader; `None` once the PTY cannot say (the child side closed). On Windows, whose
+    /// pseudoconsole has no foreground process group, the process that stands in for it, read from the program's job
+    /// (`Tty::foreground_pid`); `None` once the program ended.
     #[must_use]
     pub fn foreground_pid(&self) -> Option<u32> {
         match &self.io {

@@ -639,6 +639,7 @@ fn a_live_attach_that_cannot_reach_its_socket_directory_ends_its_pane() -> TestR
     let pane = Pane::launch(&launch, &live.host, &PaneConfig::new(SIZE))?;
     let status = exit_of(&pane);
     assert!(status.code != 0 && !status.held, "{status:?}");
+    assert!(pane.session_lost(), "no attach reached the session");
     #[cfg(target_os = "linux")]
     assert!(processes_in(&blocked.path().display().to_string()).is_empty());
     Ok(())
@@ -686,6 +687,7 @@ fn a_missing_session_server_cannot_wrap_and_its_attach_ends_the_pane() -> TestRe
     )?;
     let status = exit_of(&pane);
     assert!(status.code != 0 && !status.held, "{status:?}");
+    assert!(pane.session_lost(), "no attach reached the session");
     let _ = std::fs::remove_dir_all(&socket_directory);
     Ok(())
 }

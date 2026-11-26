@@ -804,8 +804,8 @@ fn focus_timers_and_notification_effects_are_drained_without_a_display() {
     main_loop.drain(&mut state);
 }
 
-#[cfg(unix)]
 /// Upstream's `PaneObserver.settle`: a replacement that cannot start leaves the session ended.
+#[cfg(unix)]
 #[test]
 fn a_terminal_that_cannot_start_leaves_its_session_ended() {
     let (mut state, _, session) = fixture();
@@ -833,6 +833,7 @@ fn a_terminal_that_cannot_start_leaves_its_session_ended() {
     state.teardown();
 }
 
+#[cfg(unix)]
 #[test]
 fn land_and_drain_deliver_real_terminal_reports_then_remove_closed_panes() {
     let (mut state, _, session) = fixture();

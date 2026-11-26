@@ -109,10 +109,12 @@ fn validated_options(args: &Args) -> Result<CompanionOptions, ControlError> {
 /// refused, not dropped; the target's parent stands in for a companion target.
 fn new(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let options = validated_options(args)?;
-    super::headless::refuse_wait(core, SessionCmd::CompanionNew, args.wait)?;
+    // upstream refuses an ended parent before a headless --wait
+    let wait = super::headless::refuse_wait(core, SessionCmd::CompanionNew, args.wait);
     let home = core.library().home().to_owned();
     let (store, id) = session_store(core, target, args.window.as_deref())?;
     super::headless::refuse_ended(store.session(id))?;
+    wait?;
     let companion = store
         .add_companion(id, options, &home)
         .map_err(|refusal| match refusal {

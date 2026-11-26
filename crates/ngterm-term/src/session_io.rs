@@ -599,13 +599,13 @@ impl Reader {
     pub(crate) fn run(self) {
         let session = match &self.session {
             Ok(session) => session.clone(),
-            Err(refusal) => return self.fail(refusal),
+            Err(refusal) => return self.lose(refusal),
         };
         let client = Client::new(&session.directory).starting(StartOptions::new(&session.executable));
         let attached = client.attach(self.request(&session, Some(session.spec.clone()), Claim::AsAsked));
         let mut attachment = match attached {
             Ok(attachment) => attachment,
-            Err(error) => return self.fail(&Outcome::failed(error.to_string())),
+            Err(error) => return self.lose(&Outcome::failed(error.to_string())),
         };
         let mut role = None;
         let mut connection = 0;
@@ -623,10 +623,7 @@ impl Reader {
                     match self.reattach(&session, role) {
                         Ok(Some(next)) => attachment = next,
                         Ok(None) => return,
-                        Err(refusal) => {
-                            self.live.session_lost.store(true, Ordering::Release);
-                            return self.fail(&refusal);
-                        }
+                        Err(refusal) => return self.lose(&refusal),
                     }
                 }
             }
@@ -735,6 +732,12 @@ impl Reader {
         attach_again(&session.directory, || {
             (!self.live.leaving()).then(|| self.request(session, None, Claim::IfLed(role)))
         })
+    }
+
+    /// End the pane with `outcome` as one whose session no attach reached.
+    fn lose(&self, outcome: &Outcome) {
+        self.live.session_lost.store(true, Ordering::Release);
+        self.fail(outcome);
     }
 
     /// End the pane with `outcome`, its complaint written after the output.

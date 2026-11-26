@@ -70,8 +70,6 @@ pub struct PaneEnvironment {
 struct Ran {
     command: bool,
     wait: bool,
-    /// The live session was lost rather than its program ending ([`Pane::session_lost`]).
-    lost: bool,
 }
 
 /// One pane's terminal, shared by the registry and the [`Surface`] in the pane's slot.
@@ -352,7 +350,8 @@ impl Panes {
 
     /// Brings the terminals in line with the model: the replacements the core asked for, the panes it dropped torn
     /// down, the ones it lays out mounted, every session woken, and the seeds granted handed to their terminals.
-    /// Whether the model changed (a replacement dropped), which the caller settles.
+    /// Whether the model changed (a replacement dropped, or a terminal that did not start ended its pane or session),
+    /// which the caller settles.
     pub fn sync(&mut self, core: &mut Core) -> bool {
         let mut changed = self.replace(core);
         let wanted = layout(core);
@@ -473,7 +472,6 @@ impl Panes {
         cell.ran.set(Ran {
             command: launch.command.is_some(),
             wait: launch.wait_after_command,
-            lost: false,
         });
         cell.live.set(live);
         let config = self.pane_config(session, cell);
@@ -584,11 +582,10 @@ impl Panes {
         let Some(pane) = cell.pane.borrow().clone() else {
             return Vec::new();
         };
-        let ran = Ran {
-            lost: pane.session_lost(),
-            ..cell.ran.get()
-        };
+        // the loss is stored before the exit is queued: read it after the events
         let events = pane.take_events();
+        let lost = pane.session_lost();
+        let ran = cell.ran.get();
         for event in &events {
             match event {
                 PaneEvent::ClipboardRead(read) => pane.answer_clipboard_read(read.id, ClipboardAnswer::Denied),
@@ -604,7 +601,7 @@ impl Panes {
         }
         events
             .iter()
-            .filter_map(|event| report(event, ran, &self.environment.hostname))
+            .filter_map(|event| report(event, ran, lost, &self.environment.hostname))
             .collect()
     }
 
@@ -663,9 +660,10 @@ pub enum Report {
     Held,
 }
 
-/// What `event` reports, for a terminal that ran `ran` on the machine named `hostname`. An exit held on screen
-/// closes at once unless it was a held command: no key will ever close it here.
-fn report(event: &PaneEvent, ran: Ran, hostname: &str) -> Option<Report> {
+/// What `event` reports, for a terminal that ran `ran` on the machine named `hostname`, its live session `lost` or
+/// not ([`Pane::session_lost`]). An exit held on screen closes at once unless it was a held command: no key will ever
+/// close it here.
+fn report(event: &PaneEvent, ran: Ran, lost: bool, hostname: &str) -> Option<Report> {
     match event {
         PaneEvent::Title(title) => Some(Report::Pane(PaneReport::Title(title.clone()))),
         PaneEvent::Pwd(raw) => {
@@ -675,7 +673,7 @@ fn report(event: &PaneEvent, ran: Ran, hostname: &str) -> Option<Report> {
             title: title.clone(),
             body: body.clone(),
         }),
-        PaneEvent::Exited(_) if ran.lost => Some(Report::Lost),
+        PaneEvent::Exited(_) if lost => Some(Report::Lost),
         PaneEvent::Exited(ExitStatus { held: true, .. }) if ran.command && ran.wait => Some(Report::Held),
         PaneEvent::Exited(_) => Some(Report::Exited),
         _ => None,

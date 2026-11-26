@@ -1679,6 +1679,18 @@ def _windows_leftovers(live_dir: str, vocabulary: Vocabulary) -> list[tuple[int,
     return found
 
 
+def session_servers(live_dir: str, vocabulary: Vocabulary = LIVE) -> list[int]:
+    """The pids of the session servers of `live_dir`'s namespace (`<server> server <live_dir>`); none under a
+    vocabulary with no session server."""
+    server = vocabulary.server
+    if server is None:
+        return []
+    return [
+        pid for pid, name, _, words in _processes()
+        if program_name(name) == server and serves_namespace(words, live_dir, server)
+    ]
+
+
 def program_name(path: str) -> str:
     """The program a path names: its file name, on Windows case-folded and without `.exe`."""
     name = os.path.basename(path)
