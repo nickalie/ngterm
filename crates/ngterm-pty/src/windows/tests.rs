@@ -13,7 +13,8 @@ use portable_pty::ChildKiller;
 use windows_sys::Win32::Foundation::{DuplicateHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE};
 use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    CREATE_NO_WINDOW, GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
 
 use super::*;
@@ -802,9 +803,45 @@ fn what_a_process_started_as_its_tree_was_killed_is_taken_back() {
     terminate(job).expect("the kill");
     tree.wait_ended(escapees::ENDING);
     assert_eq!(exit_code_of(&shell), Some(1));
-    tree.adopt(job, &escapees::processes());
-    terminate(job).expect("the second kill");
+    end_tree(job, &mut tree).expect("the second pass");
     assert_ended_by_its_job(&ping, 1, "the ping outlived its tree");
+}
+
+/// The error of an assignment of process `pid` to `job`; `None` when the job took it.
+fn assignment_error(job: &OwnedHandle, pid: u32) -> Option<u32> {
+    // SAFETY: opens a process by id; no memory is passed.
+    let raw = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+    assert!(!raw.is_null(), "{}", io::Error::last_os_error());
+    // SAFETY: a fresh handle nothing else owns.
+    let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+    // SAFETY: both handles are open, the process one with the rights an assignment needs.
+    let joined = unsafe { AssignProcessToJobObject(job.as_raw_handle(), process.as_raw_handle()) };
+    if joined != 0 {
+        return None;
+    }
+    os_error(&io::Error::last_os_error())
+}
+
+/// What a process of the tree starts as the kill ends it also ends when the job refuses to take it back: a job that
+/// ends its tree can refuse an assignment (`ERROR_ACCESS_DENIED`) after the tree ended. A job handle without the
+/// right to assign gives the same refusal at each pass.
+#[test]
+fn what_a_process_started_as_its_tree_was_killed_ends_when_its_job_refuses_it() {
+    let escaped = Escaped::new("ping -n 300 127.0.0.1 >nul", "ping.exe");
+    let ping = watched(child_of(escaped.shell.id(), "ping.exe")).expect("the ping");
+    let shell = watched(escaped.shell.id()).expect("the shell");
+    let refusing = restricted(escaped.job.handle.as_handle(), JOB_QUERY | JOB_TERMINATE);
+    assert_eq!(
+        assignment_error(&refusing, pid_of(&ping)),
+        Some(ERROR_ACCESS_DENIED),
+        "the job took the ping"
+    );
+    let mut tree = escapees::Tree::of(&refusing);
+    terminate(&refusing).expect("the kill");
+    tree.wait_ended(escapees::ENDING);
+    assert_eq!(exit_code_of(&shell), Some(1));
+    end_tree(&refusing, &mut tree).expect("the second pass");
+    assert_ended_by_its_job(&ping, 1, "the refused ping outlived its tree");
 }
 
 /// A child started suspended that cannot join its job (a job handle without the right to assign) is terminated

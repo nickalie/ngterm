@@ -307,20 +307,25 @@ impl Killer {
     pub fn kill_tree(&self) -> io::Result<()> {
         let job = &self.job.handle;
         let mut tree = escapees::Tree::of(job);
-        tree.adopt(job, &escapees::processes());
-        terminate(job)?;
-        tree.terminate_outside();
+        end_tree(job, &mut tree)?;
         tree.wait_ended(escapees::ENDING);
-        tree.adopt(job, &escapees::processes());
-        terminate(job)?;
-        tree.terminate_outside();
-        Ok(())
+        end_tree(job, &mut tree)
     }
 
     /// Nothing on Windows: the job, not a process id, names the child's tree for as long as a handle holds it (Unix's
     /// [`Killer::retire`] stops signalling a group whose id may be reused). The ids [`Killer::kill_tree`] reads from
     /// the process table only find what escaped the job, and each is checked through a handle before it is taken.
     pub fn retire(&self) {}
+}
+
+/// One pass of [`Killer::kill_tree`]: take back what escaped `job` into it, terminate the job, then terminate each
+/// process of `tree` that did not join it. A process in another job does not join, and a job that ends its tree can
+/// refuse an assignment (`ERROR_ACCESS_DENIED`) after the tree ended.
+fn end_tree(job: &OwnedHandle, tree: &mut escapees::Tree) -> io::Result<()> {
+    tree.adopt(job, &escapees::processes());
+    terminate(job)?;
+    tree.terminate_outside();
+    Ok(())
 }
 
 /// Terminate every process of `job` (exit code 1).
