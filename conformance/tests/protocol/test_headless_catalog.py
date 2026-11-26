@@ -147,7 +147,6 @@ def _session_servers(instance):
     ]
 
 
-@pytest.mark.skipif(os.name != "posix", reason="kills the session server with SIGKILL")
 @pytest.mark.covers("catalog.subscribe", "session.new", "session.split", "field:tree.session.ended",
                     streams=("catalog.subscribe",))
 def test_a_session_whose_live_session_is_lost_stays_ended(remote_origin):
@@ -161,7 +160,8 @@ def test_a_session_whose_live_session_is_lost_stays_ended(remote_origin):
         time.sleep(0.2)
     assert servers, "no session server runs the origin's sessions"
     for pid in servers:
-        os.kill(pid, signal.SIGKILL)
+        # Windows has no SIGKILL: os.kill there ends the process with TerminateProcess.
+        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
     deadline = time.monotonic() + 30
     while not find_session(origin.tree(), sid).get("ended") and time.monotonic() < deadline:
         time.sleep(0.2)
