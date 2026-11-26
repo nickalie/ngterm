@@ -169,7 +169,10 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `agterm-peer`: on every OS, attaching an upstream agterm Mac's live sessions, a Rust-only extension (below);
 - `shell-profiles`: on every OS, a pane's shell profile in place of the login shell, a Rust-only extension (below);
 - `web-worker-faults`: on Linux, the faults a launch asks of the pages' engine worker, a Rust-only extension (below);
-- `sidebar-search`: on every OS, the sidebar's session search, a Rust-only extension (below).
+- `sidebar-search`: on every OS, the sidebar's session search, a Rust-only extension (below);
+- `auto-follow-skips-ended`: on every OS, auto-follow's skip of a blocked session that runs nothing, a Rust-only
+  extension (below);
+- `live-attach-no-select`: on every OS, `live attach --no-select`, a Rust-only extension (below).
 
 It does not claim:
 
@@ -214,8 +217,8 @@ ghostty config sets `copy-on-select = false`.
 A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as
 `unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
 instead, with `--must-pass` on the capability in every job whose host can claim it.
-Today there are eight: `live-any-shell`, `agent-chat`, `pages-survive`, `kitty-clipboard`, `agterm-peer`,
-`shell-profiles`, `web-worker-faults` and `sidebar-search`. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
+Today there are ten: `live-any-shell`, `agent-chat`, `pages-survive`, `kitty-clipboard`, `agterm-peer`,
+`shell-profiles`, `web-worker-faults`, `sidebar-search`, `auto-follow-skips-ended` and `live-attach-no-select`. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
 shell, or the one ghostty `command` names in its place), zsh and fish as upstream, bash and PowerShell as well, each
 started with its shell integration the way libghostty starts a shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in
 POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's root merged in front of the pane's own value as
@@ -333,7 +336,10 @@ Windows' `windows` job runs the test under the ratchet alone until it is green t
 row whose session ended on its origin, so a jump to an ended row would move the selection back at once. Auto-follow
 skips a blocked session that runs nothing. `live-attach-no-select`: upstream's `live attach` always selects the new row.
 This build's `--no-select` (`noSelect` on `live.attach` and `live.attach.group`) leaves the selection and the focus as
-they were. Their tests are in `tests/behaviors/test_auto_follow.py` and `tests/cli/test_live_attach_select.py`.
+they were. Their tests are in `tests/behaviors/test_auto_follow.py` and `tests/cli/test_live_attach_select.py`. The
+build claims both on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and the three Linux legs run with
+`--must-pass auto-follow-skips-ended --must-pass live-attach-no-select`; on Windows and macOS the tests run under the
+ratchet alone.
 
 ### Commands
 
