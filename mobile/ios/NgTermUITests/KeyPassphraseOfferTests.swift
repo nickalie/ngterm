@@ -93,9 +93,7 @@ internal final class KeyPassphraseOfferTests: XCTestCase {
         FakeApp.expect(app.navigationBars["Settings"], "Settings")
         let start = app.buttons["import-key"]
         let form = app.collectionViews["settings-form"]
-        for _ in 0..<Self.swipes where !(start.exists && start.isHittable) {
-            form.swipeUp()
-        }
+        FormScroll.scroll(to: start, in: form, swipes: Self.swipes)
         start.tap()
         FakeApp.expect(app.navigationBars["Import a key"], "Settings' import")
         return app

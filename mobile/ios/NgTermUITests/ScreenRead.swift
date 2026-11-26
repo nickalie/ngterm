@@ -51,16 +51,19 @@ internal enum ScreenRead {
 
     /// A wait that reads a condition again, a beat apart, until it holds.
     ///
-    /// It gives up after `reads` reads that completed and `lasting` seconds both, or after `limit` (or `lasting`, when
-    /// that is longer) once a read completed. The count of reads is the bound, not a short time alone: on a loaded
-    /// runner one read can take as long as a whole timed wait. The limit stops a wait whose reads are all that slow.
-    /// A wait whose reads all failed knows nothing of the screen yet, so it gives up only at `blindLimit`.
+    /// It gives up after `reads` reads that completed and `lasting` seconds both, or `limit` after its first read that
+    /// completed (and after `lasting`). The count of reads is the bound, not a short time alone: on a loaded runner one
+    /// read can take as long as a whole timed wait. The limit stops a wait whose reads are all that slow. A wait whose
+    /// reads all failed knows nothing of the screen yet, so it gives up only at `blindLimit`, or at `limit` when the
+    /// app does not run. No wait goes past `blindLimit` (or `lasting`, when that is longer).
     internal struct Wait {
         internal var reads = ScreenRead.reads
         internal var lasting: TimeInterval = 0
         internal var beat = ScreenRead.beat
         internal var limit = ScreenRead.limit
         internal var blindLimit = ScreenRead.blindLimit
+        /// Whether the app has stopped: a read of an app that does not run fails until the test ends.
+        internal var appStopped: @MainActor () -> Bool = { XCUIApplication().state == .notRunning }
 
         /// Reads `done` until it holds, and tells whether it did.
         ///
@@ -69,6 +72,7 @@ internal enum ScreenRead {
         @discardableResult
         internal func poll(until done: () -> Answer) -> Polled {
             let start = Date.now
+            var firstRead: Date?
             var count = 0
             var failed = 0
             while true {
@@ -79,19 +83,33 @@ internal enum ScreenRead {
 
                 case .doesNotHold:
                     count += 1
+                    firstRead = firstRead ?? Date.now
 
                 case .failed:
                     failed += 1
                 }
                 let seconds = Date.now.timeIntervalSince(start)
-                let end = max(count > 0 ? limit : blindLimit, lasting)
-                if (count >= reads && seconds >= lasting) || seconds >= end {
+                if (count >= reads && seconds >= lasting) || isOver(after: seconds, firstRead: firstRead) {
                     return Polled(held: false, reads: count, failed: failed, seconds: seconds)
                 }
                 if beat > 0 {
                     _ = XCTWaiter.wait(for: [XCTestExpectation(description: "a beat")], timeout: beat)
                 }
             }
+        }
+
+        @MainActor
+        private func isOver(after seconds: TimeInterval, firstRead: Date?) -> Bool {
+            guard seconds >= lasting else {
+                return false
+            }
+            if seconds >= blindLimit {
+                return true
+            }
+            guard let firstRead else {
+                return seconds >= limit && appStopped()
+            }
+            return Date.now.timeIntervalSince(firstRead) >= limit
         }
     }
 
@@ -141,11 +159,11 @@ internal enum ScreenRead {
         expect(failure, lasting: lasting) { Answer(done()) }
     }
 
-    /// Whether `done` holds, from the next read that completes: a read that fails is done again, up to the limit.
+    /// Whether `done` holds, from the next read that completes: a read that fails is done again, up to `blindLimit`.
     ///
     /// Before a step is done again (a tap, a press), as the step can take after the last read of its wait: do the step
-    /// again only on `.doesNotHold`. It is `.failed` when no read completed until the limit, and the state is then
-    /// not known.
+    /// again only on `.doesNotHold`. It is `.failed` when no read completed until `blindLimit` (or `limit`, when the
+    /// app does not run), and the state is then not known.
     @MainActor
     internal static func now(_ done: () -> Answer) -> Answer {
         Wait(reads: 1).poll(until: done).answer

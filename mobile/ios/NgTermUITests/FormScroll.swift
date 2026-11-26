@@ -13,14 +13,23 @@ internal enum FormScroll {
     ///
     /// Hittable is not enough: a row with only a sliver above the foot of an iPad's sheet is hittable, and a press at
     /// its hit point lands outside the sheet and closes it. A swipe's momentum carries a row past the whole view, so
-    /// the last moves are drags that end held.
+    /// the last moves are drags that end held. A row that the list held and then let go went above the view.
     @MainActor
     internal static func scroll(to element: XCUIElement, in form: XCUIElement, swipes: Int) {
-        for _ in 0..<swipes where !isWhollyShown(element, in: form) {
+        var held = false
+        for _ in 0..<swipes {
+            if isWhollyShown(element, in: form) {
+                break
+            }
             guard element.exists else {
-                form.swipeUp()
+                if held {
+                    drag(form, by: form.frame.height)
+                } else {
+                    form.swipeUp()
+                }
                 continue
             }
+            held = true
             drag(form, by: form.frame.midY - element.frame.midY)
         }
         XCTAssertTrue(isWhollyShown(element, in: form), "\(element) never came wholly into view")

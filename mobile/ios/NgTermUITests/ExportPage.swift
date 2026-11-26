@@ -16,10 +16,7 @@ internal enum ExportPage {
     private static func tapExport(in app: XCUIApplication) {
         let export = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'export-key-'")).firstMatch
         let form = app.collectionViews["settings-form"]
-        for _ in 0..<swipes where !(export.exists && export.isHittable) {
-            form.swipeUp()
-        }
-        XCTAssertTrue(export.isHittable, "Export private key never came into view")
+        FormScroll.scroll(to: export, in: form, swipes: swipes)
         export.tap()
     }
 

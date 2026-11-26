@@ -12,6 +12,19 @@ internal final class ScreenReadTests: XCTestCase {
     // an app that is not installed, so no read of it completes
     private static let noApp = "com.nickalie.ngterm.no-such-app"
 
+    // a wait a beat of 0.1 s apart, of an app that runs or that stopped
+    @MainActor
+    private static func wait(
+        reads: Int,
+        limit: TimeInterval,
+        blindLimit: TimeInterval,
+        appStopped: Bool = false
+    ) -> ScreenRead.Wait {
+        var wait = ScreenRead.Wait(reads: reads, beat: 0.1, limit: limit, blindLimit: blindLimit)
+        wait.appStopped = { appStopped }
+        return wait
+    }
+
     @MainActor
     internal func testAReadThatFailedIsNotOneOfTheWaitsReads() {
         var calls = 0
@@ -25,7 +38,7 @@ internal final class ScreenReadTests: XCTestCase {
 
     @MainActor
     internal func testReadsThatAllFailEndTheWaitOnlyAtItsBlindLimit() {
-        let polled = ScreenRead.Wait(reads: 3, beat: 0.1, limit: 0.2, blindLimit: 1).poll { ScreenRead.Answer.failed }
+        let polled = Self.wait(reads: 3, limit: 0.2, blindLimit: 1).poll { ScreenRead.Answer.failed }
         XCTAssertFalse(polled.held)
         XCTAssertEqual(polled.reads, 0)
         XCTAssertEqual(polled.answer, .failed)
@@ -36,12 +49,38 @@ internal final class ScreenReadTests: XCTestCase {
     @MainActor
     internal func testAWaitPastItsLimitHoldsAtTheFirstReadThatCompletes() {
         let start = Date.now
-        let polled = ScreenRead.Wait(reads: 3, beat: 0.1, limit: 0.5, blindLimit: 5).poll {
+        let polled = Self.wait(reads: 3, limit: 0.5, blindLimit: 5).poll {
             Date.now.timeIntervalSince(start) >= 1 ? .holds : .failed
         }
         XCTAssertTrue(polled.held)
         XCTAssertEqual(polled.reads, 1)
         XCTAssertGreaterThanOrEqual(polled.seconds, 1)
+    }
+
+    // a first read past the limit that does not hold: the wait reads on, as its limit counts from that read
+    @MainActor
+    internal func testAWaitPastItsLimitReadsOnAfterAReadThatDoesNotHold() {
+        let start = Date.now
+        var completed = 0
+        let polled = Self.wait(reads: 1_000, limit: 0.5, blindLimit: 60).poll {
+            guard Date.now.timeIntervalSince(start) >= 1 else {
+                return .failed
+            }
+            completed += 1
+            return ScreenRead.Answer(completed == 2)
+        }
+        XCTAssertTrue(polled.held)
+        XCTAssertEqual(polled.reads, 2)
+    }
+
+    @MainActor
+    internal func testReadsOfAStoppedAppEndTheWaitAtItsLimit() {
+        let polled = Self.wait(reads: 3, limit: 0.2, blindLimit: 60, appStopped: true)
+            .poll { ScreenRead.Answer.failed }
+        XCTAssertFalse(polled.held)
+        XCTAssertEqual(polled.answer, .failed)
+        XCTAssertGreaterThanOrEqual(polled.seconds, 0.2)
+        XCTAssertLessThan(polled.seconds, 60)
     }
 
     @MainActor
