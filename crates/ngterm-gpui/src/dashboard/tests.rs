@@ -413,7 +413,7 @@ fn a_blinking_chip_pulses_in_the_grid(cx: &mut gpui_kit::TestAppContext) {
         })
     };
     // The first animation sample is transparent; paint a later sample before inspecting the wash.
-    std::thread::sleep(Duration::from_millis(10));
+    cx.executor().advance_clock(Duration::from_millis(10));
     view.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     let drawn = washes(cx);
