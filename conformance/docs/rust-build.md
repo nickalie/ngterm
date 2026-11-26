@@ -338,8 +338,10 @@ skips a blocked session that runs nothing. `live-attach-no-select`: upstream's `
 This build's `--no-select` (`noSelect` on `live.attach` and `live.attach.group`) leaves the selection and the focus as
 they were. Their tests are in `tests/behaviors/test_auto_follow.py` and `tests/cli/test_live_attach_select.py`. The
 build claims both on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and the three Linux legs run with
-`--must-pass auto-follow-skips-ended --must-pass live-attach-no-select`; on Windows and macOS the tests run under the
-ratchet alone.
+`--must-pass auto-follow-skips-ended --must-pass live-attach-no-select`. The remote tests need the private sshd, so
+Windows skips them (no `posix-command-line`), and no CI job runs this build's suite on macOS: the Linux legs are the
+only check of the two capabilities. No event shows the keyboard focus of a new row, so the core's unit tests check
+that `--no-select` keeps it.
 
 ### Commands
 

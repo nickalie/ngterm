@@ -1,6 +1,7 @@
 """`ngtermctl live attach` and the selection of the viewer's window. A plain attach selects the new row, as upstream's
-does. `--no-select`, also with `--companions`, adds the rows and leaves the selection and the keyboard focus where they
-were, so a viewer hook that attaches an origin's new session does not show it for a moment."""
+does. `--no-select`, also with `--companions`, adds the rows and leaves the selection where it was, so a viewer hook that
+attaches an origin's new session does not show it for a moment. No event shows the keyboard focus of a new row: the
+core's unit tests check that `--no-select` does not move it."""
 
 from typing import Any
 
@@ -14,7 +15,7 @@ pytestmark = [
     pytest.mark.requires("live-sessions", "live-any-shell", any=True, reason="the origin's session must be Live"),
 ]
 
-# How long a selection or a focus move that the attach queued has to show as an event.
+# How long a selection that the attach queued has to show as an event.
 SETTLE = 3.0
 
 
@@ -49,12 +50,10 @@ def _events(viewer: Ctl, cursor: Cursor, kind: str) -> list[dict[str, Any]]:
 
 
 def _kept(viewer: Ctl, cursor: Cursor, kept: str, rows: list[str]) -> None:
-    """No selection and no focus move appears for the rows; `kept` stays the selected session."""
+    """No selection appears for the rows; `kept` stays the selected session."""
     with pytest.raises(WaitTimeout):
         viewer.wait_event(cursor, "session.selected", timeout=SETTLE)
     assert _events(viewer, cursor, "session.selected") == []
-    moved = [event for event in _events(viewer, cursor, "pane.focused") if event.get("session") in rows]
-    assert moved == []
     tree = viewer.tree()
     assert find_session(tree, kept)["active"] is True
     assert [find_session(tree, row)["active"] for row in rows] == [False] * len(rows)
@@ -86,8 +85,8 @@ def test_a_plain_attach_selects_the_new_row(adapter, remote_origin, remote_viewe
 
 
 @pytest.mark.requires("live-attach-no-select", reason="upstream's live attach always selects the new row")
-@pytest.mark.covers("cli:live attach", "event:session.selected", "event:pane.focused", "field:tree.session.active")
-def test_attach_with_no_select_keeps_the_selection_and_the_focus(adapter, remote_origin, remote_viewer):
+@pytest.mark.covers("cli:live attach", "event:session.selected", "field:tree.session.active")
+def test_attach_with_no_select_keeps_the_selection(adapter, remote_origin, remote_viewer):
     origin, viewer = Ctl(remote_origin.instance), remote_viewer
     kept = session_ids(viewer.tree())[0]
     sid = assert_ok(origin.request("session.new", name="attach-no-select"))["id"]
@@ -108,8 +107,8 @@ def test_attach_with_no_select_keeps_the_selection_and_the_focus(adapter, remote
 
 
 @pytest.mark.requires("live-attach-no-select", reason="upstream's live attach always selects the new row")
-@pytest.mark.covers("cli:live attach", "event:session.selected", "event:pane.focused", "field:tree.session.active")
-def test_attach_with_companions_and_no_select_keeps_the_selection_and_the_focus(adapter, remote_origin, remote_viewer):
+@pytest.mark.covers("cli:live attach", "event:session.selected", "field:tree.session.active")
+def test_attach_with_companions_and_no_select_keeps_the_selection(adapter, remote_origin, remote_viewer):
     origin, viewer = Ctl(remote_origin.instance), remote_viewer
     kept = session_ids(viewer.tree())[0]
     parent = assert_ok(origin.request("session.new", name="group-no-select"))["id"]

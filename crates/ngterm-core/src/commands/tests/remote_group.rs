@@ -302,10 +302,11 @@ fn a_group_arrives_in_origin_order_with_only_its_parent_selected() {
 }
 
 #[test]
-fn a_group_attached_with_no_select_leaves_the_selection_alone() {
+fn a_group_attached_with_no_select_leaves_the_selection_and_the_focus_alone() {
     let mut group = Group::new(vec![tree(&[parent(Some(&["c1"])), terminal("c1", Some("P"))])]);
     let selected = group.fixture.selected();
     assert!(selected.is_some());
+    group.fixture.core.clear_pane_focus_requests();
     let reply = group.request(
         LiveCmd::AttachGroup,
         "P",
@@ -318,6 +319,11 @@ fn a_group_attached_with_no_select_leaves_the_selection_alone() {
     let parent = group.parent();
     assert_eq!(group.origins(parent), ["c1"]);
     assert_eq!(group.fixture.selected(), selected);
+    let rows = std::iter::once(parent).chain(group.fixture.store().companions(parent).into_iter().map(|row| row.id()));
+    assert!(
+        rows.into_iter()
+            .all(|row| !group.fixture.core.pane_focus_requested(row))
+    );
 }
 
 #[test]

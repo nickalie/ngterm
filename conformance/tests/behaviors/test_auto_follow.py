@@ -11,11 +11,6 @@ from agterm_conformance.match import assert_ok, find_session, session_ids
 from agterm_conformance.plugin import Ctl
 from agterm_conformance.wait import Cursor, WaitTimeout, wait_until
 
-pytestmark = [
-    pytest.mark.requires("posix-command-line", reason="the private sshd uses a POSIX shell"),
-    pytest.mark.requires("posix-shell", reason="the test types `exit` into a pane's shell"),
-]
-
 # The longest grace Settings offers below a minute: a row that ends right after its status arrives holds its exit well
 # before the fire, so a jump the test sees is one to an ended row.
 FOLLOW = {"autoFollowAttention": "s10"}
@@ -25,6 +20,7 @@ PAST_THE_FIRE = FOLLOW_SECONDS + 5.0
 LIVE_ORIGIN = pytest.mark.requires(
     "live-sessions", "live-any-shell", any=True, reason="the origin's session must be Live"
 )
+EXITS = pytest.mark.requires("posix-shell", reason="the test types `exit` into a pane's shell")
 
 
 @pytest.fixture(scope="module")
@@ -88,8 +84,10 @@ def test_auto_follow_selects_a_blocked_session_that_runs(launch):
     assert find_session(ctl.tree(), blocked)["active"] is True
 
 
+@EXITS
 @pytest.mark.covers("session.status", "events.read", "event:session.selected", "field:tree.session.active")
 def test_a_blocked_session_whose_shell_exits_never_takes_the_selection(launch):
+    """Upstream's behavior too: the session closes, so no fire can select it. The baseline of the remote cases."""
     ctl = launch(settings=FOLLOW)
     kept = _first_session(ctl)
     blocked = assert_ok(ctl.request("session.new", name="blocked-exits"))["id"]
@@ -104,10 +102,14 @@ def test_a_blocked_session_whose_shell_exits_never_takes_the_selection(launch):
 
 
 @LIVE_ORIGIN
+@EXITS
+@pytest.mark.requires("posix-command-line", reason="the private sshd uses a POSIX shell")
 @pytest.mark.requires("auto-follow-skips-ended", reason="upstream follows a blocked row that holds its exit")
 @pytest.mark.parametrize("companion", [False, True], ids=["top-level-row", "companion-row"])
 @pytest.mark.covers("live.attach", "session.status", "events.read", "event:session.selected")
 def test_a_blocked_remote_row_that_ends_never_takes_the_selection(remote_origin, follow_viewer, companion):
+    """The row holds its exit past the fire. A companion row with nothing local closes before the fire, so the companion
+    case keeps a local scratch on the row: the row stays, and the scratch did not set the status."""
     origin, viewer = Ctl(remote_origin.instance), follow_viewer
     kept = _first_session(viewer)
     parent = assert_ok(origin.request("session.new", name="follow-parent"))["id"]
@@ -127,6 +129,9 @@ def test_a_blocked_remote_row_that_ends_never_takes_the_selection(remote_origin,
             rows.append(_attach(viewer, remote_origin.host, target))
             assert find_session(viewer.tree(), rows[-1])["parent"] == rows[0]
         row = rows[-1]
+        if companion:
+            assert_ok(viewer.request("session.scratch", row, mode="on"))
+            viewer.wait_mounted(row, "scratch")
         _select(viewer, kept)
         cursor = viewer.events_baseline()
 
@@ -136,13 +141,10 @@ def test_a_blocked_remote_row_that_ends_never_takes_the_selection(remote_origin,
         assert_ok(origin.request("session.type", target, text="exit\n"))
         ended = not companion
         origin.wait_tree(lambda tree: target not in session_ids(tree))
-        if companion:
-            viewer.wait_tree(lambda tree: row not in session_ids(tree), timeout=30)
-            rows.pop()
-        else:
-            viewer.wait_text(row, r"Process exited")
+        viewer.wait_text(row, r"Process exited", pane="left")
 
         _no_selection_past_the_fire(viewer, cursor, kept)
+        assert row in session_ids(viewer.tree())
     finally:
         for local in reversed(rows):
             viewer.request("session.close", local)
