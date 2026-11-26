@@ -14,6 +14,7 @@ use super::{Fixture, args, wire};
 use crate::dispatch::Dispatched;
 use crate::html::{HtmlHost, HtmlNavigation};
 use crate::live::daemon_name;
+use crate::model::Session;
 use crate::remote::page_channel::{ChannelLink, Permits};
 use crate::remote::replica_page::{HelperKey, PageHelperLauncher};
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
@@ -319,7 +320,7 @@ fn a_group_attached_with_no_select_leaves_the_selection_and_the_focus_alone() {
     let parent = group.parent();
     assert_eq!(group.origins(parent), ["c1"]);
     assert_eq!(group.fixture.selected(), selected);
-    let rows = std::iter::once(parent).chain(group.fixture.store().companions(parent).into_iter().map(|row| row.id()));
+    let rows = std::iter::once(parent).chain(group.fixture.store().companions(parent).into_iter().map(Session::id));
     assert!(
         rows.into_iter()
             .all(|row| !group.fixture.core.pane_focus_requested(row))
