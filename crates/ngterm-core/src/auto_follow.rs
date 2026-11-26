@@ -31,9 +31,10 @@ pub struct FollowConfig {
     pub stay_on_active: bool,
 }
 
-/// One entry of a window's attention signature: a workspace (`None`) or a session with its indicator, in sidebar
-/// order — what upstream's `attentionSessions` observation reads.
-type AttentionEntry = (Uuid, Option<AgentIndicator>);
+/// One entry of a window's attention signature: a workspace (`None`) or a session with its indicator and whether it
+/// has ended, in sidebar order: what upstream's `attentionSessions` observation reads, plus the ended state that the
+/// fire skips, so a row that runs again re-arms.
+type AttentionEntry = (Uuid, Option<(AgentIndicator, bool)>);
 
 /// What the settings sync last applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -375,21 +376,14 @@ pub fn auto_follow_target(current: Option<&Session>, blocked: &[&Session], stay_
         .map(|session| session.id())
 }
 
-/// Whether nothing runs in `session` any more: its live session was lost, or every pane of a row attached from
-/// another machine holds its exit. Such a row is about to close (`remote::ended_companions`), so a jump to it would
-/// show it for a moment and then move the selection back.
+/// Whether nothing runs in `session` now: its live session was lost, or every pane of a row attached from another
+/// machine holds its exit, and the row holds no local work. Such a companion row can close soon
+/// (`remote::ended_companions`), so a jump to it could show it for a moment and then move the selection back.
 fn has_ended(session: &Session) -> bool {
-    if session.ended {
-        return true;
-    }
-    let Some(state) = session.remote_presentation() else {
+    if session.holds_local_work() {
         return false;
-    };
-    let split = session.split_pane_identity.filter(|_| session.split.exists);
-    [Some(session.pane_identity), split]
-        .into_iter()
-        .flatten()
-        .all(|pane| state.held_panes.contains(&pane))
+    }
+    session.ended || session.every_remote_pane_held()
 }
 
 /// What upstream's attention observation reads: the workspaces, their sessions and each session's indicator.
@@ -398,7 +392,10 @@ fn attention_signature(store: &AppStore) -> Vec<AttentionEntry> {
     for workspace in store.workspaces() {
         signature.push((workspace.id(), None));
         for session in &workspace.sessions {
-            signature.push((session.id(), Some(session.agent_indicator.clone())));
+            signature.push((
+                session.id(),
+                Some((session.agent_indicator.clone(), has_ended(session))),
+            ));
         }
     }
     signature

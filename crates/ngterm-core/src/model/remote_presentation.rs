@@ -221,6 +221,29 @@ impl Session {
         self.remote_presentation.as_ref()
     }
 
+    /// Whether this row came from another machine and every pane of it holds its exit: nothing of the origin runs
+    /// here now.
+    #[must_use]
+    pub fn every_remote_pane_held(&self) -> bool {
+        let Some(state) = self.remote_presentation() else {
+            return false;
+        };
+        let split = self.split_pane_identity.filter(|_| self.split.exists);
+        [Some(self.pane_identity), split]
+            .into_iter()
+            .flatten()
+            .all(|pane| state.held_panes.contains(&pane))
+    }
+
+    /// Whether the row holds something of this machine's that closing it would end: a scratch shell or an overlay.
+    #[must_use]
+    pub fn holds_local_work(&self) -> bool {
+        self.scratch_surface.is_present()
+            || [None, Some(OverlayPane::Left), Some(OverlayPane::Right)]
+                .into_iter()
+                .any(|pane| self.local_overlay_holds(pane))
+    }
+
     /// The presentation stream's state; `None` for a local session.
     #[must_use]
     pub fn remote_connection(&self) -> Option<&RemoteConnection> {

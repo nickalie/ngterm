@@ -309,7 +309,7 @@ impl Core {
         // a session attached by any path takes over the row a relaunch saved for it, so closing it forgets it
         self.forget_saved_remote_session(host, &remote.id);
         if placement.select {
-            tracing::info!(%host, session = %remote.id, "live attach: selected the attached row");
+            tracing::info!(%host, session = %remote.id, "attached remote row selected");
             self.request_pane_focus(created);
         }
         Ok(ControlResult {

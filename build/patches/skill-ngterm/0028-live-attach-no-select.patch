@@ -1,0 +1,20 @@
+Tell the bundled skill about `live attach --no-select`: the new row is attached without taking the selection or the
+keyboard focus, so a viewer hook that attaches a companion does not make the window show it for a moment. Applied
+after 0027-sidebar-search.patch.
+
+diff --git a/reference.md b/reference.md
+index f94fff3da..36dc85112 100644
+--- a/reference.md
++++ b/reference.md
+@@ -2397,8 +2397,10 @@ fails with exit 127. A Windows machine cannot be the far side yet: every remote
+ line, which its sshd does not run, so its sessions cannot be listed or attached elsewhere and no remote companion
+ can be created there.
+ 
+-`ngtermctl live attach HOST SESSION [--window W]` opens one of those sessions here, marked remote, in
++`ngtermctl live attach HOST SESSION [--window W] [--no-select]` opens one of those sessions here, marked remote, in
+ the destination window's current workspace, selected, with the remote session's split when it has one.
++`--no-select` (`noSelect`) attaches it in the background: the window's selection and keyboard focus stay where they
++were, not even moving for a moment; it applies to `--companions` too.
+ `--window` takes a local open window ID, unique prefix, or `active`; omitted, it uses the frontmost window
+ after discovery. An invalid or closed destination fails without creating a session. Targeting a background
+ window leaves the frontmost window unchanged. `SESSION` is the

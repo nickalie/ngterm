@@ -17,7 +17,7 @@ use super::ssh::control_command;
 use super::tree::{RemoteCommandResult, TREE_DEADLINE};
 use super::viewer::{Answer, run_off_thread, take_answer};
 use crate::Core;
-use crate::model::{OverlayPane, Session};
+use crate::model::Session;
 
 /// How many inventories may still show the session before the row is left on its exit line.
 const READS: u32 = 3;
@@ -32,29 +32,16 @@ pub(crate) struct EndedCheck {
     reads_left: u32,
 }
 
-/// Whether the row holds something of this machine's that closing it would end: a scratch shell or an overlay.
-fn holds_local_work(row: &Session) -> bool {
-    row.scratch_surface.is_present()
-        || [None, Some(OverlayPane::Left), Some(OverlayPane::Right)]
-            .into_iter()
-            .any(|pane| row.local_overlay_holds(pane))
-}
-
 /// The host and origin session of a remote terminal companion every pane of which is held; a pane running here (a local
-/// split too) keeps the row, as does [`holds_local_work`].
+/// split too) keeps the row, as does [`Session::holds_local_work`].
 fn held_companion(row: &Session) -> Option<(String, String)> {
     row.parent_id()?;
-    if holds_local_work(row) {
+    if row.holds_local_work() || !row.every_remote_pane_held() {
         return None;
     }
     let host = row.remote_host()?;
     let state = row.remote_presentation()?;
-    let split = row.split_pane_identity.filter(|_| row.split.exists);
-    [Some(row.pane_identity), split]
-        .into_iter()
-        .flatten()
-        .all(|pane| state.held_panes.contains(&pane))
-        .then(|| (host.to_owned(), state.binding.remote_session_id.clone()))
+    Some((host.to_owned(), state.binding.remote_session_id.clone()))
 }
 
 /// Whether the origin's `live list` answer has the session; `None` when the answer cannot tell.

@@ -196,8 +196,8 @@ fn fire_is_a_no_op_without_blocked() {
     assert_eq!(fixture.selected(), Some(a));
 }
 
-/// A blocked session whose live session was lost runs nothing: a jump to it would show it until its close moves the
-/// selection back. The oldest blocked session that still runs is the target.
+/// A blocked session whose live session was lost runs nothing: a jump to it would only show its exit. The oldest
+/// blocked session that still runs is the target.
 #[test]
 fn fire_skips_an_ended_session() {
     let mut fixture = Fixture::new(0);
@@ -215,6 +215,24 @@ fn fire_skips_an_ended_session() {
     assert_eq!(fire(&mut fixture), None, "the one left has ended");
     assert_eq!(fixture.selected(), Some(current));
     assert!(fixture.store_mut().unwrap().take_outbox().events.is_empty());
+}
+
+/// An ended session whose scratch still runs (its agent can block there) is still followed.
+#[test]
+fn fire_follows_an_ended_session_whose_scratch_runs() {
+    let mut fixture = Fixture::new(0);
+    let current = fixture.sessions[0];
+    let ended = add_blocked(&mut fixture, 100);
+    let store = fixture.store_mut().unwrap();
+    assert!(store.mark_session_ended(ended));
+    store
+        .session_mut(ended)
+        .unwrap()
+        .scratch_surface
+        .replace(Box::new(FakeSurface::new("scratch")));
+    select(&mut fixture, current);
+
+    assert_eq!(fire(&mut fixture).map(|followed| followed.session), Some(ended));
 }
 
 #[test]

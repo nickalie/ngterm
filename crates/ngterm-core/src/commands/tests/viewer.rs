@@ -394,24 +394,41 @@ fn attach_with_no_select_keeps_the_selection_and_a_plain_attach_takes_it() {
 }
 
 /// A blocked row whose session ended on its origin holds its exit until its close here: auto-follow leaves it alone,
-/// so the end of a row that is not selected never moves the selection, not even to it and back.
+/// so the end of a row that is not selected never moves the selection, not even to it and back. A row that runs,
+/// before the hold and after it attaches again, is followed.
 #[test]
 fn auto_follow_never_jumps_to_a_row_whose_session_ended() {
     let mut viewer = viewer_with(false);
-    let (window, row, local) = (viewer.fixture.window, viewer.session, viewer.fixture.sessions[0]);
+    let (row, local) = (viewer.session, viewer.fixture.sessions[0]);
     let blocked = crate::model::AgentIndicator {
         status: crate::model::AgentStatus::Blocked,
         ..crate::model::AgentIndicator::default()
     };
+    let _ = viewer.fixture.core.take_auto_follow_timers();
+    viewer
+        .fixture
+        .core
+        .set_auto_follow(Some(crate::auto_follow::FollowConfig {
+            timeout: Duration::from_secs(1),
+            stay_on_active: false,
+        }));
     let store = viewer.fixture.store_mut().unwrap();
     store.set_agent_indicator(blocked, row);
     store.select_session(Some(local));
     let primary = viewer.session().pane_identity;
+    assert_eq!(
+        fire_armed(&mut viewer.fixture.core),
+        [Some(row)],
+        "a running blocked row is followed"
+    );
+    let store = viewer.fixture.store_mut().unwrap();
+    store.select_session(Some(local));
+    store.session_mut(row).unwrap().set_auto_follow_consumed(false);
 
     viewer.fixture.core.pane_held(row, &wire(primary));
     assert!(viewer.fixture.store().remote_pane_is_held(primary, row));
     viewer.fixture.store_mut().unwrap().take_outbox();
-    assert_eq!(viewer.fixture.core.auto_follow_step(window), None);
+    assert_eq!(fire_armed(&mut viewer.fixture.core), [None]);
 
     assert_eq!(viewer.fixture.selected(), Some(local));
     let events = viewer.fixture.store_mut().unwrap().take_outbox().events;
@@ -420,6 +437,24 @@ fn auto_follow_never_jumps_to_a_row_whose_session_ended() {
             .iter()
             .any(|event| event.kind == ngterm_proto::EventKind::SessionSelected)
     );
+
+    viewer.fixture.store_mut().unwrap().remote_pane_resumed(primary, row);
+    assert_eq!(
+        fire_armed(&mut viewer.fixture.core),
+        [Some(row)],
+        "a row that runs again re-arms the fire"
+    );
+}
+
+/// Fires every auto-follow timer armed since the last take once its delay passed, as the main loop does.
+fn fire_armed(core: &mut crate::Core) -> Vec<Option<Uuid>> {
+    core.take_auto_follow_timers()
+        .into_iter()
+        .map(|timer| {
+            core.fire_auto_follow_at(timer, Instant::now() + timer.delay)
+                .map(|followed| followed.session)
+        })
+        .collect()
 }
 
 /// An origin's listing of its session, from the origin's pane identities and whether it is split.
