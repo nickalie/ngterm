@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Mutex;
 
 use ngterm_core::model::WindowLibrary;
@@ -1093,38 +1094,71 @@ fn the_quit_closes_the_catalog_streams_and_a_late_close_reaches_nothing() {
     );
 }
 
+/// Runs the read the watch posts once it has armed, so later values can only come from a file event.
+fn run_the_first_read(main_loop: &Loop, state: &mut HeadlessState) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while main_loop.tasks.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the watch never read the file");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    main_loop.drain(state);
+}
+
+fn wait_for_timeout(main_loop: &Loop, state: &mut HeadlessState, host: &str, seconds: u64) {
+    use ngterm_core::remote::connect_timeout;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while u64::from(connect_timeout::seconds(host)) != seconds {
+        assert!(
+            Instant::now() < deadline,
+            "the edit to {seconds} s never reached the ssh lines"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        main_loop.drain(state);
+    }
+}
+
 #[test]
 fn a_remotes_conf_edit_reaches_the_next_ssh_without_a_restart() {
     use ngterm_core::remote::connect_timeout;
     let (mut state, main_loop, _) = fixture();
+    let locate = |dir: &Path| {
+        ngterm_core::paths::ConfigLocator::capture(&ngterm_core::paths::MapEnv::new().with("NGTERM_STATE_DIR", dir))
+    };
+    let write = |dir: &Path, seconds: u64| {
+        let path = dir.join("config/remotes.conf");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!("connect-timeout headless-watched = {seconds}\nheadless-watched\n"),
+        )
+        .unwrap();
+    };
     let dir = tempfile::tempdir().unwrap();
-    state
-        .core
-        .set_config_locator(ngterm_core::paths::ConfigLocator::capture(
-            &ngterm_core::paths::MapEnv::new().with("NGTERM_STATE_DIR", dir.path()),
-        ));
-    let path = dir.path().join("config/remotes.conf");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, "connect-timeout headless-watched = 20\nheadless-watched\n").unwrap();
+    state.core.set_config_locator(locate(dir.path()));
+    write(dir.path(), 20);
     state.core.load_remotes_at_launch();
     assert_eq!(connect_timeout::seconds("headless-watched"), 20);
     state.watch_remotes();
-    let edited = || connect_timeout::seconds("headless-watched") == 35;
-    // a write before the watch is armed is read by the watch's first read
-    std::fs::write(&path, "connect-timeout headless-watched = 35\nheadless-watched\n").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !edited() {
-        assert!(Instant::now() < deadline, "the edit never reached the ssh lines");
-        std::thread::sleep(Duration::from_millis(10));
-        main_loop.drain(&mut state);
-    }
+    run_the_first_read(&main_loop, &mut state);
+    assert_eq!(connect_timeout::seconds("headless-watched"), 20);
+    write(dir.path(), 35);
+    wait_for_timeout(&main_loop, &mut state, "headless-watched", 35);
+
+    let moved = tempfile::tempdir().unwrap();
+    write(moved.path(), 35);
+    state.core.set_config_locator(locate(moved.path()));
+    state.settle();
+    run_the_first_read(&main_loop, &mut state);
+    write(moved.path(), 50);
+    wait_for_timeout(&main_loop, &mut state, "headless-watched", 50);
+
     state.teardown();
-    std::fs::write(&path, "headless-watched\n").unwrap();
+    std::fs::write(moved.path().join("config/remotes.conf"), "headless-watched\n").unwrap();
     std::thread::sleep(ngterm_app::remotes_watcher::DEBOUNCE * 6);
     main_loop.drain(&mut state);
     assert_eq!(
         connect_timeout::seconds("headless-watched"),
-        35,
+        50,
         "a torn-down instance stops reading"
     );
     connect_timeout::install(connect_timeout::ConnectTimeouts::default());

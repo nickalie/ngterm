@@ -524,7 +524,7 @@ fn the_app_retries_its_links_on_the_network_and_the_wake_and_follows_remotes_con
     let (notifications, banner) = notification_server(&sandbox)?;
     sandbox.set_env(
         "NGTERM_LOG",
-        "info,ngterm_gpui::remotes_watcher=debug,ngterm_gpui::notifications=debug",
+        "info,ngterm_app::remotes_watcher=debug,ngterm_gpui::notifications=debug",
     );
     sandbox.start_weston()?;
     sandbox.use_software_rendering(&lavapipe);
