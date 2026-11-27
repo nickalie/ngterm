@@ -2,6 +2,7 @@
 //! threads read empty and have none), `stat` for the ids and the terminal's foreground group, a scan of every `stat`
 //! for a process group's members (Linux has no per-group listing), the `cwd` link for the working directory.
 
+use std::cell::OnceCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -40,6 +41,25 @@ impl ProcTable {
     fn read_stat(path: &Path) -> Option<ProcessStat> {
         procfs::parse_stat(&fs::read(path).ok()?)
     }
+
+    /// Every readable process's ids, by pid: the scan of every `stat` that [`ProcessTable::group`] filters.
+    fn listing(&self) -> Vec<ProcessStat> {
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        let mut listed: Vec<ProcessStat> = entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_str().is_some_and(procfs::is_pid))
+            .filter_map(|entry| Self::read_stat(&entry.path().join("stat")))
+            .collect();
+        listed.sort_unstable_by_key(|stat| stat.pid);
+        listed
+    }
+}
+
+/// The members of group `pgrp` in `listed`, by pid.
+fn group_in(listed: &[ProcessStat], pgrp: i32) -> Vec<ProcessStat> {
+    listed.iter().copied().filter(|stat| stat.pgrp == pgrp).collect()
 }
 
 impl ProcessTable for ProcTable {
@@ -52,17 +72,7 @@ impl ProcessTable for ProcTable {
     }
 
     fn group(&self, pgrp: i32) -> Vec<ProcessStat> {
-        let Ok(entries) = fs::read_dir(&self.root) else {
-            return Vec::new();
-        };
-        let mut members: Vec<ProcessStat> = entries
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_str().is_some_and(procfs::is_pid))
-            .filter_map(|entry| Self::read_stat(&entry.path().join("stat")))
-            .filter(|stat| stat.pgrp == pgrp)
-            .collect();
-        members.sort_unstable_by_key(|stat| stat.pid);
-        members
+        group_in(&self.listing(), pgrp)
     }
 
     /// The `tpgid` of the stat line; `None` for a process without a terminal.
@@ -87,6 +97,53 @@ impl ProcessTable for ProcTable {
     fn search_path(&self, pid: i32) -> Option<String> {
         let environ = fs::read(self.process_file(pid, "environ")).ok()?;
         super::search_path_of(&procfs::parse_environ(&environ), false)
+    }
+
+    /// A view that scans every `stat` one time, at its first [`ProcessTable::group`], and filters that scan for each
+    /// later one: the `tree` reads every `--command` pane's group, and a scan for each held the main thread for up to a
+    /// second with a few hundred processes running.
+    fn shared_listing(&self) -> Option<Box<dyn ProcessTable + '_>> {
+        Some(Box::new(SharedListing {
+            table: self,
+            listed: OnceCell::new(),
+        }))
+    }
+}
+
+/// [`ProcTable`]'s [`ProcessTable::shared_listing`] view: its own reads, but one scan of every `stat` for all groups.
+struct SharedListing<'a> {
+    table: &'a ProcTable,
+    /// Every process's ids, once scanned.
+    listed: OnceCell<Vec<ProcessStat>>,
+}
+
+impl ProcessTable for SharedListing<'_> {
+    fn argv(&self, pid: i32) -> Option<Vec<String>> {
+        self.table.argv(pid)
+    }
+
+    fn stat(&self, pid: i32) -> Option<ProcessStat> {
+        self.table.stat(pid)
+    }
+
+    fn group(&self, pgrp: i32) -> Vec<ProcessStat> {
+        group_in(self.listed.get_or_init(|| self.table.listing()), pgrp)
+    }
+
+    fn terminal_foreground(&self, pid: i32) -> Option<i32> {
+        self.table.terminal_foreground(pid)
+    }
+
+    fn working_directory(&self, pid: i32) -> Option<String> {
+        self.table.working_directory(pid)
+    }
+
+    fn executable_path(&self, pid: i32) -> Option<String> {
+        self.table.executable_path(pid)
+    }
+
+    fn search_path(&self, pid: i32) -> Option<String> {
+        self.table.search_path(pid)
     }
 }
 
@@ -137,6 +194,49 @@ mod tests {
         );
         assert!(table.group(555).is_empty());
         assert!(ProcTable::at(root.path().join("missing")).group(101).is_empty());
+    }
+
+    #[test]
+    fn a_shared_listing_scans_every_stat_one_time_for_all_groups() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |pid: i32, cmdline: &[u8], stat: &[u8]| {
+            let dir = root.path().join(pid.to_string());
+            fs::create_dir(&dir).unwrap();
+            fs::write(dir.join("cmdline"), cmdline).unwrap();
+            fs::write(dir.join("stat"), stat).unwrap();
+        };
+        write(100, b"-zsh\0", b"100 (zsh) S 9 100 100 0");
+        write(101, b"tail\0", b"101 (tail) S 100 101 100 0");
+        write(200, b"sh\0", b"200 (sh) S 9 200 200 0");
+        let table = ProcTable::at(root.path());
+        let view = table.shared_listing().unwrap();
+
+        assert_eq!(view.group(101), [stat(101, 100, 101, 100)]);
+        write(102, b"grep\0", b"102 (grep) S 100 101 100 0");
+        write(201, b"cat\0", b"201 (cat) S 200 200 200 0");
+        assert_eq!(
+            view.group(101),
+            [stat(101, 100, 101, 100)],
+            "the first scan serves the pass"
+        );
+        assert_eq!(
+            view.group(200),
+            [stat(200, 9, 200, 200)],
+            "another group, the same scan"
+        );
+        assert!(view.group(555).is_empty());
+        assert_eq!(view.stat(201), Some(stat(201, 200, 200, 200)), "single reads stay live");
+        assert_eq!(view.argv(102), Some(vec!["grep".to_owned()]));
+        assert_eq!(
+            table.group(101),
+            [stat(101, 100, 101, 100), stat(102, 100, 101, 100)],
+            "the table itself scans each time"
+        );
+        assert_eq!(
+            table.shared_listing().unwrap().group(200).len(),
+            2,
+            "a new pass scans again"
+        );
     }
 
     #[test]
