@@ -1143,12 +1143,11 @@ fn the_v042_leaves_reach_the_app_and_print_its_refusal() -> TestResult {
     let dir = short_dir()?;
     let socket = dir.path().join("ngterm.sock");
     let _server = serve_core(&socket)?;
-    let leaves: [(&[&str], &str); 5] = [
+    let leaves: [(&[&str], &str); 4] = [
         (&["session", "detach"], "session.detach"),
         (&["session", "reattach", "--target", "ab12"], "session.reattach"),
         (&["workspace", "detach"], "workspace.detach"),
         (&["workspace", "reattach", "--target", "ab12"], "workspace.reattach"),
-        (&["window", "remote", "dismiss"], "window.remote.dismiss"),
     ];
     for (argv, command) in leaves {
         assert_eq!(
@@ -1161,6 +1160,11 @@ fn the_v042_leaves_reach_the_app_and_print_its_refusal() -> TestResult {
             "{argv:?}"
         );
     }
+    // `window remote dismiss` has its handler, which resolves the window: this core has none open
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["window", "remote", "dismiss"])?),
+        (Some(1), String::new(), "error: no such window: active\n".to_owned())
+    );
     // `window remote open` has its handler, which checks the host before any ssh
     assert_eq!(
         outcome(&run_on(dir.path(), &socket, &["window", "remote", "open", "a b"])?),
