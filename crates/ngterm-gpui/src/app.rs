@@ -606,6 +606,8 @@ fn shut_down(shell: &Shell, cx: &mut App) {
     if shell.shut_down.replace(true) {
         return;
     }
+    // a quit past request_quit (GPUI's loop ended on its own) still ends the web worker as a quit
+    crate::html_overlay::mark_quitting();
     // the layout the keyboard-layout lock replaced comes back before anything else goes
     crate::input_source::stop(cx);
     // the open windows' frames, as each window's close saves its own
@@ -825,6 +827,30 @@ mod tests {
             assert!(!shell.state.read(cx).is_quitting());
             shut_down(&shell, cx);
         });
+    }
+
+    #[cfg(all(feature = "html", target_os = "linux"))]
+    #[test]
+    fn a_shut_down_past_the_quit_request_marks_the_quit_for_the_web_worker() {
+        let status = crate::signals::tests::run_child("app::tests::shut_down_mark_child");
+        assert!(status.success(), "{status:?}");
+    }
+
+    #[cfg(all(feature = "html", target_os = "linux"))]
+    #[gpui_kit::test]
+    #[ignore = "run by a_shut_down_past_the_quit_request_marks_the_quit_for_the_web_worker"]
+    fn shut_down_mark_child(cx: &mut gpui_kit::TestAppContext) {
+        if !crate::signals::tests::is_child("app::tests::shut_down_mark_child") {
+            return;
+        }
+        let dir = tempfile::Builder::new()
+            .prefix("ngt")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let shell = cx.update(|cx| test_shell(dir.path(), cx));
+        assert!(!ngterm_wpe_client::worker::app_is_quitting());
+        cx.update(|cx| shut_down(&shell, cx));
+        assert!(ngterm_wpe_client::worker::app_is_quitting());
     }
 
     #[gpui_kit::test]

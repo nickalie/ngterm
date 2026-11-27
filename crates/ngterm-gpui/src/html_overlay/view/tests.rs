@@ -844,11 +844,20 @@ fn the_terminal_under_a_hidden_page_gets_the_pointer(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn an_engine_that_ends_once_the_app_quits_fails_no_page(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let page = harness.element.read_with(cx, |element, _| Rc::clone(element.page()));
+    cx.update(|_, _| registry::engine_ended(true));
+    assert_eq!(page.failure(), None);
+    assert_eq!(registry::refusal(), None, "no page is refused");
+}
+
+#[gpui_kit::test]
 fn an_engine_that_ends_while_the_app_runs_fails_every_page_for_good(cx: &mut TestAppContext) {
     let (harness, cx) = harness(cx);
     let page = harness.element.read_with(cx, |element, _| Rc::clone(element.page()));
     assert_eq!(page.failure(), None);
-    cx.update(|_, _| registry::engine_ended());
+    cx.update(|_, _| registry::engine_ended(false));
     let failure = page.failure().expect("the page failed");
     assert!(failure.contains("restart ngterm"), "{failure}");
     assert_eq!(

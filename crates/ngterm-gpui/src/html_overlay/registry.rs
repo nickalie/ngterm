@@ -380,7 +380,7 @@ pub fn init(cx: &mut App) {
             while let Ok(event) = events.recv().await {
                 cx.update(|cx| dispatch(&event, cx));
             }
-            cx.update(|_| engine_ended());
+            cx.update(|_| engine_ended(ngterm_wpe_client::worker::app_is_quitting()));
             return;
         }
     })
@@ -626,11 +626,16 @@ pub(super) fn finish_start(web: Rc<dyn Web>) {
     run_on(web);
 }
 
-/// The engine's events ended. Past the quit's own shutdown nothing follows; while the app runs it means the engine is
-/// gone (its worker died): every page fails, for good, and a store clear in flight reports the failure.
-pub(super) fn engine_ended() {
+/// The engine's events ended. Past the quit's own shutdown, or once the app started to quit (`quitting`), nothing
+/// follows; while the app runs it means the engine is gone (its worker died): every page fails, for good, and a store
+/// clear in flight reports the failure.
+pub(super) fn engine_ended(quitting: bool) {
     let pages = with(|registry| {
         if !matches!(registry.engine, EngineState::Running(_)) {
+            return None;
+        }
+        if quitting {
+            tracing::info!("the web engine ended with the app's quit");
             return None;
         }
         registry.engine = EngineState::Failed(ENDED.to_owned());

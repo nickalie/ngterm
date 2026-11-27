@@ -27,9 +27,9 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::os::fd::{AsFd as _, AsRawFd as _, BorrowedFd, OwnedFd};
-use std::os::unix::process::CommandExt as _;
+use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -345,16 +345,17 @@ struct Worker {
 }
 
 impl Worker {
-    /// Waits `grace` for the worker to end, then kills its group; reaps it either way. Once: a second call (the reader
-    /// and the shutdown may both get here) finds nothing to reap.
-    fn reap(&self, grace: Duration) {
+    /// Waits `grace` for the worker to end, then kills its group; reaps it either way, and gives how it ended. Once: a
+    /// second call (the reader and the shutdown may both get here) finds nothing to reap and gives `None`.
+    fn reap(&self, grace: Duration) -> Option<ExitStatus> {
         // held throughout: a second caller returns only once the worker is reaped
         let mut slot = self.child.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(mut child) = slot.take() else { return };
+        let mut child = slot.take()?;
         let deadline = Instant::now() + grace;
         loop {
             match child.try_wait() {
-                Ok(Some(_)) | Err(_) => return,
+                Ok(Some(status)) => return Some(status),
+                Err(_) => return None,
                 Ok(None) if Instant::now() >= deadline => break,
                 Ok(None) => std::thread::sleep(Duration::from_millis(10)),
             }
@@ -362,7 +363,7 @@ impl Worker {
         tracing::warn!("the WPE worker did not end within {grace:?}: killing it");
         // SAFETY: `kill` only sends a signal, to the group the worker leads (it was started as its leader).
         let _ = unsafe { libc::kill(-self.group, libc::SIGKILL) };
-        let _ = child.wait();
+        child.wait().ok()
     }
 }
 
@@ -893,13 +894,6 @@ impl Reader {
                 }
             }
         }
-        if !stopped {
-            if self.quitting.load(Ordering::Relaxed) {
-                tracing::info!("the WPE worker ended with the app's quit");
-            } else {
-                tracing::error!("the WPE worker ended unasked: its pages are gone");
-            }
-        }
         let waiting = {
             let mut evaluations = self.evaluations.lock().unwrap_or_else(PoisonError::into_inner);
             evaluations.ended = true;
@@ -913,7 +907,23 @@ impl Reader {
         // the dmabufs go with the worker, and the consumer's events end at once, before the reaping's wait
         lock(&self.pages).0.clear();
         self.events.close();
-        self.worker.reap(REAP_GRACE);
+        let status = self.worker.reap(REAP_GRACE);
+        if !stopped {
+            self.log_unasked_end(status);
+        }
+    }
+
+    /// Logs the end of a worker that did not stop on the app's request. The app itself only kills it (SIGKILL), so a
+    /// SIGTERM or SIGHUP came from the system: the session's end signals the worker too, maybe before the app.
+    fn log_unasked_end(&self, status: Option<ExitStatus>) {
+        let signal = status.and_then(|status| status.signal());
+        if self.quitting.load(Ordering::Relaxed) {
+            tracing::info!("the WPE worker ended with the app's quit");
+        } else if let Some(signal @ (libc::SIGTERM | libc::SIGHUP)) = signal {
+            tracing::info!(signal, "the WPE worker ended at the system's request");
+        } else {
+            tracing::error!("the WPE worker ended unasked: its pages are gone");
+        }
     }
 
     /// Hands `event` to the app, waiting while its queue is full; dropped once a shutdown closed it.
@@ -1289,10 +1299,11 @@ mod tests {
         }
     }
 
-    /// What a client started by `start` logs when its worker is killed, `quit` run first.
+    /// What a client started by `start` logs when its worker is killed by `signal`, `quit` run first.
     fn logged_at_worker_end(
         start: impl FnOnce(OwnedFd, Arc<Worker>) -> (Client, Receiver<Event>),
         quit: impl FnOnce(),
+        signal: i32,
     ) -> Vec<(tracing::Level, String)> {
         use tracing_subscriber::layer::SubscriberExt as _;
         let logged = Logged::default();
@@ -1303,10 +1314,19 @@ mod tests {
             quit();
             drop(theirs);
             // SAFETY: as in `alive`.
-            unsafe { libc::kill(worker.group, libc::SIGKILL) };
+            unsafe { libc::kill(worker.group, signal) };
             assert!(events.recv_blocking().is_err(), "the reader ended");
             drop(client);
         });
+        // the reader logs the end once it reaped the worker, past its events' end
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !lock(&logged.0)
+            .iter()
+            .any(|(_, message)| message.starts_with("the WPE worker ended"))
+        {
+            assert!(Instant::now() < deadline, "no end logged: {:?}", lock(&logged.0));
+            std::thread::sleep(Duration::from_millis(10));
+        }
         std::mem::take(&mut *lock(&logged.0))
     }
 
@@ -1318,13 +1338,19 @@ mod tests {
             .collect()
     }
 
+    /// A client whose app is not quitting: its own flag, never set.
+    fn running_app(ours: OwnedFd, worker: Arc<Worker>) -> (Client, Receiver<Event>) {
+        static QUITTING: AtomicBool = AtomicBool::new(false);
+        Client::running_until(ours, worker, 0, Duration::from_millis(200), STALL_TIMEOUT, &QUITTING)
+    }
+
     #[test]
     fn a_worker_that_ends_after_the_app_started_to_quit_logs_no_error() {
         let logged = logged_at_worker_end(
             |ours, worker| Client::running(ours, worker, 0, Duration::from_millis(200), STALL_TIMEOUT),
             mark_app_quitting,
+            libc::SIGKILL,
         );
-        assert!(app_is_quitting());
         assert_eq!(errors(&logged), Vec::<&str>::new(), "logged: {logged:?}");
         assert!(
             logged.contains(&(
@@ -1336,12 +1362,23 @@ mod tests {
     }
 
     #[test]
+    fn a_worker_the_system_ends_before_the_app_logs_no_error() {
+        for signal in [libc::SIGTERM, libc::SIGHUP] {
+            let logged = logged_at_worker_end(running_app, || {}, signal);
+            assert_eq!(errors(&logged), Vec::<&str>::new(), "logged: {logged:?}");
+            assert!(
+                logged.contains(&(
+                    tracing::Level::INFO,
+                    "the WPE worker ended at the system's request".to_owned()
+                )),
+                "logged: {logged:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_worker_that_ends_while_the_app_runs_logs_an_error() {
-        static QUITTING: AtomicBool = AtomicBool::new(false);
-        let logged = logged_at_worker_end(
-            |ours, worker| Client::running_until(ours, worker, 0, Duration::from_millis(200), STALL_TIMEOUT, &QUITTING),
-            || {},
-        );
+        let logged = logged_at_worker_end(running_app, || {}, libc::SIGKILL);
         assert_eq!(
             errors(&logged),
             ["the WPE worker ended unasked: its pages are gone"],

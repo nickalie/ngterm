@@ -1,5 +1,7 @@
-//! A handler that could not be installed leaves SIGTERM its default action: the install fails in a child of the test
-//! that may start no thread, and the child's SIGTERM ends it.
+//! The SIGTERM handler, each test in a child process of its own: a handler that could not be installed leaves SIGTERM
+//! its default action (the install fails in a child that may start no thread, and the child's SIGTERM ends it), and a
+//! SIGTERM marks the quit for the web worker. [`run_child`] and [`is_child`] also serve the other modules' tests of
+//! that process-wide mark.
 
 use std::os::unix::process::ExitStatusExt as _;
 use std::process::{Command, ExitStatus};
@@ -77,12 +79,6 @@ fn sigterm_quit_mark_child() {
     assert!(!ngterm_wpe_client::worker::app_is_quitting());
     // SAFETY: raising a signal at this process, whose handler is installed.
     unsafe { libc::raise(libc::SIGTERM) };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !ngterm_wpe_client::worker::app_is_quitting() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the SIGTERM did not mark the quit"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    // raise returns once the handler ran on this thread: no other thread had to run for the mark
+    assert!(ngterm_wpe_client::worker::app_is_quitting());
 }

@@ -282,17 +282,17 @@ fn saved_store_clear_reports_completion_or_one_failure(cx: &mut TestAppContext) 
 fn an_engine_exit_finishes_a_pending_clear_and_shutdown_refuses_late_starts() {
     let web = replies();
     with(|registry| registry.clearing = true);
-    engine_ended();
+    engine_ended(false);
     assert_eq!(PageHost.saved_store_clear(), ClearProgress::Failed(ENDED.to_owned()));
     assert_eq!(PageHost.saved_store_clear(), ClearProgress::Done);
     assert_eq!(engine().err().as_deref(), Some(ENDED));
-    engine_ended();
+    engine_ended(false);
     use_web(web.clone());
     shutdown();
     assert!(web.stopped.get());
     assert_eq!(engine().err().as_deref(), Some("the app is quitting"));
     assert!(started_engine(Err(ngterm_wpe_client::StartError::AlreadyStarted)).is_none());
-    engine_ended();
+    engine_ended(false);
     assert_eq!(engine().err().as_deref(), Some("the app is quitting"));
     shutdown();
 }
@@ -598,7 +598,7 @@ fn an_unreadable_page_fails_with_its_reason_and_never_waits_for_the_engine(cx: &
     );
 
     use_web(Rc::new(Recorded::default()));
-    engine_ended();
+    engine_ended(false);
     assert!(
         model
             .state

@@ -64,13 +64,14 @@ pub fn quit_on_sigterm(poster: Poster) -> io::Result<()> {
             };
             if signals.forever().next().is_some() {
                 tracing::info!("SIGTERM: quitting");
-                // the session's end signals the web worker too, which can end before the main loop runs the quit
-                crate::html_overlay::mark_quitting();
                 post(&poster, AppState::request_quit);
             }
         })?;
     let signals = Signals::new([SIGTERM])?;
     second_sigterm_terminates()?;
+    // the session's end signals the web worker too: the mark goes in at delivery, before any thread runs
+    // SAFETY: the action is an atomic store, which is async-signal-safe.
+    unsafe { signal_hook::low_level::register(SIGTERM, crate::html_overlay::mark_quitting) }?;
     // the thread waits on its receiver until it has the iterator
     let _ = hand.send(signals);
     Ok(())
