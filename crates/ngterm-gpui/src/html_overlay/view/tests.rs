@@ -12,6 +12,7 @@ use gpui_kit::{
     ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px, size,
 };
 use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
+use ngterm_wpe_client::worker::WorkerEnd;
 use ngterm_wpe_client::{
     Area, BufferId, ContextMenu, DmaBuf, EditingCommand, Event, Frame, FrameContent, Geometry, Input, Load, MenuToken,
     OptionItem, OptionKind, OptionMenu, Plane, PointerKind, Rect, SessionSpec, ShmRegion, ViewId,
@@ -847,9 +848,21 @@ fn the_terminal_under_a_hidden_page_gets_the_pointer(cx: &mut TestAppContext) {
 fn an_engine_that_ends_once_the_app_quits_fails_no_page(cx: &mut TestAppContext) {
     let (harness, cx) = harness(cx);
     let page = harness.element.read_with(cx, |element, _| Rc::clone(element.page()));
-    cx.update(|_, _| registry::engine_ended(true));
+    cx.update(|_, _| registry::engine_ended(WorkerEnd::AppQuit));
     assert_eq!(page.failure(), None);
     assert_eq!(registry::refusal(), None, "no page is refused");
+}
+
+#[gpui_kit::test]
+fn an_engine_the_system_ends_fails_every_page_and_logs_no_error(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let page = harness.element.read_with(cx, |element, _| Rc::clone(element.page()));
+    let errors = Arc::new(crate::global_hotkey::tests::Logged::at(tracing::Level::ERROR));
+    tracing::subscriber::with_default(Arc::clone(&errors), || {
+        cx.update(|_, _| registry::engine_ended(WorkerEnd::System));
+    });
+    assert_eq!(errors.seen(), Vec::<String>::new());
+    assert!(page.failure().is_some_and(|failure| failure.contains("restart ngterm")));
 }
 
 #[gpui_kit::test]
@@ -857,7 +870,11 @@ fn an_engine_that_ends_while_the_app_runs_fails_every_page_for_good(cx: &mut Tes
     let (harness, cx) = harness(cx);
     let page = harness.element.read_with(cx, |element, _| Rc::clone(element.page()));
     assert_eq!(page.failure(), None);
-    cx.update(|_, _| registry::engine_ended(false));
+    let errors = Arc::new(crate::global_hotkey::tests::Logged::at(tracing::Level::ERROR));
+    tracing::subscriber::with_default(Arc::clone(&errors), || {
+        cx.update(|_, _| registry::engine_ended(WorkerEnd::Failed));
+    });
+    assert_eq!(errors.seen().len(), 1, "{:?}", errors.seen());
     let failure = page.failure().expect("the page failed");
     assert!(failure.contains("restart ngterm"), "{failure}");
     assert_eq!(

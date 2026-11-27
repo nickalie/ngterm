@@ -32,6 +32,7 @@ use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::replica_page::{ContentFailures, PageResource};
 use ngterm_proto::Response;
 use ngterm_update::web_engine::Progress;
+use ngterm_wpe_client::worker::WorkerEnd;
 use ngterm_wpe_client::{
     BufferFormat, DmaBufTarget, Event, FrameMode, HostConfig, ReplyToken, SchemeError, SchemeRequest, SchemeResponse,
     SchemeToken, SessionId, SessionSpec, ViewId,
@@ -77,6 +78,9 @@ enum EngineState {
     /// The start failed, or the engine ended, for good (the engine starts once per process).
     Failed(String),
 }
+
+/// The running engine's events, and its host, which tells how the worker ended once they end.
+type RunningEngine = (async_channel::Receiver<Event>, Arc<ngterm_wpe_client::Host>);
 
 /// What the start thread hands the pump.
 type Started = Result<(ngterm_wpe_client::Host, async_channel::Receiver<Event>), ngterm_wpe_client::StartError>;
@@ -374,13 +378,14 @@ pub fn init(cx: &mut App) {
     cx.spawn(async move |cx| {
         // a retry starts the thread again, so the steps go on until an engine runs
         while let Ok(step) = steps.recv().await {
-            let Some(events) = cx.update(|cx| start_step(step, cx)) else {
+            let Some((events, host)) = cx.update(|cx| start_step(step, cx)) else {
                 continue;
             };
             while let Ok(event) = events.recv().await {
                 cx.update(|cx| dispatch(&event, cx));
             }
-            cx.update(|_| engine_ended(ngterm_wpe_client::worker::app_is_quitting()));
+            let end = engine_end(ngterm_wpe_client::worker::app_is_quitting(), host.worker_end());
+            cx.update(|_| engine_ended(end));
             return;
         }
     })
@@ -508,7 +513,7 @@ fn download_runtime(
 }
 
 /// A step of the start thread, on the main thread: the waiting pages follow it. The engine's events, once it runs.
-fn start_step(step: StartStep, cx: &mut App) -> Option<async_channel::Receiver<Event>> {
+fn start_step(step: StartStep, cx: &mut App) -> Option<RunningEngine> {
     if let StartStep::Started(started) = step {
         return started_engine(started);
     }
@@ -588,13 +593,14 @@ fn waiting_pages(registry: &Registry) -> Vec<Rc<Page>> {
 /// The start thread's outcome, on the main thread: the engine runs and the waiting pages are realized on it, or they
 /// fail with its reason. A start that ends after the quit began is let go (its engine shut down off the main thread).
 /// The engine's events, when it runs.
-fn started_engine(started: Started) -> Option<async_channel::Receiver<Event>> {
+fn started_engine(started: Started) -> Option<RunningEngine> {
     let waited = with(|registry| start_pending(registry));
     match started {
         Ok((host, events)) if waited => {
             tracing::info!("the web engine worker started");
-            run_on(Rc::new(Engine(Arc::new(host))));
-            Some(events)
+            let host = Arc::new(host);
+            run_on(Rc::new(Engine(Arc::clone(&host))));
+            Some((events, host))
         }
         Ok((host, _)) => {
             let _ = std::thread::Builder::new()
@@ -626,15 +632,25 @@ pub(super) fn finish_start(web: Rc<dyn Web>) {
     run_on(web);
 }
 
-/// The engine's events ended. Past the quit's own shutdown, or once the app started to quit (`quitting`), nothing
-/// follows; while the app runs it means the engine is gone (its worker died): every page fails, for good, and a store
-/// clear in flight reports the failure.
-pub(super) fn engine_ended(quitting: bool) {
+/// How the engine's worker ended, as the events' end shows it: the app's quit mark (`quitting`) wins over the
+/// client's `end`, which a shutdown can leave unknown.
+pub(super) fn engine_end(quitting: bool, end: Option<WorkerEnd>) -> WorkerEnd {
+    if quitting {
+        WorkerEnd::AppQuit
+    } else {
+        end.unwrap_or(WorkerEnd::Failed)
+    }
+}
+
+/// The engine's events ended. Past the quit's own shutdown, or at the app's quit, nothing follows. Otherwise the engine
+/// is gone: every page fails, for good, and a store clear in flight reports the failure. Only a worker that died while
+/// the app runs is an error; the system's SIGTERM or SIGHUP is the session's end.
+pub(super) fn engine_ended(end: WorkerEnd) {
     let pages = with(|registry| {
         if !matches!(registry.engine, EngineState::Running(_)) {
             return None;
         }
-        if quitting {
+        if matches!(end, WorkerEnd::Stopped | WorkerEnd::AppQuit) {
             tracing::info!("the web engine ended with the app's quit");
             return None;
         }
@@ -646,7 +662,11 @@ pub(super) fn engine_ended(quitting: bool) {
         Some(registry.pages.values().cloned().collect::<Vec<_>>())
     });
     let Some(pages) = pages else { return };
-    tracing::error!("{ENDED}");
+    if end == WorkerEnd::System {
+        tracing::info!("the web engine ended at the system's request");
+    } else {
+        tracing::error!("{ENDED}");
+    }
     for page in pages {
         page.engine_failed(ENDED);
     }

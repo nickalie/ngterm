@@ -138,21 +138,21 @@ fn a_press_toggles_the_quick_terminal_until_the_quit_save() {
 
 /// The messages logged at `level` or above while it is the thread's (or a child process's global) default subscriber.
 #[cfg(any(target_os = "linux", windows))]
-struct Logged {
+pub(crate) struct Logged {
     level: tracing::Level,
     seen: std::sync::Mutex<Vec<String>>,
 }
 
 #[cfg(any(target_os = "linux", windows))]
 impl Logged {
-    fn at(level: tracing::Level) -> Self {
+    pub(crate) fn at(level: tracing::Level) -> Self {
         Self {
             level,
             seen: std::sync::Mutex::default(),
         }
     }
 
-    fn seen(&self) -> Vec<String> {
+    pub(crate) fn seen(&self) -> Vec<String> {
         self.seen.lock().unwrap().clone()
     }
 }

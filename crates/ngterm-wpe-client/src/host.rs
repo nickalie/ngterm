@@ -127,6 +127,12 @@ impl Host {
         self.engine.evaluate(view, script, world)
     }
 
+    /// How the worker ended; `None` while it runs. It is known once the events end, unless a shutdown ended them.
+    #[must_use]
+    pub fn worker_end(&self) -> Option<crate::worker::WorkerEnd> {
+        self.engine.worker_end()
+    }
+
     /// Closes every page, ends every web process and stops the engine, waiting (a bounded time) until it has; a worker
     /// is then reaped. Commands after shutdown are dropped. Once is enough:
     /// a second call (or the drop after it) returns at once.
