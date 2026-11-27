@@ -449,9 +449,12 @@ fn in_flight(state: &Path) -> Option<u32> {
 /// Whether a connected Unix socket of `pid` has bytes its peer has not read (`ss`'s Send-Q): the request waits in
 /// the stopped machine's socket.
 fn request_queued(pid: u32) -> bool {
-    let Ok(output) = Command::new("ss").args(["-xpH"]).output() else {
-        return false;
-    };
+    let output = Command::new("ss").args(["-xpH"]).output().expect("run ss (iproute2)");
+    assert!(
+        output.status.success(),
+        "ss -xpH failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let owner = format!("pid={pid},");
     String::from_utf8_lossy(&output.stdout).lines().any(|line| {
         let columns: Vec<&str> = line.split_whitespace().collect();
