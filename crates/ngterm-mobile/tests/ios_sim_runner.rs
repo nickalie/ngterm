@@ -2,7 +2,9 @@
 //! `scripts/setup-ios.sh --simulator`, which the runner and `scripts/build-ios.sh` call right before each test run.
 //!
 //! `--simulator <name>` waits while a runtime disk image is in a transition, creates the simulator on the pinned runtime
-//! again when it is gone, boots it, makes sure that simctl lists it as booted, and prints only its UDID. The runner
+//! again when it is gone, boots it, makes sure that simctl lists it as booted, disables and stops the simulator's
+//! services that no test uses (a launchctl that refuses one leaves it running and the run goes on), and prints only its
+//! UDID. The runner
 //! then runs the executable on that phone through `xcrun simctl spawn` with its arguments, forwards `RUST_BACKTRACE`
 //! and `RUST_TEST_*` (as `SIMCTL_CHILD_*`) and nothing else, and exits with the executable's status.
 //!
@@ -10,7 +12,8 @@
 //! holds nothing else but `/usr/bin` and `/bin`, in a cleared environment, so nothing here needs a simulator. The stub
 //! `xcrun` logs each call and keeps the simulators in a file (its `-f simctl` names a stub `simctl` that calls it
 //! back): `simctl create` adds one, and `simctl bootstatus` marks one booted unless the case says the boot does not
-//! take. Its `simctl spawn` prints what the spawned process would get and exits with the status the case asks for. The
+//! take. Its `simctl spawn` of launchctl exits with the status the case asks for it, and any other `simctl spawn` prints
+//! what the spawned process would get and exits with the status the case asks for. The
 //! real runner on a real simulator is what `cargo test --target aarch64-apple-ios-sim` uses (Task 2 of the iOS plan).
 //! Unix hosts only: the scripts are macOS-only, and the stub `uname` lets Linux run them too. They use the host's `jq`
 //! in `/usr/bin`: macOS has it, and a Linux host needs it installed (the `unit-coverage` job of `linux.yml` installs
@@ -94,6 +97,8 @@ mod host {
         pub(super) status: i32,
         /// Whether `xcrun -f simctl` prints the path of simctl, as Xcode's xcrun does.
         pub(super) finds_simctl: bool,
+        /// The exit status of `simctl spawn <udid> launchctl`.
+        pub(super) launchctl_status: i32,
     }
 
     impl World {
@@ -106,6 +111,7 @@ mod host {
                 boots: true,
                 status: 0,
                 finds_simctl: true,
+                launchctl_status: 0,
             }
         }
     }
@@ -172,11 +178,13 @@ case "$1 $2" in
   'simctl bootstatus')
   {boot}
     exit 0 ;;
-  'simctl spawn') env | grep '^SIMCTL_CHILD_' | sort; exit {} ;;
+  'simctl spawn')
+    if [ "$4" = launchctl ]; then exit {}; fi
+    env | grep '^SIMCTL_CHILD_' | sort; exit {} ;;
 esac
 exit 0
 "#,
-            world.status
+            world.launchctl_status, world.status
         )
     }
 
@@ -259,6 +267,26 @@ exit 0
         run_script(world, "ios-sim-runner.sh", &all, env)
     }
 
+    /// The services that `--simulator` disables and stops in simulator `udid`, as the stub xcrun logs it: those whose
+    /// processes took a CI Mac's free memory to 25% mid-run (nightly run 45820517849).
+    pub(super) fn quieting(udid: &str) -> Vec<String> {
+        [
+            "com.apple.chronod",
+            "com.apple.healthappd",
+            "com.apple.siriactionsd",
+            "com.apple.intelligenceflowd",
+            "com.apple.intelligencecontextd",
+            "com.apple.sirittsd",
+            "com.apple.photoanalysisd",
+            "com.apple.newsd",
+        ]
+        .iter()
+        .flat_map(|label| {
+            ["disable", "bootout"].map(|verb| format!("simctl spawn {udid} launchctl {verb} system/{label}"))
+        })
+        .collect()
+    }
+
     /// `scripts/setup-ios.sh --simulator <name>` over `world`.
     pub(super) fn simulator(world: &World, name: &str) -> Run {
         run_script(world, "setup-ios.sh", &["--simulator", name], &[])
@@ -278,7 +306,7 @@ exit 0
 
 use std::process::Command;
 
-use host::{NEW_UDID, UDID, World, images, pin, repo_root, runner, runtime_id, runtime_line, simulator};
+use host::{NEW_UDID, UDID, World, images, pin, quieting, repo_root, runner, runtime_id, runtime_line, simulator};
 
 #[test]
 fn it_runs_the_executable_on_the_pinned_phone_and_forwards_only_rusts_test_variables() {
@@ -298,10 +326,15 @@ fn it_runs_the_executable_on_the_pinned_phone_and_forwards_only_rusts_test_varia
     assert_eq!(
         run.changes(),
         [
-            format!("simctl bootstatus {UDID} -b"),
-            format!("simctl spawn {UDID} {} --exact a test", run.executable.display()),
-        ],
-        "boots the pinned runtime's simulator, then spawns the executable on it by absolute path"
+            vec![format!("simctl bootstatus {UDID} -b")],
+            quieting(UDID),
+            vec![format!(
+                "simctl spawn {UDID} {} --exact a test",
+                run.executable.display()
+            )],
+        ]
+        .concat(),
+        "boots the pinned runtime's simulator, quiets it, then spawns the executable on it by absolute path"
     );
     let stdout = run.stdout();
     assert_eq!(
@@ -353,15 +386,19 @@ fn a_missing_simulator_is_created_again_and_the_executable_runs_on_it() {
     assert_eq!(
         run.changes(),
         [
-            format!(
-                "simctl create {} {} {}",
-                pin("IOS_SIM_PHONE_NAME"),
-                pin("IOS_SIM_PHONE"),
-                runtime_id(&pin("IOS_SIMULATOR_RUNTIME"))
-            ),
-            format!("simctl bootstatus {NEW_UDID} -b"),
-            format!("simctl spawn {NEW_UDID} {}", run.executable.display()),
+            vec![
+                format!(
+                    "simctl create {} {} {}",
+                    pin("IOS_SIM_PHONE_NAME"),
+                    pin("IOS_SIM_PHONE"),
+                    runtime_id(&pin("IOS_SIMULATOR_RUNTIME"))
+                ),
+                format!("simctl bootstatus {NEW_UDID} -b"),
+            ],
+            quieting(NEW_UDID),
+            vec![format!("simctl spawn {NEW_UDID} {}", run.executable.display())],
         ]
+        .concat()
     );
 }
 
@@ -436,7 +473,48 @@ fn simulator_prints_only_the_udid_of_the_booted_simulator() {
     let tablet = simulator(&world, &tablet);
     assert!(tablet.output.status.success(), "{}", tablet.stderr());
     assert_eq!(tablet.stdout(), format!("{NEW_UDID}\n"));
-    assert_eq!(tablet.changes(), [format!("simctl bootstatus {NEW_UDID} -b")]);
+    assert_eq!(
+        tablet.changes(),
+        [vec![format!("simctl bootstatus {NEW_UDID} -b")], quieting(NEW_UDID)].concat()
+    );
+}
+
+#[test]
+fn simulator_says_which_services_it_disabled() {
+    let run = simulator(&World::ready(), &pin("IOS_SIM_PHONE_NAME"));
+    assert!(run.output.status.success(), "{}", run.stderr());
+    let stderr = run.stderr();
+    assert!(
+        stderr.contains(&format!(
+            "({UDID}): disabled com.apple.chronod com.apple.healthappd com.apple.siriactionsd \
+             com.apple.intelligenceflowd com.apple.intelligencecontextd com.apple.sirittsd com.apple.photoanalysisd \
+             com.apple.newsd of 8 services no test uses"
+        )),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_service_that_launchctl_refuses_leaves_the_simulator_ready() {
+    let run = simulator(
+        &World {
+            launchctl_status: 113,
+            ..World::ready()
+        },
+        &pin("IOS_SIM_PHONE_NAME"),
+    );
+    assert!(run.output.status.success(), "{}", run.stderr());
+    assert_eq!(run.stdout(), format!("{UDID}\n"));
+    assert!(
+        run.stderr().contains(&format!("({UDID}): disabled none of 8")),
+        "{}",
+        run.stderr()
+    );
+    assert!(
+        !run.log.contains("launchctl bootout"),
+        "a service it could not disable is not stopped: {}",
+        run.log
+    );
 }
 
 #[test]

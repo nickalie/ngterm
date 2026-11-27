@@ -39,7 +39,8 @@
 #        scripts/setup-ios.sh --simulator <name>
 #                                       make simulator <name> (IOS_SIM_PHONE_NAME or IOS_SIM_TABLET_NAME) ready for a
 #                                       run: wait for the runtime disk images, create the simulator again when it is
-#                                       gone, boot it and wait until it is up, then print its UDID (build-ios.sh,
+#                                       gone, boot it and wait until it is up, disable the simulator's services
+#                                       that no test uses (QUIET_SERVICES), then print its UDID (build-ios.sh,
 #                                       ios-sim-runner.sh and test-ios-e2e.sh call it right before each test run).
 #                                       It prints how long the boot took. A boot that fails, or is not done in 15
 #                                       minutes (IOS_SIM_BOOT_SECONDS sets another limit), prints the simulators'
@@ -311,6 +312,28 @@ boot_simulator() {
   return "$status"
 }
 
+# The simulator's own services that no test uses and that start processes of 300-500 MB each at times of their own:
+# chronod renders the widgets (Health, Maps, News, Wallet, Calendar), healthappd and siriactionsd run Health and
+# Shortcuts work (BackgroundShortcutRunner, intents_helper), intelligenceflowd and intelligencecontextd Apple
+# Intelligence, sirittsd loads Siri's voices, photoanalysisd and newsd index photos and news. On a 7 GB CI Mac one such
+# burst mid-run took free memory from 49% to 25% with 532 MB of swap and stood the Mac still for 83 s; every read of
+# the app's screen failed, and XCTest's in-app query code aborted the app (nightly run 45820517849, 2026-11-26).
+QUIET_SERVICES=(com.apple.chronod com.apple.healthappd com.apple.siriactionsd com.apple.intelligenceflowd
+  com.apple.intelligencecontextd com.apple.sirittsd com.apple.photoanalysisd com.apple.newsd)
+
+# Disable the QUIET_SERVICES in simulator $1 ($2, its UDID), so they do not start again, and stop those that run. A
+# service the runtime does not have, or one that does not run, is left as it is: the run goes on without it.
+quiet_simulator() {
+  local name="$1" udid="$2" label quieted=""
+  for label in "${QUIET_SERVICES[@]}"; do
+    if simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl disable "system/$label" >/dev/null 2>&1; then
+      quieted+="${quieted:+ }$label"
+      simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl bootout "system/$label" >/dev/null 2>&1 || true
+    fi
+  done
+  echo "simulator $name ($udid): disabled ${quieted:-none} of ${#QUIET_SERVICES[@]} services no test uses" >&2
+}
+
 # --simulator: make simulator $1 ready for a run and print its UDID (see the usage above).
 ready_simulator() {
   local name="$1" device xcode udid state
@@ -347,6 +370,7 @@ ready_simulator() {
     print_simulator_state
     die "simulator $name ($udid) is not booted after its boot (simctl lists: ${state:-no such simulator})"
   fi
+  quiet_simulator "$name" "$udid"
   echo "$udid"
 }
 
