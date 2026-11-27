@@ -30,6 +30,7 @@ use std::os::fd::{AsFd as _, AsRawFd as _, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -387,6 +388,20 @@ impl std::fmt::Debug for Client {
     }
 }
 
+/// Set once the app started to quit: the session's end signals the worker too, so its end is no failure then.
+static APP_QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// Tells the clients the app is quitting, so a worker that ends from here on is logged as expected, not as a failure.
+pub fn mark_app_quitting() {
+    APP_QUITTING.store(true, Ordering::Relaxed);
+}
+
+/// Whether [`mark_app_quitting`] ran.
+#[must_use]
+pub fn app_is_quitting() -> bool {
+    APP_QUITTING.load(Ordering::Relaxed)
+}
+
 /// The worker image is opened once at app startup and held across package replacement.
 static IMAGE: std::sync::OnceLock<Result<OwnedFd, String>> = std::sync::OnceLock::new();
 
@@ -584,6 +599,18 @@ impl Client {
         stop_timeout: Duration,
         stall: Duration,
     ) -> (Self, Receiver<Event>) {
+        Self::running_until(socket, worker, pid, stop_timeout, stall, &APP_QUITTING)
+    }
+
+    /// [`Self::running`], told of the app's quit by `quitting`.
+    fn running_until(
+        socket: OwnedFd,
+        worker: Arc<Worker>,
+        pid: u32,
+        stop_timeout: Duration,
+        stall: Duration,
+        quitting: &'static AtomicBool,
+    ) -> (Self, Receiver<Event>) {
         let socket = Arc::new(socket);
         let (events, event_queue) = async_channel::bounded(EVENT_QUEUE);
         let outgoing = Outgoing::new(Arc::clone(&socket), events.clone(), stall);
@@ -607,10 +634,13 @@ impl Client {
             worker: Arc::clone(&worker),
             outgoing: outgoing.clone(),
             pages: Arc::clone(&pages),
+            quitting,
         };
+        // the reader logs to the subscriber of the thread that started it
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
         let spawned = std::thread::Builder::new()
             .name("wpe-worker-in".to_owned())
-            .spawn(move || reader.run());
+            .spawn(move || tracing::dispatcher::with_default(&dispatch, || reader.run()));
         if let Err(err) = spawned {
             tracing::error!(%err, "no reader thread for the WPE worker");
         }
@@ -838,6 +868,8 @@ struct Reader {
     outgoing: Outgoing,
     /// The app's pages, their dmabufs and unanswered frames (module docs).
     pages: Arc<Mutex<Pages>>,
+    /// Set once the app started to quit ([`mark_app_quitting`]).
+    quitting: &'static AtomicBool,
 }
 
 impl Reader {
@@ -862,7 +894,11 @@ impl Reader {
             }
         }
         if !stopped {
-            tracing::error!("the WPE worker ended unasked: its pages are gone");
+            if self.quitting.load(Ordering::Relaxed) {
+                tracing::info!("the WPE worker ended with the app's quit");
+            } else {
+                tracing::error!("the WPE worker ended unasked: its pages are gone");
+            }
         }
         let waiting = {
             let mut evaluations = self.evaluations.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1227,6 +1263,89 @@ mod tests {
             client.evaluate(ViewId(1), "1".to_owned(), None).recv_blocking(),
             Ok(Err(ENDED.to_owned())),
             "an evaluation after the end is answered at once"
+        );
+    }
+
+    /// The level and message of each event logged under it.
+    #[derive(Clone, Default)]
+    struct Logged(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+
+    /// An event's message.
+    struct Message(String);
+
+    impl tracing::field::Visit for Message {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = format!("{value:?}");
+            }
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Logged {
+        fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+            let mut message = Message(String::new());
+            event.record(&mut message);
+            lock(&self.0).push((*event.metadata().level(), message.0));
+        }
+    }
+
+    /// What a client started by `start` logs when its worker is killed, `quit` run first.
+    fn logged_at_worker_end(
+        start: impl FnOnce(OwnedFd, Arc<Worker>) -> (Client, Receiver<Event>),
+        quit: impl FnOnce(),
+    ) -> Vec<(tracing::Level, String)> {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        let logged = Logged::default();
+        let subscriber = tracing_subscriber::registry().with(logged.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let (worker, ours, theirs) = sleeper();
+            let (client, events) = start(ours, Arc::clone(&worker));
+            quit();
+            drop(theirs);
+            // SAFETY: as in `alive`.
+            unsafe { libc::kill(worker.group, libc::SIGKILL) };
+            assert!(events.recv_blocking().is_err(), "the reader ended");
+            drop(client);
+        });
+        std::mem::take(&mut *lock(&logged.0))
+    }
+
+    fn errors(logged: &[(tracing::Level, String)]) -> Vec<&str> {
+        logged
+            .iter()
+            .filter(|(level, _)| *level == tracing::Level::ERROR)
+            .map(|(_, message)| message.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_worker_that_ends_after_the_app_started_to_quit_logs_no_error() {
+        let logged = logged_at_worker_end(
+            |ours, worker| Client::running(ours, worker, 0, Duration::from_millis(200), STALL_TIMEOUT),
+            mark_app_quitting,
+        );
+        assert!(app_is_quitting());
+        assert_eq!(errors(&logged), Vec::<&str>::new(), "logged: {logged:?}");
+        assert!(
+            logged.contains(&(
+                tracing::Level::INFO,
+                "the WPE worker ended with the app's quit".to_owned()
+            )),
+            "logged: {logged:?}"
+        );
+    }
+
+    #[test]
+    fn a_worker_that_ends_while_the_app_runs_logs_an_error() {
+        static QUITTING: AtomicBool = AtomicBool::new(false);
+        let logged = logged_at_worker_end(
+            |ours, worker| Client::running_until(ours, worker, 0, Duration::from_millis(200), STALL_TIMEOUT, &QUITTING),
+            || {},
+        );
+        assert_eq!(
+            errors(&logged),
+            ["the WPE worker ended unasked: its pages are gone"],
+            "logged: {logged:?}"
         );
     }
 

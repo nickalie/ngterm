@@ -404,6 +404,7 @@ impl AppState {
 
     /// Asks the frontend to quit: SIGTERM, the last window closing, a command's quit.
     pub fn request_quit(&mut self) {
+        crate::html_overlay::mark_quitting();
         self.frontend.quit = true;
     }
 

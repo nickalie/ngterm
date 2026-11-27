@@ -30,8 +30,9 @@ mod windows;
 #[cfg(windows)]
 pub use self::windows::quit_on_termination;
 
-#[cfg(all(test, target_os = "linux"))]
-mod tests;
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+pub(crate) mod tests;
 
 /// Quits through the main loop behind `poster` when the system asks the app to end (see the module docs).
 ///
@@ -63,6 +64,8 @@ pub fn quit_on_sigterm(poster: Poster) -> io::Result<()> {
             };
             if signals.forever().next().is_some() {
                 tracing::info!("SIGTERM: quitting");
+                // the session's end signals the web worker too, which can end before the main loop runs the quit
+                crate::html_overlay::mark_quitting();
                 post(&poster, AppState::request_quit);
             }
         })?;

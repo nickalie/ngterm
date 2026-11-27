@@ -152,6 +152,12 @@ pub fn focus_page_search(page: uuid::Uuid) {
 #[cfg(not(all(feature = "html", any(windows, target_os = "macos"))))]
 pub fn set_covered(_: &gpui_kit::Window, _: bool, _: &mut gpui_kit::App) {}
 
+/// The app started to quit: an engine that ends from here on ends with it, not by a failure.
+pub fn mark_quitting() {
+    #[cfg(all(feature = "html", target_os = "linux"))]
+    ngterm_wpe_client::worker::mark_app_quitting();
+}
+
 #[cfg(not(all(feature = "html", any(target_os = "linux", target_os = "macos", windows))))]
 mod unavailable {
     //! The build without WPE `WebKit`: no host is installed, so no page ever reaches these.

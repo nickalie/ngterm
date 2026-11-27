@@ -948,6 +948,26 @@ fn quit_and_activation_requests_wait_for_the_frontend_in_order() {
     assert_eq!(state.take_frontend_work(), FrontendWork::default(), "taken once");
 }
 
+#[cfg(all(feature = "html", target_os = "linux"))]
+#[test]
+fn a_quit_request_marks_the_quit_for_the_web_worker() {
+    let status = crate::signals::tests::run_child("state::tests::quit_request_mark_child");
+    assert!(status.success(), "{status:?}");
+}
+
+#[cfg(all(feature = "html", target_os = "linux"))]
+#[test]
+#[ignore = "run by a_quit_request_marks_the_quit_for_the_web_worker"]
+fn quit_request_mark_child() {
+    if !crate::signals::tests::is_child("state::tests::quit_request_mark_child") {
+        return;
+    }
+    let (mut state, _, _) = state_with_terminal();
+    assert!(!ngterm_wpe_client::worker::app_is_quitting());
+    state.request_quit();
+    assert!(ngterm_wpe_client::worker::app_is_quitting());
+}
+
 #[test]
 fn no_window_is_raised_once_the_quit_save_ran() {
     let (mut state, _, _) = state_with_terminal();

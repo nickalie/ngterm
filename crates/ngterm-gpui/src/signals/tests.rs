@@ -2,10 +2,30 @@
 //! that may start no thread, and the child's SIGTERM ends it.
 
 use std::os::unix::process::ExitStatusExt as _;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
-/// Names the child that installs the handler with no thread to spare.
-const CHILD: &str = "NGTERM_GPUI_TEST_SIGTERM_INSTALL_CHILD";
+/// Names the child test a process of its own runs.
+const CHILD: &str = "NGTERM_GPUI_TEST_SIGNALS_CHILD";
+
+/// Runs the ignored test `name` alone in a process of its own, with no `NGTERM_*` of ours.
+pub(crate) fn run_child(name: &str) -> ExitStatus {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("NGTERM_") {
+            command.env_remove(key);
+        }
+    }
+    command
+        .args(["--exact", name, "--ignored", "--nocapture", "--test-threads=1"])
+        .env(CHILD, name)
+        .status()
+        .unwrap()
+}
+
+/// Whether this process is [`run_child`]'s for `name`.
+pub(crate) fn is_child(name: &str) -> bool {
+    std::env::var(CHILD).as_deref() == Ok(name)
+}
 
 #[test]
 fn a_failed_install_leaves_sigterm_its_default_action() {
@@ -14,23 +34,7 @@ fn a_failed_install_leaves_sigterm_its_default_action() {
         eprintln!("skipped: RLIMIT_NPROC does not bind root");
         return;
     }
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("NGTERM_") {
-            command.env_remove(key);
-        }
-    }
-    let status = command
-        .args([
-            "--exact",
-            "signals::tests::sigterm_install_child",
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD, "1")
-        .status()
-        .unwrap();
+    let status = run_child("signals::tests::sigterm_install_child");
     // a child SIGTERM ends writes no coverage profile: the parent's assertion is what counts
     assert_eq!(status.signal(), Some(libc::SIGTERM), "{status:?}");
 }
@@ -38,7 +42,7 @@ fn a_failed_install_leaves_sigterm_its_default_action() {
 #[test]
 #[ignore = "run by a_failed_install_leaves_sigterm_its_default_action"]
 fn sigterm_install_child() {
-    if std::env::var_os(CHILD).is_none() {
+    if !is_child("signals::tests::sigterm_install_child") {
         return;
     }
     let none = libc::rlimit {
@@ -52,4 +56,33 @@ fn sigterm_install_child() {
     // SAFETY: raising a signal at this process.
     unsafe { libc::raise(libc::SIGTERM) };
     eprintln!("survived SIGTERM");
+}
+
+#[cfg(feature = "html")]
+#[test]
+fn a_sigterm_marks_the_quit_for_the_web_worker_at_once() {
+    let status = run_child("signals::tests::sigterm_quit_mark_child");
+    assert!(status.success(), "{status:?}");
+}
+
+#[cfg(feature = "html")]
+#[test]
+#[ignore = "run by a_sigterm_marks_the_quit_for_the_web_worker_at_once"]
+fn sigterm_quit_mark_child() {
+    if !is_child("signals::tests::sigterm_quit_mark_child") {
+        return;
+    }
+    // a gone main loop: the mark cannot wait for it
+    super::quit_on_sigterm(crate::state::detached_poster()).unwrap();
+    assert!(!ngterm_wpe_client::worker::app_is_quitting());
+    // SAFETY: raising a signal at this process, whose handler is installed.
+    unsafe { libc::raise(libc::SIGTERM) };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !ngterm_wpe_client::worker::app_is_quitting() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the SIGTERM did not mark the quit"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
