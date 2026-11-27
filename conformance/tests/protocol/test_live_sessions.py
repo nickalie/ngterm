@@ -422,6 +422,30 @@ def test_restart_keeps_a_hidden_split_on_its_shown_pane(live, focus, restarted):
 
 
 @LIVE
+@pytest.mark.covers("session.restart", "session.restore", "field:tree.session.splitFocused")
+def test_a_pinned_restart_by_pane_id_keeps_a_hidden_split_on_the_main_pane(live):
+    """A program that restarts its own main pane with a new pin (`session restore --pane-id`, then `session restart
+    --pane-id --command`) while a hidden split shows that pane: the window still shows the main pane, focused, while
+    the old program ends and the new one starts."""
+    sid = _live_session(live, split=True)
+    try:
+        assert_ok(live.request("session.focus", sid, pane="left"))
+        assert_ok(live.request("session.split", sid, mode="off"))
+        before = _pane_layout(live, sid)
+        assert before == (False, False, {"left": (True, True), "right": (False, False)}), before
+        pane_id = _pane_id(live, sid)
+        line = "sleep 600"
+        assert_ok(live.request("session.restore", sid, mode="set", command=line, paneID=pane_id))
+        assert_ok(live.request("session.restart", sid, paneID=pane_id, command=line))
+        live.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["sleep", "600"])
+        for _ in range(10):
+            assert _pane_layout(live, sid) == before
+            time.sleep(0.3)
+    finally:
+        assert_ok(live.request("session.close", sid))
+
+
+@LIVE
 @pytest.mark.covers("session.restart", "field:result.restart")
 def test_restart_without_a_command_replays_the_foreground_program(live, tmp_path):
     sid = _live_session(live)

@@ -477,6 +477,9 @@ def test_a_hidden_split_shows_the_same_pane_after_a_relaunch_and_a_restart(launc
     ctl = launch.relaunch(ctl)
     ctl.wait_mounted(sid, focus)
     assert _shown_panes(ctl, sid) == before
-    assert_ok(ctl.request("session.restart", sid, pane="left", command="cat"))
+    # as a program restarts its own main pane: a new pin, then the restart, both by pane id
+    pane_id = next(s for s in find_session(ctl.tree(), sid)["surfaces"] if s["kind"] == "left")["paneID"]
+    assert_ok(ctl.request("session.restore", sid, mode="set", command="cat", paneID=pane_id))
+    assert_ok(ctl.request("session.restart", sid, paneID=pane_id, command="cat"))
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["cat"])
     assert _shown_panes(ctl, sid) == before

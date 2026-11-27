@@ -110,9 +110,13 @@ fn a_restart_of_the_main_pane_keeps_a_hidden_split_on_the_main_pane(cx: &mut Tes
     h.turn();
     let before = layout(&mut h, session);
     assert_eq!((before.0, before.1), (true, false), "the main pane shows alone");
+    let main = h.token(session, StatusPane::Left);
+    assert!(h.focused(session, &main));
     restart(&mut h, &host, session, StatusPane::Left);
     let after = layout(&mut h, session);
     assert_eq!(after, before);
+    assert!(h.focused(session, &main), "the keyboard stays on the new main terminal");
+    assert!(!h.session(session).split.focused);
 }
 
 /// A relaunch restores a hidden split with no terminal yet; when its right pane held the focus, the window shows that
