@@ -861,8 +861,17 @@ def test_overlay_program(cli, ctl, adapter):
     assert_absent(_node(ctl, sid), "overlaySizePercent")
     _usage(cli("session", "overlay", "resize", "--target", sid))
 
-    shown = ctl.wait_response("session.overlay.text", sid, lambda r: r.ok and marker in r.result["text"])
-    _rendered(cli("session", "overlay", "text", "--target", sid), {"text": shown.result["text"]})
+    ctl.wait_response("session.overlay.text", sid, lambda r: r.ok and marker in r.result["text"])
+
+    def settled_text_rendered():
+        # the resize repaints the screen (ConPTY drops cmd's trailing blank), so compare reads of one screen
+        before = assert_ok(ctl.request("session.overlay.text", sid))["text"]
+        shown = cli("session", "overlay", "text", "--target", sid)
+        after = assert_ok(ctl.request("session.overlay.text", sid))["text"]
+        assert before == after, "the screen changed between the reads"
+        return _rendered(shown, {"text": after}) or True
+
+    wait_until(settled_text_rendered)
     _refused(cli("session", "overlay", "copy", "--target", sid), "no selection")
     _ok(cli("session", "overlay", "close", "--target", sid), "ok\n")
     assert _node(ctl, sid)["overlay"] is False
