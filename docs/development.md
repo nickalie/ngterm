@@ -882,7 +882,8 @@ verifying, ...): a CI Mac mounts them for minutes after it starts, and until the
 disappear. An image that stays unusable does not stop it. `--simulator <name>`
 does the same right before a test run: it creates the simulator again if it is gone, boots it, prints how long the
 boot took, disables the simulator's own services that no test uses and that start processes of hundreds of MB at times
-of their own (widgets, Health, Shortcuts, Apple Intelligence, Siri's voices: `QUIET_SERVICES`), and prints its UDID
+of their own (widgets, Health, Shortcuts, Apple Intelligence, Siri's voices: `QUIET_SERVICES`) while it boots, before
+the widgets start, and again once it is up, and prints its UDID
 (`build-ios.sh`, `ios-sim-runner.sh` and `test-ios-e2e.sh` call it). A boot has 15
 minutes: one that fails or runs out of time prints the simulators' state and the Mac's load, and the simulator is
 made again and booted once more. The simctl calls that prepare or free a simulator (create, delete, shutdown, uninstall,

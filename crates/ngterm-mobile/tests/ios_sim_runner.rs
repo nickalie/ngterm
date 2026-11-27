@@ -3,17 +3,18 @@
 //!
 //! `--simulator <name>` waits while a runtime disk image is in a transition, creates the simulator on the pinned runtime
 //! again when it is gone, boots it, makes sure that simctl lists it as booted, disables and stops the simulator's
-//! services that no test uses (a launchctl that refuses one leaves it running and the run goes on), and prints only its
-//! UDID. The runner
+//! services that no test uses while it boots and again once it is up (a launchctl that refuses one leaves it running and
+//! the run goes on), and prints only its UDID. The runner
 //! then runs the executable on that phone through `xcrun simctl spawn` with its arguments, forwards `RUST_BACKTRACE`
 //! and `RUST_TEST_*` (as `SIMCTL_CHILD_*`) and nothing else, and exits with the executable's status.
 //!
 //! Every case runs the real scripts with stub `uname`, `xcode-select`, `xcodebuild` and `xcrun` first on a `PATH` that
 //! holds nothing else but `/usr/bin` and `/bin`, in a cleared environment, so nothing here needs a simulator. The stub
 //! `xcrun` logs each call and keeps the simulators in a file (its `-f simctl` names a stub `simctl` that calls it
-//! back): `simctl create` adds one, and `simctl bootstatus` marks one booted unless the case says the boot does not
-//! take. Its `simctl spawn` of launchctl exits with the status the case asks for it, and any other `simctl spawn` prints
-//! what the spawned process would get and exits with the status the case asks for. The
+//! back): `simctl create` adds one, `simctl boot` refuses one that is booted, and `simctl bootstatus` marks one booted
+//! unless the case says the boot does not take. Its `simctl spawn` of launchctl exits with the status the case asks for
+//! it and keeps each service it disables, and any other `simctl spawn` prints what the spawned process would get and
+//! exits with the status the case asks for. The
 //! real runner on a real simulator is what `cargo test --target aarch64-apple-ios-sim` uses (Task 2 of the iOS plan).
 //! Unix hosts only: the scripts are macOS-only, and the stub `uname` lets Linux run them too. They use the host's `jq`
 //! in `/usr/bin`: macOS has it, and a Linux host needs it installed (the `unit-coverage` job of `linux.yml` installs
@@ -91,7 +92,7 @@ mod host {
         pub(super) images: Vec<String>,
         /// The `simctl list runtimes` lines.
         pub(super) runtimes: Vec<String>,
-        /// Whether `simctl bootstatus -b` makes the simulator booted.
+        /// Whether `simctl boot` starts the simulator and `simctl bootstatus -b` makes it booted.
         pub(super) boots: bool,
         /// The exit status of `simctl spawn`.
         pub(super) status: i32,
@@ -166,6 +167,7 @@ mod host {
             ":"
         };
         let header = format!("-- iOS {} --", pin("IOS_SIMULATOR_RUNTIME"));
+        let refused = if world.boots { "false" } else { "true" };
         let boot = if world.boots {
             r#"sed "s/($3) (Shutdown)/($3) (Booted)/" "$STUB_DIR/devices" >"$STUB_DIR/devices.new"
   mv "$STUB_DIR/devices.new" "$STUB_DIR/devices""#
@@ -189,17 +191,24 @@ case "$1 $2 $3" in
 esac
 case "$1 $2" in
   'simctl create') printf '%s\n    %s ({NEW_UDID}) (Shutdown)\n' '{header}' "$3" >>"$STUB_DIR/devices"; echo {NEW_UDID}; exit 0 ;;
+  'simctl boot')
+    if {refused} || grep -qF "($3) (Booted)" "$STUB_DIR/devices"; then exit 149; fi
+    exit 0 ;;
   'simctl bootstatus')
   {boot}
     exit 0 ;;
   'simctl spawn')
     if [ "$4 $5" = 'launchctl print-disabled' ]; then cat "$STUB_DIR/disabled"; fi
-    if [ "$4" = launchctl ]; then exit {}; fi
+    if [ "$4 $5 {launchctl_status}" = 'launchctl disable 0' ]; then
+      printf '\t\t"%s" => disabled\n' "${{6#system/}}" >>"$STUB_DIR/disabled"
+    fi
+    if [ "$4" = launchctl ]; then exit {launchctl_status}; fi
     env | grep '^SIMCTL_CHILD_' | sort; exit {} ;;
 esac
 exit 0
 "#,
-            world.launchctl_status, world.status
+            world.status,
+            launchctl_status = world.launchctl_status,
         )
     }
 
@@ -321,6 +330,20 @@ exit 0
             .collect()
     }
 
+    /// The calls that boot simulator `udid` from shut down: its boot, the quieting while it boots, the wait for the
+    /// boot, then the read that finds every service already disabled.
+    pub(super) fn boot_and_quiet(udid: &str) -> Vec<String> {
+        [
+            vec![format!("simctl boot {udid}")],
+            quieting(udid),
+            vec![
+                format!("simctl bootstatus {udid} -b"),
+                format!("simctl spawn {udid} launchctl print-disabled system"),
+            ],
+        ]
+        .concat()
+    }
+
     /// `scripts/setup-ios.sh --simulator <name>` over `world`.
     pub(super) fn simulator(world: &World, name: &str) -> Run {
         run_script(world, "setup-ios.sh", &["--simulator", name], &[])
@@ -341,8 +364,8 @@ exit 0
 use std::process::Command;
 
 use host::{
-    NEW_UDID, QUIET, UDID, World, images, is_launchctl, pin, quieting, repo_root, runner, runtime_id, runtime_line,
-    simulator,
+    NEW_UDID, QUIET, UDID, World, boot_and_quiet, images, is_launchctl, pin, quieting, repo_root, runner, runtime_id,
+    runtime_line, simulator,
 };
 
 #[test]
@@ -363,8 +386,7 @@ fn it_runs_the_executable_on_the_pinned_phone_and_forwards_only_rusts_test_varia
     assert_eq!(
         run.changes(),
         [
-            vec![format!("simctl bootstatus {UDID} -b")],
-            quieting(UDID),
+            boot_and_quiet(UDID),
             vec![format!(
                 "simctl spawn {UDID} {} --exact a test",
                 run.executable.display()
@@ -423,16 +445,13 @@ fn a_missing_simulator_is_created_again_and_the_executable_runs_on_it() {
     assert_eq!(
         run.changes(),
         [
-            vec![
-                format!(
-                    "simctl create {} {} {}",
-                    pin("IOS_SIM_PHONE_NAME"),
-                    pin("IOS_SIM_PHONE"),
-                    runtime_id(&pin("IOS_SIMULATOR_RUNTIME"))
-                ),
-                format!("simctl bootstatus {NEW_UDID} -b"),
-            ],
-            quieting(NEW_UDID),
+            vec![format!(
+                "simctl create {} {} {}",
+                pin("IOS_SIM_PHONE_NAME"),
+                pin("IOS_SIM_PHONE"),
+                runtime_id(&pin("IOS_SIMULATOR_RUNTIME"))
+            )],
+            boot_and_quiet(NEW_UDID),
             vec![format!("simctl spawn {NEW_UDID} {}", run.executable.display())],
         ]
         .concat()
@@ -512,7 +531,15 @@ fn simulator_prints_only_the_udid_of_the_booted_simulator() {
     assert_eq!(tablet.stdout(), format!("{NEW_UDID}\n"));
     assert_eq!(
         tablet.changes(),
-        [vec![format!("simctl bootstatus {NEW_UDID} -b")], quieting(NEW_UDID)].concat()
+        [
+            vec![
+                format!("simctl boot {NEW_UDID}"),
+                format!("simctl bootstatus {NEW_UDID} -b"),
+            ],
+            quieting(NEW_UDID),
+        ]
+        .concat(),
+        "a booted simulator refuses its boot and is quieted once"
     );
 }
 
@@ -545,9 +572,14 @@ fn simulator_disables_each_service_before_it_stops_it() {
             run.log
         );
     }
-    let boot = place(&format!("simctl bootstatus {UDID} -b")).unwrap();
+    let boot = place(&format!("simctl boot {UDID}")).unwrap();
+    let wait = place(&format!("simctl bootstatus {UDID} -b")).unwrap();
     let first = calls.iter().position(|line| is_launchctl(line)).unwrap();
-    assert!(boot < first, "the services are quieted after the boot: {}", run.log);
+    assert!(
+        boot < first && first < wait,
+        "the services are quieted while the simulator boots, before its widgets start: {}",
+        run.log
+    );
 }
 
 #[test]
@@ -565,7 +597,10 @@ fn simulator_leaves_the_services_already_disabled_as_they_are() {
         ["disable", "bootout"].map(|verb| format!("simctl spawn {UDID} launchctl {verb} system/{label}"))
     });
     let mut expected: Vec<String> = rest
-        .chain([format!("simctl spawn {UDID} launchctl print-disabled system")])
+        .chain(std::iter::repeat_n(
+            format!("simctl spawn {UDID} launchctl print-disabled system"),
+            2,
+        ))
         .collect();
     expected.sort();
     assert_eq!(

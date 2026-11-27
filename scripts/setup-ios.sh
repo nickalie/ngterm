@@ -39,9 +39,10 @@
 #        scripts/setup-ios.sh --simulator <name>
 #                                       make simulator <name> (IOS_SIM_PHONE_NAME or IOS_SIM_TABLET_NAME) ready for a
 #                                       run: wait for the runtime disk images, create the simulator again when it is
-#                                       gone, boot it and wait until it is up, disable the simulator's services
-#                                       that no test uses (QUIET_SERVICES), then print its UDID (build-ios.sh,
-#                                       ios-sim-runner.sh and test-ios-e2e.sh call it right before each test run).
+#                                       gone, boot it, disable the simulator's services that no test uses
+#                                       (QUIET_SERVICES) while it boots and again once it is up, then print its UDID
+#                                       (build-ios.sh, ios-sim-runner.sh and test-ios-e2e.sh call it right before
+#                                       each test run).
 #                                       It prints how long the boot took. A boot that fails, or is not done in 15
 #                                       minutes (IOS_SIM_BOOT_SECONDS sets another limit), prints the simulators'
 #                                       state and the Mac's load, and the simulator is deleted, made again and booted
@@ -301,6 +302,11 @@ boot_steps() {
 boot_simulator() {
   local name="$1" udid="$2" start=$SECONDS status=0
   echo "simulator $name ($udid): booting" >&2
+  # quieted while the boot migrates its data, before SpringBoard starts the widgets: after that the burst holds up each
+  # spawn for minutes and stood a CI Mac still for 243 s, long enough for the runner to lose its job (run 45969582599)
+  if simctl_bounded "$SIMCTL_SECONDS" boot "$udid" >/dev/null 2>&1; then
+    quiet_simulator "$name" "$udid"
+  fi
   simctl_bounded "$BOOT_SECONDS" bootstatus "$udid" -b | boot_steps >&2 || status=$?
   if ((status == 124)); then
     echo "simulator $name ($udid): not up after $BOOT_SECONDS s" >&2
@@ -324,8 +330,8 @@ QUIET_SERVICES=(com.apple.chronod com.apple.healthappd com.apple.siriactionsd co
 # Disable the QUIET_SERVICES in simulator $1 ($2, its UDID), so they do not start again, and stop those that run. A
 # service already disabled is left as it is (the runner readies its simulator once per test binary), and so is one
 # that the runtime does not have or that does not run: the run goes on without it. The simulator keeps no disabled
-# service on disk to write before its boot, and a spawn can take a minute on a Mac that the boot's own burst holds up,
-# so the services are quieted side by side.
+# service on disk to write before its boot, so this runs once the boot starts and again once it is done (a spawn
+# refused mid-boot). A spawn can take a minute on a busy Mac, so the services are quieted side by side.
 quiet_simulator() {
   local name="$1" udid="$2" label disabled quieted="" done_dir
   disabled="$(simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl print-disabled system 2>/dev/null)" || disabled=""
