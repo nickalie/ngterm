@@ -92,11 +92,28 @@ impl StandIn {
 
     /// Every `zmx` call a viewer made there so far, as the stand-in logged it.
     pub(crate) fn zmx_calls(&self) -> Vec<serde_json::Value> {
+        self.calls("zmx")
+    }
+
+    /// The argv of every `agtermctl` call made there so far, as the stand-in logged it.
+    pub(crate) fn agtermctl_calls(&self) -> Vec<Vec<String>> {
+        self.calls("agtermctl")
+            .iter()
+            .map(|call| {
+                call["argv"]
+                    .as_array()
+                    .map(|argv| argv.iter().map(text).collect())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    fn calls(&self, program: &str) -> Vec<serde_json::Value> {
         fs::read_to_string(self.directory.join("calls.jsonl"))
             .unwrap_or_default()
             .lines()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .filter(|call| call["program"] == "zmx")
+            .filter(|call| call["program"] == program)
             .collect()
     }
 
@@ -174,6 +191,11 @@ impl AgtermMac {
     /// Every `zmx` call a viewer made there so far ([`StandIn::zmx_calls`]).
     pub(crate) fn zmx_calls(&self) -> Vec<serde_json::Value> {
         self.stand_in.zmx_calls()
+    }
+
+    /// Every `agtermctl` call made there so far ([`StandIn::agtermctl_calls`]).
+    pub(crate) fn agtermctl_calls(&self) -> Vec<Vec<String>> {
+        self.stand_in.agtermctl_calls()
     }
 }
 

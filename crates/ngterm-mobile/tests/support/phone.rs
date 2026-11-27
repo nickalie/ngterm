@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use ngterm_mobile::catalog::CatalogState;
 use ngterm_mobile::{
     ChatEvent, ChatState, EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileEvent, Pane,
-    PaneEnd, PaneKey, PaneKeyAction, PaneRole, PaneSize, PeerKind, RemoteAsk, RemoteLayout, RemotePick, StreamState,
-    VaultError,
+    PaneEnd, PaneKey, PaneKeyAction, PaneRole, PaneSize, PeerKind, RemoteAsk, RemoteLayout, RemotePick, RemoteSession,
+    StreamState, VaultError,
 };
 
 use crate::machine::{World, account};
@@ -17,6 +18,8 @@ use crate::machine::{World, account};
 /// How long any one step may take.
 pub(crate) const WAIT: Duration = Duration::from_secs(45);
 pub(crate) const MACHINE_ID: &str = "e2e";
+/// The machine's name in the app, which the core's messages name it by.
+pub(crate) const MACHINE_LABEL: &str = "e2e machine";
 pub(crate) const KEY_ID: &str = "e2e-key";
 pub(crate) const GRID: PaneSize = PaneSize {
     cols: 80,
@@ -54,6 +57,10 @@ pub(crate) struct Seen {
     pub(crate) statuses: Vec<Option<String>>,
     /// Every listing's hint, in order ([`MobileEvent::Tree`]).
     pub(crate) hints: Vec<Option<String>>,
+    /// Every listing's rows, in order ([`MobileEvent::Tree`]).
+    pub(crate) trees: Vec<Vec<RemoteSession>>,
+    /// Every state the machine's catalog stream took, in order ([`MobileEvent::Catalog`]).
+    pub(crate) catalog: Vec<CatalogState>,
     /// Every ask handed over, in order, with its session.
     pub(crate) asks: Vec<(String, RemoteAsk)>,
     /// Every ask taken down, in order: its session and id.
@@ -85,6 +92,9 @@ impl std::fmt::Debug for Seen {
             .field("chat_states", &self.chat_states)
             .field("statuses", &self.statuses)
             .field("hints", &self.hints)
+            .field("trees", &self.trees.len())
+            .field("last_tree", &self.trees.last())
+            .field("catalog", &self.catalog)
             .field("asks", &self.asks)
             .field("ask_dismissals", &self.ask_dismissals)
             .field("picks", &self.picks)
@@ -122,7 +132,11 @@ impl Seen {
             MobileEvent::Chat { events, .. } => self.chat.extend(events),
             MobileEvent::ChatState { state, .. } => self.chat_states.push(state),
             MobileEvent::SessionStatus { status, .. } => self.statuses.push(status.map(|status| status.status)),
-            MobileEvent::Tree { hint, .. } => self.hints.push(hint),
+            MobileEvent::Tree { hint, sessions, .. } => {
+                self.hints.push(hint);
+                self.trees.push(sessions);
+            }
+            MobileEvent::Catalog { state, .. } => self.catalog.push(state),
             MobileEvent::Ask { session_id, ask, .. } => self.asks.push((session_id, ask)),
             MobileEvent::AskDismiss { session_id, ask_id, .. } => self.ask_dismissals.push((session_id, ask_id)),
             MobileEvent::Pick { session_id, pick, .. } => self.picks.push((session_id, pick)),
@@ -191,7 +205,7 @@ impl Client {
     pub(crate) fn connect(&self, port: u16) {
         let machine = Machine {
             id: MACHINE_ID.to_owned(),
-            label: "e2e machine".to_owned(),
+            label: MACHINE_LABEL.to_owned(),
             host: "127.0.0.1".to_owned(),
             port,
             user: account(),

@@ -46,9 +46,18 @@ pub(crate) struct World {
 
 impl World {
     pub(crate) fn start(binary: &Path) -> Self {
+        Self::start_with(binary, |_| {})
+    }
+
+    /// [`World::start`], with `seed` given the instance's private state dir before the instance starts: the saved
+    /// state it then restores.
+    pub(crate) fn start_with(binary: &Path, seed: impl FnOnce(&Path)) -> Self {
         let stage = PathBuf::from(std::env::var_os(STAGE_VARIABLE).expect("MOBILE_E2E_STAGE: run the script"));
         let work = PathBuf::from(std::env::var_os(WORK_VARIABLE).expect("MOBILE_E2E_WORK: run the script"));
         let user = account();
+        let saved = work.join("s");
+        fs::create_dir_all(&saved).expect("create the private state dir");
+        seed(&saved);
         let headless = Headless::start(&stage, &work, &user, None);
         let key = generate_key("ngterm-mobile e2e".to_owned()).expect("a client key");
         let host = generate_key("ngterm-mobile e2e host".to_owned()).expect("a host key");

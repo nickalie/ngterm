@@ -40,6 +40,12 @@
 //! lost pick over again, what it held for a session no viewer presented comes as one batch (the ask and the pick
 //! shown, a program overlay refused), and a detach leaves an open pick unanswered.
 //!
+//! A fifth test puts the phone in front of a headless machine that restored two page sessions and a terminal session
+//! ([`catalog`]): the list follows the machine's catalog with no listing asked for, a page row has its kind and is
+//! never attached, New, Rename and End Session leave the machine receipts under operation ids, a reply lost while the
+//! machine is stopped says the outcome is unknown, and a session whose live session is lost stays listed as ended. The
+//! agterm test above checks that a machine with windows gets no catalog: its actions run plain.
+//!
 //! Without `sshd` a test skips with a reason, unless `CI` is set: there it fails.
 //!
 //! Linux only, as the script is: the support code is Unix (file modes, an unprivileged `sshd`), and the other hosts'
@@ -55,6 +61,9 @@ mod agterm;
 #[cfg(test)]
 #[path = "support/both.rs"]
 mod both;
+#[cfg(test)]
+#[path = "support/catalog.rs"]
+mod catalog;
 #[cfg(test)]
 #[path = "support/chat.rs"]
 mod chat;
@@ -93,7 +102,8 @@ use self::chat::Scene;
 use self::machine::World;
 use self::phone::{Client, MACHINE_ID, block_on, poll};
 use self::steps::{
-    assert_isolated, create_and_read, leadership, reconnect, restart, type_into_agterm_after_taking_control,
+    a_machine_with_windows_keeps_its_plain_listing, assert_isolated, create_and_read, leadership, reconnect, restart,
+    type_into_agterm_after_taking_control,
 };
 
 /// The `sshd` to run a machine behind; `None` is a skip, marked for the script, and a failure on CI.
@@ -142,6 +152,8 @@ fn typing_reaches_an_agterm_session_once_the_phone_takes_control_from_its_window
         [false, true],
         "the first attach claims nothing; Take control claims"
     );
+
+    a_machine_with_windows_keeps_its_plain_listing(&mac, &mut phone);
 }
 
 #[test]
@@ -285,4 +297,17 @@ fn picks_and_held_interactions_reach_the_phone_and_end_as_the_origin_ends_them()
     assert_isolated(&world, &phone);
     let session = create_and_read(&mut phone);
     picks::picks_and_held_interactions(&world, &mut phone, &session);
+}
+
+#[test]
+#[ignore = "needs a staged ngterm-headless and sshd: run scripts/test-mobile-e2e.sh"]
+fn a_headless_machines_list_follows_its_catalog_with_page_and_ended_rows() {
+    let Some(binary) = sshd_or_skip() else {
+        return;
+    };
+    let _alone = machine::one_at_a_time();
+    let world = World::start_with(&binary, catalog::seed_pages);
+    let mut phone = Client::new("catalog phone", &world);
+    phone.connect(world.proxy.port());
+    catalog::follows_the_catalog(&world, &mut phone);
 }

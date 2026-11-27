@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use ngterm_mobile::{MachineState, PaneRole};
 
+use crate::agterm::AgtermMac;
 use crate::machine::World;
 use crate::phone::{Client, GRID, MACHINE_ID, PRINTED, WAIT, block_on, enter, nanos, poll};
 use crate::sshd::Proxy;
@@ -284,4 +285,34 @@ fn machine_reads(world: &World, session: &str, needle: &str, count: usize) {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// A machine with windows is never followed: no catalog state, no ended or page row, and New and End Session run as
+/// plain commands, with no operation id, catalog lookup or version probe.
+pub(crate) fn a_machine_with_windows_keeps_its_plain_listing(mac: &AgtermMac, phone: &mut Client) {
+    let created = block_on(phone.core.create_session(MACHINE_ID.to_owned(), None)).expect("New Session on agterm");
+    block_on(phone.core.end_session(MACHINE_ID.to_owned(), created.id.clone())).expect("End Session on agterm");
+    let listed = block_on(phone.core.list_sessions(MACHINE_ID.to_owned())).expect("agterm's listing");
+    assert!(listed.iter().all(|session| session.id != created.id), "{listed:?}");
+    assert!(
+        listed.iter().all(|session| !session.ended && session.page.is_none()),
+        "{listed:?}"
+    );
+    phone.settle(SETTLE);
+    assert!(
+        phone.seen.catalog.is_empty(),
+        "a machine with windows got a catalog: {:?}",
+        phone.seen.catalog
+    );
+    let calls = mac.agtermctl_calls();
+    assert!(
+        calls.iter().any(|argv| argv.iter().any(|word| word == "new")),
+        "New Session never reached agterm: {calls:?}"
+    );
+    assert!(
+        calls.iter().all(|argv| argv
+            .iter()
+            .all(|word| !matches!(word.as_str(), "--op-id" | "catalog" | "version"))),
+        "agterm got a catalog command: {calls:?}"
+    );
 }
