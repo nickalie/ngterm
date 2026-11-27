@@ -10,6 +10,7 @@ import uuid
 
 import pytest
 from agterm_conformance.match import assert_absent, assert_ok, find_session, program_argv, session_ids, workspaces
+from agterm_conformance.wait import MOUNTED_FIELD
 
 WINDOWS = sys.platform == "win32"
 WINDOWS_SHELLS = pytest.mark.requires(
@@ -451,6 +452,8 @@ def test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch
     offered = row(ctl.wait_response(vocabulary.command("live.tree"), None, lambda response: row(response) is not None))
     assert [pane["pane"] for pane in offered["panes"]] == ["left", "right"]
     ctl.wait_response(vocabulary.command("live.list"), None, both_running)
+    # the claimed daemon still has no terminal: the hidden right pane is not mounted
+    assert not find_session(ctl.tree(), sid).get(MOUNTED_FIELD["right"])
     assert_ok(ctl.request("session.close", sid))
 
 
