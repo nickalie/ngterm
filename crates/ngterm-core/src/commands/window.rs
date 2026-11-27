@@ -45,9 +45,22 @@ pub(crate) fn dispatch(core: &mut Core, cmd: WindowCmd, request: &Request) -> Ou
         WindowCmd::Zoom => toggle(core, target, WindowRequest::ToggleZoom),
         WindowCmd::Fullscreen => toggle(core, target, WindowRequest::ToggleFullscreen),
         WindowCmd::Minimize => minimize(core, target, args),
-        // registered ahead of their handlers: refused by name until those land
-        WindowCmd::RemoteOpen | WindowCmd::RemoteDismiss => Err(ControlError::NotSupported(Command::Window(cmd))),
+        WindowCmd::RemoteDismiss => remote_dismiss(core, target),
+        // answered through the deferred path, which waits for the window's connection
+        WindowCmd::RemoteOpen => Err(ControlError::NotSupported(Command::Window(cmd))),
     }
+}
+
+/// `window.remote.dismiss [<id>]` (upstream's `dismissRemoteUnknown`): the target names the window, the frontmost one
+/// by default; a local window refuses.
+fn remote_dismiss(core: &mut Core, target: Option<&str>) -> Outcome {
+    let window = Resolver::new(core.library()).placement_window(target)?;
+    let Some(window) = window else {
+        return Err(ControlError::rejected(
+            "window.remote.dismiss acts only on a remote window",
+        ));
+    };
+    core.dismiss_remote_unknown(window)
 }
 
 /// Every window in window order with its open and frontmost flags. An open window adds its auto-follow timeout (absent

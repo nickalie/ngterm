@@ -3,6 +3,7 @@
 //! fake stream transport.
 
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -29,16 +30,70 @@ use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
 use crate::remote::viewer_run::readable;
 use crate::sidebar_actions::SidebarAction;
 
-/// Answers `version` with `version` and records every run.
+/// Answers `version` with `version`, an operation sent with an id with an applied receipt at the next revision (the
+/// created row's id for a new session), and records every run. With `lose` set, operations and lookups get no answer.
 struct Runner {
     version: Mutex<RemoteCommandResult>,
     runs: Mutex<Vec<Vec<String>>>,
+    rev: Mutex<i64>,
+    created: Mutex<Option<Uuid>>,
+    lose: AtomicBool,
+}
+
+impl Runner {
+    /// The remote lines run so far, quotes left out.
+    fn lines(&self) -> Vec<String> {
+        let runs = self.runs.lock().unwrap();
+        runs.iter()
+            .map(|argv| {
+                argv.last()
+                    .map_or_else(String::new, |line| line.replace(['\'', '\\'], ""))
+            })
+            .collect()
+    }
+
+    /// The lines that ran an operation.
+    fn operations(&self) -> Vec<String> {
+        self.lines()
+            .into_iter()
+            .filter(|line| line.contains("--op-id "))
+            .collect()
+    }
+
+    /// The lines that asked about an operation.
+    fn lookups(&self) -> Vec<String> {
+        self.lines()
+            .into_iter()
+            .filter(|line| line.contains(" catalog op "))
+            .collect()
+    }
 }
 
 impl RemoteCommandRunner for Runner {
     fn run(&self, argv: &[String], _deadline: Duration) -> RemoteCommandResult {
         self.runs.lock().unwrap().push(argv.to_vec());
-        self.version.lock().unwrap().clone()
+        let line = argv
+            .last()
+            .map_or_else(String::new, |line| line.replace(['\'', '\\'], ""));
+        let operation = line.contains("--op-id ") || line.contains(" catalog op ");
+        if !operation {
+            return self.version.lock().unwrap().clone();
+        }
+        if self.lose.load(Ordering::SeqCst) {
+            return answer(&json!(null));
+        }
+        let at = line.find("--op-id ").map(|at| at + 8).unwrap_or_default();
+        let op_id: String = line[at..].chars().take(36).collect();
+        let mut rev = self.rev.lock().unwrap();
+        *rev += 1;
+        let created = line
+            .contains("session new")
+            .then(|| *self.created.lock().unwrap())
+            .flatten();
+        answer(&json!({"ok": true, "result": {
+            "id": created.map(wire),
+            "receipt": {"opID": op_id, "epoch": "e1", "outcome": "applied", "rev": *rev}
+        }}))
     }
 }
 
@@ -80,6 +135,9 @@ impl Remote {
         let runner = Arc::new(Runner {
             version: Mutex::new(answer(version)),
             runs: Mutex::new(Vec::new()),
+            rev: Mutex::new(0),
+            created: Mutex::new(None),
+            lose: AtomicBool::new(false),
         });
         fixture.core.set_remote_runner(runner.clone());
         let transport = Rc::new(Transport::default());
@@ -887,71 +945,7 @@ fn a_pane_ngterm_cannot_address_says_so_and_starts_no_shell() {
     );
 }
 
-// MARK: - row commands, until the window sends them to its server
-
-#[test]
-fn a_command_that_makes_a_row_in_a_remote_window_is_refused_and_adds_none() {
-    let mut remote = Remote::opened(&server_version());
-    let w = Uuid::new_v4();
-    remote.snapshot(snapshot(vec![workspace(w, "w", vec![session("a")])]));
-    let before = remote.rows();
-    let window = wire(remote.window);
-    for (cmd, name) in [
-        (Command::Session(SessionCmd::New), "session.new"),
-        (Command::Workspace(WorkspaceCmd::New), "workspace.new"),
-        (Command::Live(LiveCmd::Attach), "live.attach"),
-        (Command::Recent(RecentCmd::Open), "recent.open"),
-    ] {
-        for scope in [None, Some(window.clone())] {
-            let response = remote.fixture.send(cmd, None, args(|a| a.window.clone_from(&scope)));
-            assert_eq!(
-                response.error,
-                Some(format!("{name} is not available in a remote window")),
-                "{scope:?}"
-            );
-        }
-    }
-    assert_eq!(remote.rows(), before);
-    assert_eq!(remote.store().workspaces().len(), 1);
-}
-
-#[test]
-fn a_command_on_a_mirrored_row_is_refused_and_the_row_holds() {
-    let mut remote = Remote::opened(&server_version());
-    let (a, w) = (session("a"), Uuid::new_v4());
-    remote.snapshot(snapshot(vec![workspace(w, "w", vec![a.clone()])]));
-    let name = remote.row(a.id()).display_name();
-    let row = wire(a.id());
-    let rename = remote.fixture.send(
-        Command::Session(SessionCmd::Rename),
-        Some(&row),
-        args(|a| a.name = Some("renamed".to_owned())),
-    );
-    assert_eq!(
-        rename.error.as_deref(),
-        Some("session.rename is not available in a remote window")
-    );
-    let close = remote.fixture.send(
-        Command::Session(SessionCmd::Close),
-        None,
-        args(|a| a.targets = Some(vec![row.clone()])),
-    );
-    assert_eq!(
-        close.error.as_deref(),
-        Some("session.close is not available in a remote window")
-    );
-    let delete = remote.fixture.send(
-        Command::Workspace(WorkspaceCmd::Delete),
-        Some(&wire(w)),
-        Args::default(),
-    );
-    assert_eq!(
-        delete.error.as_deref(),
-        Some("workspace.delete is not available in a remote window")
-    );
-    assert_eq!(remote.rows(), vec![a.id()]);
-    assert_eq!(remote.row(a.id()).display_name(), name);
-}
+// MARK: - row commands
 
 #[test]
 fn a_row_command_in_a_local_window_still_runs_while_a_remote_one_is_open() {
@@ -963,40 +957,6 @@ fn a_row_command_in_a_local_window_still_runs_while_a_remote_one_is_open() {
         args(|a| a.window = Some(local)),
     );
     assert!(response.ok, "{response:?}");
-}
-
-#[test]
-fn the_sidebar_makes_and_renames_no_row_in_a_remote_window() {
-    let mut remote = Remote::opened(&server_version());
-    let (a, w) = (session("a"), Uuid::new_v4());
-    remote.snapshot(snapshot(vec![workspace(w, "w", vec![a.clone()])]));
-    let window = remote.window;
-    let name = remote.row(a.id()).display_name();
-    for action in [
-        SidebarAction::NewSessionInCurrent,
-        SidebarAction::NewWorkspace,
-        SidebarAction::Duplicate(a.id()),
-        SidebarAction::RenameSession {
-            session: a.id(),
-            name: "renamed".to_owned(),
-        },
-        SidebarAction::CloseSessions(vec![a.id()]),
-    ] {
-        assert!(
-            !remote.fixture.core.sidebar_action(window, action.clone()),
-            "{action:?}"
-        );
-    }
-    assert_eq!(remote.rows(), vec![a.id()]);
-    assert_eq!(remote.row(a.id()).display_name(), name);
-    assert_eq!(remote.store().workspaces().len(), 1);
-    assert!(remote.fixture.core.sidebar_action(
-        window,
-        SidebarAction::SelectSessions {
-            active: a.id(),
-            selection: vec![a.id()],
-        }
-    ));
 }
 
 #[test]
@@ -1097,76 +1057,5 @@ fn a_closed_local_item_reopens_in_a_local_window_while_a_remote_one_is_frontmost
     assert!(restored.is_some(), "the local window takes it back");
 }
 
-#[test]
-fn the_menu_and_palette_change_no_mirrored_row() {
-    let mut remote = Remote::opened(&server_version());
-    let (a, other) = (session_with(Uuid::new_v4(), "a", vec![pane(), pane()]), Uuid::new_v4());
-    remote.snapshot(snapshot(vec![
-        workspace(Uuid::new_v4(), "w", vec![a.clone()]),
-        workspace(other, "x", vec![]),
-    ]));
-    let window = remote.window;
-    remote
-        .fixture
-        .core
-        .library_mut()
-        .store_mut(window)
-        .unwrap()
-        .select_session(Some(a.id()));
-    let (primary, split) = {
-        let row = remote.row(a.id());
-        assert!(row.split.exists);
-        (row.pane_identity, row.split_pane_identity)
-    };
-    for command in [PaletteCommand::SwapPanes, PaletteCommand::CloseSplit] {
-        remote.fixture.core.perform_menu_command(window, command);
-        let row = remote.row(a.id());
-        assert!(row.split.exists, "{command:?}");
-        assert_eq!(
-            (row.pane_identity, row.split_pane_identity),
-            (primary, split),
-            "{command:?}"
-        );
-    }
-    remote.fixture.core.toggle_palette(window, PaletteMode::Actions);
-    let row = PaletteAction::MoveSession { workspace: other };
-    assert!(!remote.fixture.core.palette_entry_enabled(window, &row));
-    let store = remote.store();
-    assert_eq!(store.workspace(other).map(|w| w.sessions.len()), Some(0));
-}
-
-#[test]
-fn the_gui_leaves_a_shown_server_scratch_shown() {
-    let mut remote = Remote::opened(&server_version());
-    let mut a = session_with(Uuid::new_v4(), "a", vec![pane(), pane()]);
-    a.fields.scratch = Some(CatalogScratch {
-        pane: pane(),
-        shown: true,
-    });
-    remote.snapshot(snapshot(vec![workspace(Uuid::new_v4(), "w", vec![a.clone()])]));
-    let window = remote.window;
-    remote
-        .fixture
-        .core
-        .library_mut()
-        .store_mut(window)
-        .unwrap()
-        .select_session(Some(a.id()));
-    let origin = ActionOrigin { window, quick: false };
-    for action in [
-        BuiltinAction::ToggleSplit,
-        BuiltinAction::ToggleHorizontalSplit,
-        BuiltinAction::CloseSession,
-    ] {
-        remote.fixture.core.perform_builtin(origin, action);
-        assert!(remote.row(a.id()).scratch_active, "{action:?}");
-    }
-    let indicator = AgentIndicator {
-        status: AgentStatus::Blocked,
-        status_pane: Some(StatusPane::Left),
-        ..AgentIndicator::default()
-    };
-    remote.fixture.core.reveal_blocked_pane(a.id(), Some(&indicator));
-    assert!(remote.row(a.id()).scratch_active, "reveal");
-    assert_eq!(remote.rows(), vec![a.id()]);
-}
+#[path = "remote_window_actions.rs"]
+mod actions;

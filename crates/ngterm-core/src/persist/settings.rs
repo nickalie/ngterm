@@ -583,6 +583,15 @@ impl AppSettings {
     /// An empty directory uses home.
     #[must_use]
     pub fn resolve_new_session_cwd(&self, current_session_cwd: Option<&str>, home: &str) -> String {
+        self.remote_new_session_cwd(current_session_cwd)
+            .unwrap_or(home)
+            .to_owned()
+    }
+
+    /// The directory a new session on a remote window's server starts in (upstream's `remoteNewSessionCwd`):
+    /// `None` leaves the server's home, which this machine does not know.
+    #[must_use]
+    pub fn remote_new_session_cwd<'a>(&'a self, current_session_cwd: Option<&'a str>) -> Option<&'a str> {
         let mode = self
             .new_session_directory
             .as_deref()
@@ -593,7 +602,7 @@ impl AppSettings {
             NewSessionDirectory::CurrentSession => current_session_cwd,
             NewSessionDirectory::Custom => self.new_session_custom_directory.as_deref(),
         };
-        chosen.filter(|dir| !dir.is_empty()).unwrap_or(home).to_owned()
+        chosen.filter(|dir| !dir.is_empty())
     }
 }
 

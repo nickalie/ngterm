@@ -539,6 +539,28 @@ pub fn control_command<S: AsRef<str>>(
     Ok(argv)
 }
 
+/// [`control_command`] with `operands` after `--`, so user text that starts with `-` stays an operand (upstream's
+/// `controlCommand(host:arguments:operands:)`).
+///
+/// # Errors
+///
+/// The host cannot be given to ssh.
+pub fn control_command_with_operands<S: AsRef<str>, O: AsRef<str>>(
+    host: &str,
+    peer: RemotePeer,
+    arguments: &[S],
+    operands: &[O],
+) -> Result<Vec<String>, InvocationError> {
+    validate(host)?;
+    let mut argv = ssh_arguments(host, false);
+    argv.push(control_tail_with_operands(
+        OriginForm::of(host, peer),
+        arguments,
+        operands,
+    ));
+    Ok(argv)
+}
+
 /// The remote command of [`control_command`]: the widened `PATH`, then `ngtermctl ARGUMENTS --json`, under `/bin/sh
 /// -c` quoted for any login shell, or `form`'s own: a Windows origin's, or an agterm origin's `agtermctl` with
 /// `live` read as its `zmx`.

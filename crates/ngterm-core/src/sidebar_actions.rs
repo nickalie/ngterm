@@ -154,8 +154,8 @@ pub enum SidebarAction {
 }
 
 impl SidebarAction {
-    /// Whether the action makes, changes or ends a row or a workspace, which a remote window takes only from its
-    /// server's catalog (upstream's `RemoteCatalogActions`).
+    /// Whether the action makes, changes or ends a row or a workspace, which a remote window asks its server for
+    /// (upstream's `RemoteCatalogActions`).
     #[must_use]
     pub fn changes_rows(&self) -> bool {
         matches!(
@@ -184,8 +184,9 @@ impl SidebarAction {
 
 impl Core {
     /// Performs `action` in window `window`'s sidebar. False when it did nothing: the window is gone or not open, its
-    /// modal slot is held (except for a committed rename), the window is a remote window and the action makes or
-    /// changes a row ([`SidebarAction::changes_rows`]), or the action changed nothing it could. Commit afterwards.
+    /// modal slot is held (except for a committed rename), or the action changed nothing it could. In a remote window
+    /// an action that makes or changes a row ([`SidebarAction::changes_rows`]) goes to the window's server instead.
+    /// Commit afterwards.
     pub fn sidebar_action(&mut self, window: Uuid, action: SidebarAction) -> bool {
         // a picker or ask arriving mid-rename takes the field's keyboard, and that focus loss is what commits it: the
         // rename still lands, as upstream's `controlTextDidEndEditing` renames without the modal gate
@@ -197,7 +198,7 @@ impl Core {
             return false;
         }
         if self.library().is_remote_window(window) && action.changes_rows() {
-            return false;
+            return self.remote_sidebar_action(window, action);
         }
         match action {
             SidebarAction::SelectSessions { active, selection } => self.select_from_sidebar(window, active, selection),

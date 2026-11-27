@@ -14,6 +14,7 @@ use ngterm_proto::{
 use uuid::Uuid;
 
 use crate::Core;
+use crate::commands::remote_window::Route;
 use crate::html::HtmlPageKind;
 use crate::keymap::BuiltinAction;
 use crate::model::{AgentIndicator, AppStore, Session, SessionNavigation, SidebarMode};
@@ -212,8 +213,10 @@ impl Core {
             );
             return;
         }
-        let changes_rows = matches!(command, PaletteCommand::SwapPanes | PaletteCommand::CloseSplit);
-        if changes_rows && self.library().is_remote_window(window) {
+        if let (PaletteCommand::SwapPanes | PaletteCommand::CloseSplit, Some(session)) = (command, active)
+            && self.library().is_remote_window(window)
+        {
+            self.remote_pane_command(window, session, command == PaletteCommand::SwapPanes);
             return;
         }
         let Some(store) = self.library_mut().store_mut(window) else {
@@ -845,13 +848,27 @@ impl Core {
         self.try_request(cmd, target, args);
     }
 
-    /// [`Self::run_request`], answering whether the command succeeded.
+    /// [`Self::run_request`], answering whether the command succeeded. A command on a remote window's rows goes to its
+    /// server without waiting for the reply, whose refusal shows over the row.
     fn try_request(&mut self, cmd: Command, target: Option<String>, args: Args) -> bool {
         let request = Request {
             cmd,
             target,
             args: Some(args),
         };
+        if let Some(route) = crate::commands::remote_window::route(self, &request) {
+            return match route {
+                Route::Send {
+                    window,
+                    operation,
+                    select,
+                } => self.perform_remote(window, operation, select),
+                Route::Refused(error) => {
+                    tracing::debug!(cmd = %cmd, %error, "keymap action refused");
+                    false
+                }
+            };
+        }
         let response = self.dispatch(&request);
         if !response.ok {
             tracing::debug!(cmd = %cmd, error = ?response.error, "keymap action refused");

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use ngterm_proto::{ControlRemoteWindow, ControlResult, Request, Response, VersionResult};
 use uuid::Uuid;
 
+use super::actions::RemoteActions;
 use super::stream::{CatalogState, CatalogStream};
 use super::view_state::RemoteWindowViewState;
 use super::{PROBE_DEADLINE, SILENCE_LIMIT, retry_delay};
@@ -51,6 +52,9 @@ pub(crate) struct CatalogRun {
     retry_at: Option<Instant>,
     probe: Option<Answer>,
     last_frame: Instant,
+    pub(crate) actions: RemoteActions,
+    /// A created row to select once the catalog brings it, unless the selection moved from the baseline.
+    pub(crate) pending_selection: Option<(Uuid, Option<Uuid>)>,
 }
 
 impl std::fmt::Debug for CatalogRun {
@@ -76,6 +80,8 @@ impl CatalogRun {
             retry_at: None,
             probe: None,
             last_frame: now,
+            actions: RemoteActions::default(),
+            pending_selection: None,
         }
     }
 
@@ -247,6 +253,7 @@ impl CatalogRun {
         self.probe = None;
         self.retry_at = None;
         self.drop_link();
+        self.actions.stop();
     }
 }
 
@@ -375,8 +382,9 @@ impl Core {
         };
         let moved = run.receive(key.launch, line, transport.as_deref(), now, &mut bind);
         let changed = run.stream.state() != &before;
-        if moved.is_some() {
+        if let Some(snapshot) = moved {
             self.reconcile_catalog(window);
+            self.remote_catalog_moved(window, snapshot);
         }
         if changed {
             self.catalog_state_changed(window);
@@ -420,13 +428,15 @@ impl Core {
             if run.stream.state() != &before {
                 self.catalog_state_changed(window);
             }
+            self.poll_remote_actions(window);
         }
     }
 
     /// Whether a remote window waits on its probe, or holds a connection at all: `(probing, any)`.
     pub(crate) fn catalog_wake(&self) -> (bool, bool) {
         let catalogs = &self.remote.viewer.catalogs;
-        (catalogs.values().any(CatalogRun::probing), !catalogs.is_empty())
+        let busy = |run: &CatalogRun| run.probing() || run.actions.busy();
+        (catalogs.values().any(busy), !catalogs.is_empty())
     }
 
     /// Ends every remote window's stream (the quit path).
@@ -483,6 +493,15 @@ impl Core {
             leads: Vec::new(),
         };
         mirror_rows(store, &catalog, &view, &mut commands);
+        if let Some(run) = self.remote.viewer.catalogs.get_mut(&window)
+            && let Some((created, baseline)) = run.pending_selection
+            && store.session(created).is_some()
+        {
+            run.pending_selection = None;
+            if store.selected_session_id() == baseline {
+                store.select_session(Some(created));
+            }
+        }
         let streams: Vec<(Uuid, bool)> = store
             .sessions()
             .filter_map(|session| {
@@ -518,7 +537,7 @@ impl Core {
             reason: reason.flatten().map(str::to_owned),
             detached_sessions: None,
             detached_workspaces: None,
-            operations: None,
+            operations: self.remote_operations(window),
         })
     }
 

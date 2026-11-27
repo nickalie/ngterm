@@ -774,10 +774,11 @@ impl Core {
 
     /// Answers one request, or starts a command that waits on the frontend and hands back its next step.
     pub fn begin(&mut self, request: &Request) -> Dispatched {
-        if let Some(refusal) = commands::headless::window_refusal(self, request)
-            .or_else(|| commands::remote_window::refusal(self, request))
-        {
+        if let Some(refusal) = commands::headless::window_refusal(self, request) {
             return Dispatched::Done(refusal.into());
+        }
+        if let Some(routed) = commands::remote_window::begin(self, request) {
+            return routed;
         }
         if let Some(op_id) = request.args.as_ref().and_then(|args| args.op_id.clone()) {
             // a receipt this host never keeps would read as a durable answer
@@ -874,6 +875,7 @@ impl Core {
             scoped.and_then(|id| self.zoom_target(id)).map(SurfaceId::control_id)
         };
         tree.remote = scoped.and_then(|id| self.remote_window_node(id));
+        self.project_remote_pending(scoped, &mut tree);
         commands::dashboard::project(self, scoped, &mut tree);
         crate::auto_follow::project(self, scoped, &mut tree);
         if let Some(slot) = scoped.and_then(|id| self.modals.controller(id)) {
@@ -1027,7 +1029,6 @@ mod tests {
     #[test]
     fn registered_v042_commands_refuse_until_their_feature_handlers_land() {
         for name in [
-            "window.remote.dismiss",
             "session.detach",
             "session.reattach",
             "workspace.detach",

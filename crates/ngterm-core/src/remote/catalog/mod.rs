@@ -8,16 +8,26 @@
 //!   a gap and backing off after a lost link. The window's rows follow the catalog through
 //!   [`crate::model::CatalogRowContext`].
 //! - [`view_state`] is what the window keeps on this machine about how it shows the rows.
+//! - [`operation`] and [`request`] are the structural actions the window sends its server, and the control requests
+//!   read as them; `actions` keeps each one marked until its receipt settles it, and `route` sends them for a control
+//!   request or the window's own controls.
 //!
 //! The stream rides the presentation transport ([`super::PresentationTransport`]): its link key names the window
 //! where a row's names the session, so [`crate::Core::viewer_line`] routes each line to its owner.
 
+pub(crate) mod actions;
+mod gestures;
+pub mod operation;
+pub(crate) mod request;
+mod route;
 pub(crate) mod run;
 pub mod stream;
 pub mod view_state;
 
 use std::time::Duration;
 
+pub use self::actions::RemoteOperationMark;
+pub use self::operation::{RemoteOperation, RemoteOperationTarget, RemoteSessionPlacement, RemoteShellOptions};
 pub use self::stream::{CatalogState, CatalogStream, version_refusal};
 pub use self::view_state::{RemoteWindowViewState, SessionView};
 
