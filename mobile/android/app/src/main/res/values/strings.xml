@@ -144,6 +144,9 @@
   <string name="form_user_missing">Enter the user you sign in as.</string>
   <string name="form_user_space">A user name has no spaces.</string>
   <string name="form_key_missing">Choose the key to sign in with.</string>
+  <string name="form_timeout">Connection timeout</string>
+  <string name="form_timeout_hint">Seconds; empty uses Settings\' %1$d s</string>
+  <string name="form_timeout_invalid">Enter 3 to 60 seconds, or leave it empty.</string>
 
   <!-- the host key: first connect and a changed key -->
   <string name="hostkey_title">Trust %1$s?</string>
@@ -370,6 +373,10 @@
   <string name="settings_keys_two_note">Wider keys on a tablet or held sideways</string>
   <string name="settings_keys_hidden">Hidden</string>
   <string name="settings_keys_hidden_note">Only the soft keyboard. A hardware keyboard always hides the row.</string>
+  <string name="settings_connections">Connections</string>
+  <string name="settings_connect_timeout">Connection timeout</string>
+  <string name="settings_connect_timeout_value">%1$d s</string>
+  <string name="settings_connect_timeout_note">How long a machine may take to answer before the connection fails. A machine\'s own value, in its editor, wins.</string>
   <string name="settings_agents">Agents</string>
   <string name="settings_agent_chat">Agent chat view</string>
   <string name="settings_agent_chat_note">Show a pane running Claude Code or Codex as a chat. A session\'s More menu sets its own, and its bar switches a pane to the terminal and back.</string>

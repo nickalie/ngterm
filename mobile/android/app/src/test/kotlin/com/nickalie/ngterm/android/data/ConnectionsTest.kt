@@ -17,12 +17,14 @@ import com.nickalie.ngterm.core.ffi.PeerKind
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 private class MemoryPins : HostKeyStore {
@@ -85,6 +87,38 @@ class ConnectionsTest {
 
             connections.disconnect("m1")
             assertEquals(null, connections.peers.value["m1"])
+        }
+
+    @Test
+    fun eachNewAppWideConnectTimeoutReachesTheCoreOnce() =
+        runTest {
+            val connections = connections()
+            val seconds = MutableStateFlow(10)
+            connections.followConnectTimeout(seconds)
+            advanceUntilIdle()
+            seconds.value = 30
+            advanceUntilIdle()
+            seconds.value = 30
+            seconds.value = 5
+            advanceUntilIdle()
+            assertEquals(5u, core.connectTimeoutSecs())
+            assertEquals(
+                listOf(listOf(10u), listOf(30u), listOf(5u)),
+                core.calls.filter { it.method == "setConnectTimeoutSecs" }.map { it.args },
+            )
+            coroutineContext.cancelChildren()
+        }
+
+    @Test
+    fun aMachineEditedInItsConnectTimeoutAloneStaysConnected() =
+        runTest {
+            val connections = connections()
+            connections.connect(machine)
+            advanceUntilIdle()
+            connections.connect(machine.copy(connectTimeoutSecs = 30u))
+            advanceUntilIdle()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+            assertTrue(core.calls.none { it.method == "disconnect" })
         }
 
     @Test

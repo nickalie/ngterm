@@ -131,7 +131,8 @@ ngterm gives ssh 10 seconds to reach a machine. To change that, add a line to `r
 `connect-timeout = 20` for every machine, or `connect-timeout HOST = 30` for one machine (1 to 300 seconds).
 
 On a phone, the app creates an ssh key on first launch and shows the line to add to `~/.ssh/authorized_keys` on each
-machine. Then add the machine by host, port and user.
+machine. Then add the machine by host, port and user. On Android, Settings ▸ Connections sets the connection
+timeout for every machine (10 seconds by default), and the machine's own form can set a different one.
 
 You can attach to Linux, macOS and Windows machines, from a Linux, macOS or Windows desktop or from the phone app. A
 Windows machine needs Windows' OpenSSH server, with key-based ssh set up for your account; a Windows desktop uses the

@@ -45,6 +45,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -83,11 +84,11 @@ class NgtermApplication :
         val connections =
             Connections(scope, SystemClock::elapsedRealtime) { sink -> MobileCore(sink, vault, pins) }
         val network = NetworkMonitor(this, connections::networkChanged).also { it.start() }
-        scope.logChanges(foreground.visible, "in the foreground", "in the background")
-        scope.logChanges(network.online, "network online", "network offline")
+        scope.logStates(network)
         val clipboard = AndroidClipboard(this)
         val live = LiveSessions(scope, connections, clipboard)
         val settings = SettingsStore(PreferenceDataStoreFactory.create { file("settings") })
+        connections.followConnectTimeout(settings.settings.map { it.connectTimeout })
         val machines = MachineStore(PreferenceDataStoreFactory.create { file("machines") })
         val asks = Asks(scope, connections)
         val chatViews =
@@ -145,6 +146,12 @@ class NgtermApplication :
             "started version=${version ?: "unknown"} android=${Build.VERSION.SDK_INT} device=${Build.MODEL}",
         )
         return log
+    }
+
+    // the screen's and the network's states in the log, from now on
+    private fun CoroutineScope.logStates(network: NetworkMonitor) {
+        logChanges(foreground.visible, "in the foreground", "in the background")
+        logChanges(network.online, "network online", "network offline")
     }
 
     // a line for the state as it is now and for each change after

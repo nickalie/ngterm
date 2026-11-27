@@ -25,6 +25,8 @@ data class StoredMachine(
     val port: Int,
     val user: String,
     val keyId: String,
+    /** The seconds a connect to it may take ([ConnectTimeoutRange]); null takes the app-wide one in Settings. */
+    val connectTimeout: Int? = null,
 ) {
     /** What the list shows for it: its name, or its host when it has none. */
     val title: String get() = label.ifBlank { host }
@@ -41,14 +43,16 @@ data class StoredMachine(
             port = port.toUShort(),
             user = user,
             keyId = keyId,
+            connectTimeoutSecs = connectTimeout?.toUInt(),
         )
 }
 
 /**
  * Whether [other] is reached as this record is: the same host, port, user and key (the core's `Machine::reached_as`).
- * A record differing in its label alone is the machine renamed, and keeps its connection.
+ * A record differing in its label or its connect timeout alone keeps its connection.
  */
-fun Machine.reachedAs(other: Machine): Boolean = copy(label = other.label) == other
+fun Machine.reachedAs(other: Machine): Boolean =
+    copy(label = other.label, connectTimeoutSecs = other.connectTimeoutSecs) == other
 
 /**
  * The machines the user added, in the order they were added, kept in [store] (Preferences DataStore, one JSON value).
@@ -107,6 +111,7 @@ class MachineStore(
                         .put("port", it.port)
                         .put("user", it.user)
                         .put("keyId", it.keyId)
+                        .apply { it.connectTimeout?.let { secs -> put("connectTimeout", secs) } }
                 },
             ).toString()
 
@@ -122,6 +127,10 @@ class MachineStore(
                     port = item.optInt("port", SSH_PORT),
                     user = item.getString("user"),
                     keyId = item.getString("keyId"),
+                    connectTimeout =
+                        item
+                            .optInt("connectTimeout", 0)
+                            .takeIf { it in ConnectTimeoutRange },
                 )
             }
         }

@@ -80,6 +80,16 @@ class SettingsControlsTest {
     }
 
     @Test
+    fun theConnectionTimeoutStartsAtTenAndTheSliderStoresItsSeconds() {
+        val slider = compose.onNodeWithContentDescription("Connection timeout").performScrollTo()
+        compose.onNodeWithText("10 s").assertExists()
+        assertEquals(10, stored().connectTimeout)
+        slider.performSemanticsAction(SemanticsActions.SetProgress) { it(30f) }
+        compose.waitUntil(10_000) { stored().connectTimeout == 30 }
+        compose.onNodeWithText("30 s").assertExists()
+    }
+
+    @Test
     fun appearanceScreenOnAndExtraKeysChoicesAreStored() {
         for ((label, choice) in listOf(
             "Dark" to ThemeChoice.Dark,

@@ -2,11 +2,12 @@ package com.nickalie.ngterm.android.ui.machines
 
 import androidx.annotation.StringRes
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.ConnectTimeoutRange
 import com.nickalie.ngterm.android.data.SSH_PORT
 import com.nickalie.ngterm.android.data.StoredMachine
 
 /** A field of the machine form. */
-enum class MachineField { Label, Host, Port, User, Key }
+enum class MachineField { Label, Host, Port, User, Key, Timeout }
 
 /** What is wrong with a field, in the words the form shows under it. */
 enum class FieldProblem(
@@ -21,6 +22,7 @@ enum class FieldProblem(
     UserMissing(MachineField.User, R.string.form_user_missing),
     UserHasSpace(MachineField.User, R.string.form_user_space),
     KeyMissing(MachineField.Key, R.string.form_key_missing),
+    TimeoutInvalid(MachineField.Timeout, R.string.form_timeout_invalid),
 }
 
 private const val MAX_PORT = 65535
@@ -28,13 +30,17 @@ private const val MAX_PORT = 65535
 // `host:22`, but not an IPv6 address, which has several colons
 private val HOST_WITH_PORT = Regex("^[^:]+:[0-9]*$")
 
-/** The machine form's fields as typed: the port as text, so a half-typed one can be shown and corrected. */
+/**
+ * The machine form's fields as typed: the port and the connect timeout as text, so a half-typed one can be shown and
+ * corrected; an empty [timeout] takes Settings'.
+ */
 data class MachineDraft(
     val label: String = "",
     val host: String = "",
     val port: String = SSH_PORT.toString(),
     val user: String = "",
     val keyId: String = "",
+    val timeout: String = "",
 ) {
     /** What is wrong with it, at most one problem per field. */
     fun problems(): Map<MachineField, FieldProblem> {
@@ -56,6 +62,7 @@ data class MachineDraft(
                 else -> null
             },
             FieldProblem.KeyMissing.takeIf { keyId.isEmpty() },
+            FieldProblem.TimeoutInvalid.takeIf { timeout.isNotBlank() && timeoutSeconds() !in ConnectTimeoutRange },
         ).associateBy { it.field }
     }
 
@@ -69,12 +76,22 @@ data class MachineDraft(
             port = port.trim().toInt(),
             user = user.trim(),
             keyId = keyId,
+            connectTimeout = timeoutSeconds(),
         )
     }
+
+    private fun timeoutSeconds(): Int? = timeout.trim().toIntOrNull()
 
     companion object {
         /** The draft that edits [machine]. */
         fun of(machine: StoredMachine) =
-            MachineDraft(machine.label, machine.host, machine.port.toString(), machine.user, machine.keyId)
+            MachineDraft(
+                machine.label,
+                machine.host,
+                machine.port.toString(),
+                machine.user,
+                machine.keyId,
+                machine.connectTimeout?.toString().orEmpty(),
+            )
     }
 }

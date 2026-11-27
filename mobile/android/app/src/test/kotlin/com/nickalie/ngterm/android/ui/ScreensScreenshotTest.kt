@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
@@ -145,6 +146,30 @@ class ScreensScreenshotTest(
         // Save shows what is wrong
         compose.onNodeWithText("Save").performClick()
         compose.onRoot().captureRoboImage(golden("machine_form"))
+    }
+
+    @Test
+    fun machineFormTimeout() {
+        compose.setContent {
+            NgtermTheme {
+                InScaffold {
+                    MachineFormScreen(
+                        initial = MachineDraft(host = "build-01.lan", user = "nick", timeout = "90"),
+                        editing = true,
+                        keys = listOf(SampleKey),
+                        pinned = SampleKey.fingerprint,
+                        onSave = {},
+                        onClose = {},
+                        onShowKey = {},
+                        connectTimeout = 25,
+                    )
+                }
+            }
+        }
+        // the timeout's problem, under the field, with the pinned host key below it
+        compose.onNodeWithText("Save").performClick()
+        compose.onNodeWithText("Enter 3 to 60 seconds, or leave it empty.").performScrollTo()
+        compose.onRoot().captureRoboImage(golden("machine_form_timeout"))
     }
 
     @OptIn(ExperimentalRoborazziApi::class)

@@ -10,21 +10,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.AlertKind
 import com.nickalie.ngterm.android.data.AppSettings
@@ -37,7 +29,6 @@ import com.nickalie.ngterm.android.ui.components.ErrorState
 import com.nickalie.ngterm.android.ui.components.PanelAction
 import com.nickalie.ngterm.android.ui.components.ScreenFrame
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
-import kotlin.math.roundToInt
 
 /**
  * Settings: one column, 640dp at most, of the terminal (a live sample over its text size, font and colors, and
@@ -85,6 +76,9 @@ fun SettingsScreen(
                     ExtraKeysSection(
                         state.settings.extraKeys,
                     ) { keys -> actions.onChange { it.copy(extraKeys = keys) } }
+                    ConnectionsSection(state.settings.connectTimeout) { secs ->
+                        actions.onChange { it.copy(connectTimeout = secs) }
+                    }
                     AgentsSection(state.settings.agentChat) { on -> actions.onChange { it.copy(agentChat = on) } }
                     NotificationsSection(state.alerts, notificationsOn, actions, updates)
                     ClipboardSection(state.clipboard, actions.onRevokeClipboard)
@@ -113,7 +107,14 @@ private fun TerminalSection(
             description = stringResource(R.string.settings_preview_description, name, settings.textSize),
             modifier = Modifier.padding(vertical = NgtermTheme.spacing.sm),
         )
-        TextSize(settings.textSize, onSize = { size -> onChange { it.copy(textSize = size) } })
+        SliderRow(
+            label = stringResource(R.string.settings_text_size),
+            value = settings.textSize,
+            range = TerminalTextSizeRange,
+            valueText = R.string.settings_text_size_value,
+            note = stringResource(R.string.settings_text_size_note),
+            onValue = { size -> onChange { it.copy(textSize = size) } },
+        )
         Text(
             text = stringResource(R.string.settings_font),
             style = MaterialTheme.typography.titleSmall,
@@ -151,71 +152,6 @@ private fun TerminalSection(
             onCheckedChange = { on -> onChange { it.copy(keepScreenOn = on) } },
         )
     }
-}
-
-// the text size: its value in words, a slider of whole sp, and what it sets
-@Composable
-private fun TextSize(
-    size: Int,
-    onSize: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    // the slider moves freely under the finger and settles on its value's whole sp
-    var dragged by remember(size) { mutableFloatStateOf(size.toFloat()) }
-    val shown = dragged.roundToInt()
-    val value = stringResource(R.string.settings_text_size_value, shown)
-    val label = stringResource(R.string.settings_text_size)
-    Column(modifier) {
-        TextSizeHeader(label, value)
-        TextSizeSlider(dragged, label, value, onDrag = { dragged = it }, onDone = { onSize(dragged.roundToInt()) })
-        SettingsNote(stringResource(R.string.settings_text_size_note))
-    }
-}
-
-@Composable
-private fun TextSizeHeader(
-    label: String,
-    value: String,
-) {
-    Row(Modifier.fillMaxWidth().padding(top = NgtermTheme.spacing.sm), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-        Text(value, style = NgtermTheme.mono.medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun TextSizeSlider(
-    position: Float,
-    label: String,
-    value: String,
-    onDrag: (Float) -> Unit,
-    onDone: () -> Unit,
-) {
-    val range = TerminalTextSizeRange
-    Slider(
-        value = position,
-        onValueChange = onDrag,
-        onValueChangeFinished = onDone,
-        valueRange = range.first.toFloat()..range.last.toFloat(),
-        steps = range.last - range.first - 1,
-        // a quiet track: no verdigris (it means healthy) and no row of 23 ticks
-        colors =
-            SliderDefaults.colors(
-                inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                activeTickColor = Color.Transparent,
-                inactiveTickColor = Color.Transparent,
-            ),
-        modifier =
-            Modifier.fillMaxWidth().semantics {
-                contentDescription = label
-                stateDescription = value
-            },
-    )
 }
 
 @Composable

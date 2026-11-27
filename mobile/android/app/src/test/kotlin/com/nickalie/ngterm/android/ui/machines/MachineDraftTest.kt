@@ -31,10 +31,20 @@ class MachineDraftTest {
                 good.copy(user = " ") to FieldProblem.UserMissing,
                 good.copy(user = "ni ck") to FieldProblem.UserHasSpace,
                 good.copy(keyId = "") to FieldProblem.KeyMissing,
+                good.copy(timeout = "2") to FieldProblem.TimeoutInvalid,
+                good.copy(timeout = "61") to FieldProblem.TimeoutInvalid,
+                good.copy(timeout = "99999999999") to FieldProblem.TimeoutInvalid,
             )
         for ((draft, problem) in cases) {
             assertEquals("$draft", mapOf(problem.field to problem), draft.problems())
         }
+    }
+
+    @Test
+    fun anEmptyTimeoutTakesSettingsAndAFilledOneIsTheMachines() {
+        assertEquals(null, good.copy(timeout = " ").toMachine("m1").connectTimeout)
+        assertEquals(3, good.copy(timeout = "3").toMachine("m1").connectTimeout)
+        assertEquals(60, good.copy(timeout = " 60 ").toMachine("m1").connectTimeout)
     }
 
     @Test
@@ -47,5 +57,8 @@ class MachineDraftTest {
     fun aMachineEditsAsTheDraftItWasMadeFrom() {
         val machine = StoredMachine("m1", "Build box", "build-01.lan", 2222, "nick", "k1")
         assertEquals(machine, MachineDraft.of(machine).toMachine("m1"))
+        val slow = machine.copy(connectTimeout = 45)
+        assertEquals("45", MachineDraft.of(slow).timeout)
+        assertEquals(slow, MachineDraft.of(slow).toMachine("m1"))
     }
 }

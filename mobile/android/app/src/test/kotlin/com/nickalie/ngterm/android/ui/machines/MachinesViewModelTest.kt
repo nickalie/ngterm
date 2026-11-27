@@ -9,6 +9,7 @@ import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.Machine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -100,6 +101,24 @@ class MachinesViewModelTest {
                 .machine.port == 2222
         }
         eventually { connects() == 2 }
+    }
+
+    @Test
+    fun aMachinesOwnTimeoutReachesTheCoreAndTheFormHintFollowsSettings() {
+        val key = test.seedKey()
+        val model = model()
+        assertEquals(10, model.connectTimeout.value)
+        runBlocking { test.settings.update { it.copy(connectTimeout = 25) } }
+        eventually { model.connectTimeout.value == 25 }
+        model.ready { it.items.isEmpty() }
+        model.save(MachineDraft(host = "build-01.lan", user = "nick", keyId = key.id, timeout = "40"), editing = null)
+        eventually { connects() == 1 }
+        val sent =
+            test.core.calls
+                .single { it.method == "connect" }
+                .args
+                .single() as Machine
+        assertEquals(40u, sent.connectTimeoutSecs)
     }
 
     @Test

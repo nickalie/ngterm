@@ -37,6 +37,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.internal.bytecode.InstrumentationConfiguration
 import org.robolectric.util.ReflectionHelpers
+import java.time.Duration
 
 /** Startup builds real stores and platform services; only the unavailable JNI/Keystore services are substituted. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -97,6 +98,24 @@ class NgtermApplicationTest {
             val core = (graph.connections.core as StartupMobileCore).fake
             assertTrue(core.calls.any { it.method == "networkChanged" })
         }
+
+    @Test
+    fun settingsConnectTimeoutReachesTheCoreAndEachChangeFollows() {
+        val graph = app.graph
+        val core = (graph.connections.core as StartupMobileCore).fake
+
+        fun sent() = core.calls.filter { it.method == "setConnectTimeoutSecs" }.map { it.args.single() }
+        waitFor { sent() == listOf(10u) }
+        stored { graph.settings.update { it.copy(connectTimeout = 45) } }
+        waitFor { sent() == listOf(10u, 45u) }
+        assertEquals(45u, core.connectTimeoutSecs())
+    }
+
+    private fun waitFor(done: () -> Boolean) {
+        val until = System.nanoTime() + 10_000_000_000
+        while (!done() && System.nanoTime() < until) shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(10))
+        assertTrue(done())
+    }
 
     @Test
     fun foregroundResumesTheCoreAndAnAttachedSessionStartsTheLinkService() {

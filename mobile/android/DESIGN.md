@@ -295,8 +295,9 @@ reading, not a poster), the mark on top of the welcome.
 - **Remove** asks nothing: the machine goes at once and a snackbar offers Undo, which puts it back where it was, with
   its pinned key.
 - **Add and Edit machine:** a `ScreenFrame` with Close and Save. Name, Host, Port and User (mono for what is compared
-  character by character), the key (a radio choice only when there is more than one), Show public key, and when
-  editing, the pinned host key. A field shows its problem once it has been left, or when Save is tried; the problem
+  character by character), the key (a radio choice only when there is more than one), Show public key, Connection
+  timeout (mono, digits only, optional: its hint names Settings' value, which an empty field takes; 3 to 60 s), and
+  when editing, the pinned host key. A field shows its problem once it has been left, or when Save is tried; the problem
   replaces its hint and says how to fix it ("Put the user in User, not in the host").
 - **First connect:** a bottom sheet over whichever destination is shown, raised by the core's question: the attention
   diamond, "Trust build-01?", the fingerprint on a plate, the command that prints it on the machine, Trust and
@@ -1138,7 +1139,8 @@ The plan, reviewed against the brief:
 | Font   (o) JetBrains Mono            |
 | Colors (o) Match the theme  [######] |
 | Keep the screen on              [on] |
-| Appearance  Extra keys  Agents       |
+| Appearance  Extra keys  Connections  |
+| Agents                               |
 | Notifications                        |
 | Clipboard  Keys  Diagnostics  About  |
 +--------------------------------------+
@@ -1154,6 +1156,9 @@ The plan, reviewed against the brief:
   follow the side picked.
 - **Extra keys:** Fit to the width (as Keyboard above), Always two lines, or Hidden (only the soft keyboard; a
   hardware keyboard hides the row whatever is picked).
+- **Connections:** Connection timeout, a slider of whole seconds (3-60, 10 by default) drawn as Text size is, with
+  the value in mono beside the label: how long a machine may take to answer a connect. A machine's own value in its
+  form wins. The core takes it from the next connect or reconnect.
 - **Agents:** Agent chat view, a switch, on by default: a pane running Claude Code or Codex shows as a chat, with the
   terminal one tap away in the session's bar (The view switch, above). Off, a session's panes show their terminal and
   its bar has no switch. It is the default: a session's More menu sets its own either way (Chat view, above).

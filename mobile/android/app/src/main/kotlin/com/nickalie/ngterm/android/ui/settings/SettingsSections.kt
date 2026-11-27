@@ -24,6 +24,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.AlertKind
+import com.nickalie.ngterm.android.data.ConnectTimeoutRange
 import com.nickalie.ngterm.android.ui.components.Banner
 import com.nickalie.ngterm.android.ui.components.CopyButton
 import com.nickalie.ngterm.android.ui.components.SectionAction
@@ -90,6 +91,24 @@ internal fun NotificationsSection(
             )
         }
         SettingsNote(stringResource(R.string.settings_alert_attached))
+    }
+}
+
+/** How long a connect may take, for each machine that sets no time of its own in its editor. */
+@Composable
+internal fun ConnectionsSection(
+    timeout: Int,
+    onTimeout: (Int) -> Unit,
+) {
+    SettingsSection(stringResource(R.string.settings_connections)) {
+        SliderRow(
+            label = stringResource(R.string.settings_connect_timeout),
+            value = timeout,
+            range = ConnectTimeoutRange,
+            valueText = R.string.settings_connect_timeout_value,
+            note = stringResource(R.string.settings_connect_timeout_note),
+            onValue = onTimeout,
+        )
     }
 }
 

@@ -65,6 +65,33 @@ class MachineFormScreenTest {
     }
 
     @Test
+    fun theConnectionTimeoutIsOptionalShowsSettingsValueAndRefusesOneOutOfRange() {
+        compose.setContent {
+            NgtermTheme {
+                MachineFormScreen(
+                    MachineDraft(host = "host.lan", user = "nick"),
+                    false,
+                    listOf(created),
+                    null,
+                    { saved = it },
+                    {},
+                    {},
+                    connectTimeout = 25,
+                )
+            }
+        }
+        compose.onNodeWithText("Seconds; empty uses Settings' 25 s").performScrollTo().assertExists()
+        field("Connection timeout").performScrollTo().performTextReplacement("90")
+        compose.onNodeWithText("Save").performClick()
+        assertNull(saved)
+        compose.onNodeWithText("Enter 3 to 60 seconds, or leave it empty.").performScrollTo().assertExists()
+        field("Connection timeout").performScrollTo().performTextReplacement("4s5")
+        compose.onNodeWithText("Save").performClick()
+        assertEquals("45", saved?.timeout)
+        assertEquals(45, saved?.toMachine("m1")?.connectTimeout)
+    }
+
+    @Test
     fun missingKeysRefuseSaveAndDoNotOfferAPublicKey() {
         compose.setContent {
             NgtermTheme {
@@ -119,6 +146,7 @@ class MachineFormScreenTest {
         field("Host").performScrollTo().performTextReplacement("new.lan")
         field("Port").performScrollTo().performTextReplacement("2222")
         field("User").performScrollTo().performTextReplacement("newuser")
+        field("Connection timeout").performScrollTo().performTextReplacement("20")
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithText("SHA256:created").performScrollTo().assertIsSelected()
         compose.onNodeWithText("Show public key").performScrollTo().performClick()
@@ -129,7 +157,7 @@ class MachineFormScreenTest {
             ).performScrollTo()
             .assertExists()
         compose.onNodeWithText("Save").performClick()
-        assertEquals(MachineDraft("new", "new.lan", "2222", "newuser", created.id), saved)
+        assertEquals(MachineDraft("new", "new.lan", "2222", "newuser", created.id, "20"), saved)
         compose.onNodeWithContentDescription("Close").performClick()
         assertEquals(true, closed)
     }

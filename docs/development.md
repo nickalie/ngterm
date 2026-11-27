@@ -1143,7 +1143,8 @@ mobile core over its own ssh channels, and each only sends that Mac the command 
   connect timeout plus the far side's own time (`after_connect`, `tree_deadline`); a presentation client takes the
   current value at each launch and waits that much longer for its first frame. The mobile core has its own: an
   app-wide `MobileCore::set_connect_timeout_secs` (10 s until set) and `Machine.connect_timeout_secs`, which bound the
-  russh connect's network deadline.
+  russh connect's network deadline. The Android app sets the first from Settings ▸ Connections (3 to 60 s, kept in
+  `SettingsStore`) and the second from each machine's form (empty takes Settings').
 - What agterm lacks (`peer::Capabilities`): the agent chat view (the mobile core refuses its calls), the Kitty clipboard
   bridge (no `attachBridge`), the stream's `name` and `companion.page` frames (its hello never offers them). The title
   bar shows an `agterm` badge beside the host, with that list as its tooltip; `live tree HOST` prints it as a header; the

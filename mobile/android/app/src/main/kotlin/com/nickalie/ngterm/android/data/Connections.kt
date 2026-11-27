@@ -529,6 +529,14 @@ class Connections(
         guarded { core.useKey(machineId, keyId) }
     }
 
+    /**
+     * Hands the core each app-wide connect timeout in [seconds] (Settings'), which a machine with none of its own
+     * takes from its next connect or reconnect on.
+     */
+    fun followConnectTimeout(seconds: Flow<Int>) {
+        scope.launch { seconds.distinctUntilChanged().collect { core.setConnectTimeoutSecs(it.toUInt()) } }
+    }
+
     /** The network came back or changed: a machine waiting to reconnect tries at once. */
     fun networkChanged() = guarded { core.networkChanged() }
 

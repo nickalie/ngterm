@@ -34,6 +34,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.AppKey
+import com.nickalie.ngterm.android.data.DEFAULT_CONNECT_TIMEOUT
 import com.nickalie.ngterm.android.ui.components.KeyPlate
 import com.nickalie.ngterm.android.ui.components.ScreenExit
 import com.nickalie.ngterm.android.ui.components.ScreenFrame
@@ -41,14 +42,15 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 private val DraftSaver =
     listSaver<MachineDraft, String>(
-        save = { listOf(it.label, it.host, it.port, it.user, it.keyId) },
-        restore = { MachineDraft(it[0], it[1], it[2], it[3], it[4]) },
+        save = { listOf(it.label, it.host, it.port, it.user, it.keyId, it.timeout) },
+        restore = { MachineDraft(it[0], it[1], it[2], it[3], it[4], it[5]) },
     )
 
 /**
  * Add machine (no [editing]) or Edit machine: the name, host, port and user, the key to sign in with (a choice only
- * when the app has more than one), the way to its public key, and for a machine already added its pinned host key. A
- * field says what is wrong with it once it has been left or Save was tried; Save with problems only shows them.
+ * when the app has more than one), the way to its public key, its own connect timeout (empty takes Settings'
+ * [connectTimeout]), and for a machine already added its pinned host key. A field says what is wrong with it once it
+ * has been left or Save was tried; Save with problems only shows them.
  */
 @Composable
 fun MachineFormScreen(
@@ -60,6 +62,7 @@ fun MachineFormScreen(
     onClose: () -> Unit,
     onShowKey: (String) -> Unit,
     modifier: Modifier = Modifier,
+    connectTimeout: Int = DEFAULT_CONNECT_TIMEOUT,
 ) {
     var draft by rememberDraft(initial, keys)
     var tried by rememberSaveable { mutableStateOf(false) }
@@ -101,6 +104,17 @@ fun MachineFormScreen(
             problem = problem(MachineField.Key),
             onSelect = { draft = draft.copy(keyId = it) },
             onShowKey = onShowKey,
+        )
+        FormField(
+            value = draft.timeout,
+            onValueChange = { draft = draft.copy(timeout = it.filter(Char::isDigit)) },
+            label = stringResource(R.string.form_timeout),
+            hint = stringResource(R.string.form_timeout_hint, connectTimeout),
+            problem = problem(MachineField.Timeout),
+            keyboardType = KeyboardType.Number,
+            imeAction = ImeAction.Done,
+            mono = true,
+            onFocus = { focus(MachineField.Timeout, it) },
         )
         if (editing) {
             Pinned(pinned)

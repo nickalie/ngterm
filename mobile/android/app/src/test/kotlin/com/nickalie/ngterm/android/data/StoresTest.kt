@@ -58,6 +58,10 @@ class StoresTest {
             assertEquals(listOf(a, c), store.machines.first())
             store.restore(b, 1)
             assertEquals(listOf(a, b, c), store.machines.first())
+            store.save(c.copy(connectTimeout = 45))
+            assertEquals(45, store.get("c")?.connectTimeout)
+            assertNull(store.get("a")?.connectTimeout)
+            store.save(c)
             assertEquals(c, store.get("c"))
             assertNull(store.get("nope"))
         }
@@ -79,6 +83,7 @@ class StoresTest {
                     extraKeys = ExtraKeysChoice.Hidden,
                     keepScreenOn = true,
                     agentChat = false,
+                    connectTimeout = 90,
                 )
             }
             val again = store.settings.first()
@@ -91,6 +96,10 @@ class StoresTest {
             assertEquals(ExtraKeysChoice.Hidden, again.extraKeys)
             assertTrue(again.keepScreenOn)
             assertFalse(again.agentChat)
+            // a connect timeout past the range is kept at its edge
+            assertEquals(60, again.connectTimeout)
+            store.update { it.copy(connectTimeout = 25) }
+            assertEquals(25, store.settings.first().connectTimeout)
         }
 
     @Test
@@ -161,11 +170,35 @@ class StoresTest {
             prefs.edit {
                 it[stringPreferencesKey("palette")] = "Solarized"
                 it[intPreferencesKey("text_size")] = 2
+                it[intPreferencesKey("connect_timeout")] = 1
             }
             val read = SettingsStore(prefs).settings.first()
             assertEquals(PaletteChoice.Theme, read.palette)
             assertEquals(8, read.textSize)
+            assertEquals(3, read.connectTimeout)
         }
+
+    @Test
+    fun aStoredConnectTimeoutOutsideTheRangeReadsAsNone() =
+        runBlocking {
+            val prefs = testStore(dir.root, "machines")
+            val machine = """{"id":"m","host":"h","user":"u","keyId":"k","connectTimeout":%d}"""
+            prefs.edit {
+                it[stringPreferencesKey("machines")] =
+                    "[${machine.format(0)},${machine.format(400)},${machine.format(30).replace("\"m\"", "\"n\"")}]"
+            }
+            assertEquals(listOf(null, null, 30), MachineStore(prefs).machines.first().map { it.connectTimeout })
+        }
+
+    @Test
+    fun aMachinesTimeoutReachesTheCoreAndAnEditOfItAloneKeepsItsConnection() {
+        val machine = testMachine()
+        assertNull(machine.toCore().connectTimeoutSecs)
+        val slow = machine.copy(connectTimeout = 30).toCore()
+        assertEquals(30u, slow.connectTimeoutSecs)
+        assertTrue(machine.toCore().reachedAs(slow))
+        assertFalse(machine.toCore().reachedAs(machine.copy(port = 2222).toCore()))
+    }
 
     @Test
     fun everyMachineCanBePointedAtOneKey() =

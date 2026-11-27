@@ -100,6 +100,13 @@ class SettingsScreenshotTest(
     }
 
     @Test
+    fun connections() {
+        settings()
+        compose.onNodeWithText("A machine's own value", substring = true).performScrollTo()
+        compose.onRoot().captureRoboImage(golden("connections"))
+    }
+
+    @Test
     fun newKey() {
         show {
             PublicKeyScreen(

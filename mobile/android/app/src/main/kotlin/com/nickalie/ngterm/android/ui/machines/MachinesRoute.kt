@@ -125,6 +125,7 @@ fun MachinesRoute(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val keys by viewModel.keys.collectAsStateWithLifecycle()
     val pins by viewModel.pins.collectAsStateWithLifecycle()
+    val connectTimeout by viewModel.connectTimeout.collectAsStateWithLifecycle()
     val removed by viewModel.removed.collectAsStateWithLifecycle()
     // the routes above the home, bottom first, joined by '|' (ids are UUIDs)
     var stack by rememberSaveable { mutableStateOf("") }
@@ -139,17 +140,7 @@ fun MachinesRoute(
         stack = routes.dropLast(1).joinToString("|")
     }
     BackHandler(enabled = routes.isNotEmpty(), onBack = pop)
-    val actions =
-        MachineActions(
-            onAdd = { push(MachinesPage.Add) },
-            onOpen = { push(MachinesPage.Sessions(it)) },
-            onEdit = { push(MachinesPage.Edit(it)) },
-            onConnect = viewModel::connect,
-            onDisconnect = viewModel::disconnect,
-            onRemove = viewModel::remove,
-            onReviewHostKey = { push(MachinesPage.HostKeyChanged(it)) },
-            onRetryRead = viewModel::retry,
-        )
+    val actions = machineActions(viewModel, push)
     val snackbar = remember { SnackbarHostState() }
     RemovalUndo(removed, snackbar, viewModel::undoRemove, viewModel::forgetRemoval)
     Box(modifier = modifier.fillMaxSize()) {
@@ -163,6 +154,7 @@ fun MachinesRoute(
                     actions = actions,
                     keys = keys,
                     pins = pins,
+                    connectTimeout = connectTimeout,
                     onSave = { draft, editing ->
                         viewModel.save(draft, editing)
                         pop()
@@ -180,6 +172,21 @@ fun MachinesRoute(
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
     }
 }
+
+// the home's actions: [push] opens a page over it, [viewModel] does the rest
+private fun machineActions(
+    viewModel: MachinesViewModel,
+    push: (MachinesPage) -> Unit,
+) = MachineActions(
+    onAdd = { push(MachinesPage.Add) },
+    onOpen = { push(MachinesPage.Sessions(it)) },
+    onEdit = { push(MachinesPage.Edit(it)) },
+    onConnect = viewModel::connect,
+    onDisconnect = viewModel::disconnect,
+    onRemove = viewModel::remove,
+    onReviewHostKey = { push(MachinesPage.HostKeyChanged(it)) },
+    onRetryRead = viewModel::retry,
+)
 
 // the snackbar that offers to undo the removal of [removed]
 @Composable
@@ -223,6 +230,7 @@ private fun Page(
     actions: MachineActions,
     keys: List<AppKey>?,
     pins: Map<String, String>,
+    connectTimeout: Int,
     onSave: (MachineDraft, String?) -> Unit,
     onRemovePin: (String) -> Unit,
     onShowKey: (String) -> Unit,
@@ -254,6 +262,7 @@ private fun Page(
                 editing = false,
                 keys = keys.orEmpty(),
                 pinned = null,
+                connectTimeout = connectTimeout,
                 onSave = { onSave(it, null) },
                 onClose = onPop,
                 onShowKey = onShowKey,
@@ -270,6 +279,7 @@ private fun Page(
                     editing = true,
                     keys = keys.orEmpty(),
                     pinned = pins[item.machine.id],
+                    connectTimeout = connectTimeout,
                     onSave = { onSave(it, item.machine.id) },
                     onClose = onPop,
                     onShowKey = onShowKey,

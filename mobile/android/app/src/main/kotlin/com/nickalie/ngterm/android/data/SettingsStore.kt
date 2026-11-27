@@ -31,6 +31,13 @@ enum class ExtraKeysChoice { Fit, TwoLines, Hidden }
 val TerminalTextSizeRange = 8..32
 const val DEFAULT_TEXT_SIZE = 13
 
+/**
+ * The whole seconds the app lets a machine take to answer a connect (resolve, TCP, handshake and sign-in), app-wide
+ * or for one machine ([StoredMachine.connectTimeout]), and the value until the user picks another: the core's default.
+ */
+val ConnectTimeoutRange = 3..60
+const val DEFAULT_CONNECT_TIMEOUT = 10
+
 /** The app's settings, as Settings shows them; each starts at its default. */
 data class AppSettings(
     val textSize: Int = DEFAULT_TEXT_SIZE,
@@ -47,6 +54,8 @@ data class AppSettings(
      * which a session's More menu overrides for that session ([SessionChatViews]).
      */
     val agentChat: Boolean = true,
+    /** The seconds a connect may take, for every machine that sets none of its own ([ConnectTimeoutRange]). */
+    val connectTimeout: Int = DEFAULT_CONNECT_TIMEOUT,
 )
 
 /**
@@ -71,6 +80,7 @@ class SettingsStore(
             prefs[EXTRA_KEYS] = now.extraKeys.name
             prefs[SCREEN_ON] = now.keepScreenOn
             prefs[AGENT_CHAT] = now.agentChat
+            prefs[CONNECT_TIMEOUT] = now.connectTimeout.coerceIn(ConnectTimeoutRange)
         }
     }
 
@@ -83,6 +93,7 @@ class SettingsStore(
         val EXTRA_KEYS = stringPreferencesKey("extra_keys")
         val SCREEN_ON = booleanPreferencesKey("keep_screen_on")
         val AGENT_CHAT = booleanPreferencesKey("agent_chat")
+        val CONNECT_TIMEOUT = intPreferencesKey("connect_timeout")
 
         fun decode(prefs: Preferences): AppSettings {
             val defaults = AppSettings()
@@ -95,6 +106,7 @@ class SettingsStore(
                 extraKeys = prefs[EXTRA_KEYS].toEnum(defaults.extraKeys),
                 keepScreenOn = prefs[SCREEN_ON] ?: defaults.keepScreenOn,
                 agentChat = prefs[AGENT_CHAT] ?: defaults.agentChat,
+                connectTimeout = prefs[CONNECT_TIMEOUT]?.coerceIn(ConnectTimeoutRange) ?: defaults.connectTimeout,
             )
         }
 

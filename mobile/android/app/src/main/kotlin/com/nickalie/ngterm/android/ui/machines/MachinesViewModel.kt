@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.data.AppKey
+import com.nickalie.ngterm.android.data.DEFAULT_CONNECT_TIMEOUT
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.MachinePeer
 import com.nickalie.ngterm.android.data.StoredMachine
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -97,6 +99,13 @@ class MachinesViewModel(
         graph.pins.all
             .catch { emit(emptyMap()) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /** Settings' connect timeout, which a machine with an empty one takes: the form's hint. */
+    val connectTimeout: StateFlow<Int> =
+        graph.settings.settings
+            .map { it.connectTimeout }
+            .catch { emit(DEFAULT_CONNECT_TIMEOUT) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, DEFAULT_CONNECT_TIMEOUT)
 
     /** The machine last removed, while its undo is on offer. */
     val removed: StateFlow<Removal?> = removal.asStateFlow()
