@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use ngterm_core::catalog::frames::{self, CatalogChange, CatalogFrame, CatalogHello};
+use ngterm_core::live::daemon_name;
 use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::origin::OriginShell;
 use ngterm_core::remote::origin_replies::rename_session_arguments;
@@ -15,6 +16,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::Command;
+use super::pane_tests::SIZE;
 use super::presentation_tests::{Actor, local, settle};
 use crate::api::{MobileError, MobileEvent};
 use crate::catalog::CatalogState;
@@ -527,6 +529,71 @@ fn new_session_carries_an_operation_id_and_answers_with_the_row_the_catalog_show
     });
 }
 
+/// New Session through `actor`'s catalog, whose machine then answers a listing with `listing`: the created row and
+/// the answer to a show of its pane.
+async fn create_and_show(
+    actor: &Actor,
+    peer: &ChannelPeer,
+    listing: Script,
+) -> (RemoteSession, Result<(), MobileError>) {
+    let created = uuid_string(id(7));
+    actor.transport.script(&tree_tail(OriginShell::Posix), listing);
+    let answered = post_create(actor, Some("build"));
+    let (op_id, _, op) = operation(actor).await;
+    answer(
+        op,
+        &json!({"ok": true, "result": {"id": created, "receipt": receipt(&op_id, "applied", Some(5))}}),
+    )
+    .await;
+    let added = CatalogFrame::Delta {
+        epoch: EPOCH.to_owned(),
+        rev: 5,
+        change: CatalogChange::SessionAdded {
+            session: terminal(7, "build", None),
+            workspace: id(9),
+            index: 2,
+        },
+    };
+    send(peer, &added).await;
+    let row = answered.await.unwrap().expect("created");
+    let (reply, shown) = oneshot::channel();
+    actor.post(Command::ShowPane {
+        machine_id: "m1".to_owned(),
+        session_id: created,
+        pane_id: uuid_string(made_pane()),
+        size: SIZE,
+        reply,
+    });
+    (row, shown.await.unwrap().map(drop))
+}
+
+#[test]
+fn a_new_session_the_catalog_made_shows_its_pane() {
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        let (row, shown) = create_and_show(&actor, &peer, listing_with(&uuid_string(id(7)), "build")).await;
+        assert_eq!(row.name, "build");
+        assert_eq!(shown, Ok(()), "the new session's pane shows");
+    });
+}
+
+#[test]
+fn a_new_session_whose_listing_fails_still_answers_with_its_row() {
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        let (row, shown) = create_and_show(&actor, &peer, Script::failing(1, "boom")).await;
+        assert_eq!(row.name, "build", "the catalog made it");
+        assert!(shown.is_err(), "no listing holds its pane");
+        assert_eq!(
+            trees(&actor.sink.take()).last().map(Vec::len),
+            Some(4),
+            "the catalog still shows it"
+        );
+    });
+}
+
 #[test]
 fn a_new_session_the_catalog_never_shows_attachable_is_reported_created() {
     local(async {
@@ -925,18 +992,23 @@ fn a_plain_rename_while_the_stream_is_down_names_the_row_it_shows() {
 }
 
 /// A listing of the headless machine's main session and the session `made` named `name`.
+/// The pane of the session that [`listing_with`] adds.
+fn made_pane() -> Uuid {
+    Uuid::from_u128(0xb7)
+}
+
 fn listing_with(made: &str, name: &str) -> Script {
-    let session = |id: &str, name: &str| {
+    let session = |id: &str, name: &str, daemon: &str| {
         json!({
             "id": id, "name": name, "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
-            "workspaceName": "work", "cwd": "/repo", "panes": [{"pane": "left", "daemon": "ngterm-live-0"}],
+            "workspaceName": "work", "cwd": "/repo", "panes": [{"pane": "left", "daemon": daemon}],
         })
     };
     let remote = json!({
         "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
         "presentation": 1,
         "headless": true,
-        "sessions": [session(&main_id(), "main"), session(made, name)],
+        "sessions": [session(&main_id(), "main", "ngterm-live-0"), session(made, name, &daemon_name(made_pane()))],
     });
     Script::ok(&json!({"ok": true, "result": {"remote": remote}}).to_string())
 }

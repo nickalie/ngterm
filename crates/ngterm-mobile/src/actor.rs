@@ -1343,7 +1343,8 @@ async fn catalog_action<T: Transport>(
     })
 }
 
-/// New Session's answer once the catalog applied it: the created row once the catalog shows it attachable.
+/// New Session's answer once the catalog applied it: the created row once the catalog shows it attachable, with the
+/// machine listed again so that its panes show.
 async fn created_in_catalog<T: Transport>(
     state: &Rc<State<T>>,
     link: &OnMachine<T::Connection>,
@@ -1361,7 +1362,7 @@ async fn created_in_catalog<T: Transport>(
             sessions::ATTACH_FROM_LIST
         )));
     };
-    catalogs::shown(state, machine_id, &id, READY_BUDGET)
+    let row = catalogs::shown(state, machine_id, &id, READY_BUDGET)
         .await
         .ok_or_else(|| {
             remote(sessions::phone_wording(unattached(
@@ -1370,7 +1371,20 @@ async fn created_in_catalog<T: Transport>(
                 &link.host,
                 NOT_ATTACHABLE,
             )))
-        })
+        })?;
+    // panes are shown from the listing, so it must hold the session the catalog made
+    let listing = state.begin_listing();
+    if let Ok(tree) = sessions::list(&*link.connection, &link.host).await {
+        listed(state, link, machine_id, tree, listing.began);
+    } else {
+        note!(
+            WARN,
+            tag::SESSIONS,
+            "listing after new session failed",
+            machine = machine_id
+        );
+    }
+    Ok(row)
 }
 
 /// Opens the presentation stream of `session_id`, a session of `machine_id`'s last listing, on the machine's
