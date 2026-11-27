@@ -8,9 +8,9 @@ The remote window is upstream's v0.42.0 feature, and test_remote_window.py keeps
 need a Live origin in any login shell, which only the Rust build claims (`live-any-shell`), so the reference skips them.
 """
 
-import getpass
 import os
 import signal
+import time
 
 import pytest
 from agterm_conformance.match import assert_error, assert_ok, find_session, session_ids, window_ids
@@ -54,12 +54,14 @@ def _catalog_id(origin):
     with origin.stream("catalog.subscribe") as stream:
         assert stream.reply.ok, stream.reply.raw
         stream.send({"kind": "hello", "hello": {"version": 1}})
-        while True:
-            frame = stream.read(30)
-            if frame.get("kind") == "ping":
-                stream.send({"kind": "ack"})
+        deadline = time.monotonic() + 30
+        while (remaining := deadline - time.monotonic()) > 0:
+            frame = stream.read(remaining)
             if frame.get("kind") == "snapshot":
                 return frame["snapshot"]["catalogID"]
+            if frame.get("kind") == "ping":
+                stream.send({"kind": "ack"})
+    pytest.fail("no catalog snapshot within 30s")
 
 
 def _remote_windows(viewer):
@@ -150,10 +152,12 @@ def test_a_server_that_stops_answering_shows_disconnected_then_connects_again(re
 def test_a_second_open_of_the_server_answers_the_window_that_shows_it(remote_viewer, mirror):
     """The same host answers its window. Another destination that reaches the same server (`USER@HOST`) answers the
     window that already shows that catalog, and the window it opened for it goes."""
+    import pwd
+
     viewer = remote_viewer
     window, _ = mirror
     assert assert_ok(viewer.request("window.remote.open", host=ORIGIN_HOST))["id"] == window
-    alias = f"{getpass.getuser()}@{ORIGIN_HOST}"
+    alias = f"{pwd.getpwuid(os.getuid()).pw_name}@{ORIGIN_HOST}"
     assert assert_ok(viewer.request("window.remote.open", host=alias))["id"] == window
     wait_until(lambda: _remote_windows(viewer) == [window])
     assert _state(viewer, window) == "connected"
@@ -223,9 +227,10 @@ def test_the_cli_reports_the_refusal_of_a_remote_window(adapter, remote_viewer, 
     "session.new", "session.rename", "session.close", "session.split", "session.duplicate", "workspace.new",
     "workspace.rename", "workspace.delete",
 )
-def test_the_same_row_commands_run_in_a_local_window(remote_viewer, mirror):
-    viewer = remote_viewer
+def test_the_same_row_commands_run_in_a_local_window(remote_origin, remote_viewer, mirror):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
     window, _ = mirror
+    remote_before, origin_before = session_ids(_tree(viewer, window)), session_ids(origin.tree())
     local = _local_window(viewer)
     assert_ok(viewer.request("window.select", local))
     sid = assert_ok(viewer.request("session.new", window=local))["id"]
@@ -240,9 +245,11 @@ def test_the_same_row_commands_run_in_a_local_window(remote_viewer, mirror):
     assert find_session(tree, sid).get("hasSplit") is True
     assert copy in session_ids(tree)
     assert "renamed-here" in [node["name"] for node in tree["tree"]["workspaces"]]
+    assert session_ids(_tree(viewer, window)) == remote_before
+    assert session_ids(origin.tree()) == origin_before
     for closed in (copy, sid):
         assert_ok(viewer.request("session.close", closed))
     assert_ok(viewer.request("workspace.delete", workspace))
     tree = _tree(viewer, local)
     assert sid not in session_ids(tree) and copy not in session_ids(tree)
-    assert sid not in session_ids(_tree(viewer, window))
+    assert workspace not in [node["id"] for node in tree["tree"]["workspaces"]]
