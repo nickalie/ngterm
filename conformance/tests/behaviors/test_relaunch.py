@@ -34,6 +34,11 @@ PROGRAM_ARGUMENTS = (
     "^caret",
     "(paren)",
 )
+# A restart command any Live shell runs as a program of its own, and the foreground argv it shows: PowerShell's `cat`
+# is its own Get-Content, which starts no process.
+RESTART_COMMAND, RESTART_ARGV = (
+    ("ping -n 600 127.0.0.1", ["ping", "-n", "600", "127.0.0.1"]) if WINDOWS else ("cat", ["cat"])
+)
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
@@ -494,7 +499,7 @@ def test_a_hidden_split_shows_the_same_pane_after_a_relaunch_and_a_restart(launc
     assert _shown_panes(ctl, sid) == before
     # as a program restarts its own main pane: a new pin, then the restart, both by pane id
     pane_id = next(s for s in find_session(ctl.tree(), sid)["surfaces"] if s["kind"] == "left")["paneID"]
-    assert_ok(ctl.request("session.restore", sid, mode="set", command="cat", paneID=pane_id))
-    assert_ok(ctl.request("session.restart", sid, paneID=pane_id, command="cat"))
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["cat"])
+    assert_ok(ctl.request("session.restore", sid, mode="set", command=RESTART_COMMAND, paneID=pane_id))
+    assert_ok(ctl.request("session.restart", sid, paneID=pane_id, command=RESTART_COMMAND))
+    ctl.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) == RESTART_ARGV)
     assert _shown_panes(ctl, sid) == before
