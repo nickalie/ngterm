@@ -1419,21 +1419,26 @@ mod tests {
     }
 
     /// An app that answers before its watcher has started the bound's timer ends that watcher alone: the watcher
-    /// signals nothing but its own timer, so the listing of a host where both apps answer at once always arrives. Each
-    /// run has its own process group, as sshd gives the account's shell, so a signal sent to the group ends that run
-    /// and not the test.
+    /// signals nothing but its own timer, so the listing of a host where both apps answer at once always arrives, and
+    /// its output ends with it: a timer left running holds none of the session's output open, as an OpenSSH client
+    /// waits for all of it before it exits. Each run has its own process group, as sshd gives the account's shell, so
+    /// a signal sent to the group ends that run and not the test.
     #[cfg(unix)]
     #[test]
     fn an_app_that_answers_at_once_ends_only_its_own_watcher() {
         use std::os::unix::process::CommandExt as _;
 
-        let line = super::super::ssh::both_apps_tail(1);
+        let bound = Duration::from_secs(20);
+        let line = super::super::ssh::both_apps_tail(bound.as_secs());
         let both = "ngtermctl live tree --json\nngterm-peer: agterm\nagtermctl zmx tree --json\n";
         let home = remote_home(&[("ngtermctl", 0), ("agtermctl", 0)]);
         let runs = || {
             for run in 0..100 {
+                let started = Instant::now();
                 let ran = remote_shell(&home, &line).process_group(0).output().unwrap();
+                let took = started.elapsed();
                 assert_eq!(answer(&ran), (Some(0), both.to_owned()), "run {run}: {ran:?}");
+                assert!(took < bound / 2, "run {run}: the output closed after {took:?}");
             }
         };
         std::thread::scope(|scope| {
