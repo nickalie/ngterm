@@ -633,7 +633,7 @@ pub(super) fn finish_start(web: Rc<dyn Web>) {
 }
 
 /// How the engine's worker ended, as the events' end shows it: the app's quit mark (`quitting`) wins over the
-/// client's `end`, which a shutdown can leave unknown.
+/// client's `end`, which a shutdown or a transport the client broke (a worker that stopped reading) leaves unknown.
 pub(super) fn engine_end(quitting: bool, end: Option<WorkerEnd>) -> WorkerEnd {
     if quitting {
         WorkerEnd::AppQuit

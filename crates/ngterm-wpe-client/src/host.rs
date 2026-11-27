@@ -127,7 +127,8 @@ impl Host {
         self.engine.evaluate(view, script, world)
     }
 
-    /// How the worker ended; `None` while it runs. It is known once the events end, unless a shutdown ended them.
+    /// How the worker ended; `None` while it runs. It is known once the events end, unless a shutdown or a
+    /// transport the app broke (a worker that stopped reading) ended them.
     #[must_use]
     pub fn worker_end(&self) -> Option<crate::worker::WorkerEnd> {
         self.engine.worker_end()

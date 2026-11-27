@@ -247,15 +247,16 @@ impl Outgoing {
     }
 
     /// The writer's thread: every packet to the socket until the queue closes, and then what waits dropped. A failed
-    /// write breaks the transport and goes on to that end.
+    /// write closes the queue and the socket and goes on to that end; the reader then closes the events.
     fn write(&self) {
         while let Some(packet) = self.take() {
             match wire::send(self.socket.as_fd(), &packet) {
                 Ok(()) => self.sent_at(Instant::now()),
                 Err(err) => {
                     tracing::debug!(%err, "the WPE worker's socket closed: commands dropped");
-                    // nothing more reaches the worker: the transport is broken, whatever the reader still reads
-                    self.sever();
+                    // the worker may be dying of a signal: only the reader, past its reap, knows how it ended
+                    self.close();
+                    let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
                 }
             }
         }
@@ -388,7 +389,8 @@ pub struct Client {
     events: Sender<Event>,
     /// Told once the worker's engine stopped; `None` after a shutdown.
     stopped: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
-    /// How the worker ended, set by the reader before the events end.
+    /// How the worker ended, set by the reader before it closes the events. Unknown when the app closed them first: a
+    /// shutdown, or a transport the app broke ([`Outgoing::sever`]).
     end: Arc<OnceLock<WorkerEnd>>,
     stop_timeout: Duration,
     pid: u32,
@@ -1434,6 +1436,42 @@ mod tests {
             ["the WPE worker ended unasked: its pages are gone"],
             "logged: {logged:?}"
         );
+    }
+
+    #[test]
+    fn a_send_that_fails_as_the_system_ends_the_worker_leaves_its_end_to_the_reader() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        let logged = Logged::default();
+        let subscriber = tracing_subscriber::registry().with(logged.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let (worker, ours, theirs) = sleeper();
+            let (client, events) = running_app(ours, Arc::clone(&worker));
+            // the reader waits on a full event queue, so the writer's failure comes first
+            let event = FromWorker::Event(Event::CloseRequested { view: ViewId(1) })
+                .packet()
+                .unwrap();
+            for _ in 0..=EVENT_QUEUE {
+                wire::send(theirs.as_fd(), &event).unwrap();
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while events.len() < EVENT_QUEUE {
+                assert!(Instant::now() < deadline, "the event queue never filled");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // SAFETY: as in `alive`.
+            unsafe { libc::kill(worker.group, libc::SIGTERM) };
+            rustix::net::shutdown(&theirs, Shutdown::Read).unwrap();
+            client.send(EngineCommand::Clipboard("x".to_owned()));
+            while !client.outgoing.is_closed() {
+                assert!(Instant::now() < deadline, "the writer's send never failed");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(!events.is_closed(), "the events wait for the reader");
+            while events.recv_blocking().is_ok() {}
+            assert_eq!(client.worker_end(), Some(WorkerEnd::System));
+        });
+        let logged = std::mem::take(&mut *lock(&logged.0));
+        assert_eq!(errors(&logged), Vec::<&str>::new(), "logged: {logged:?}");
     }
 
     fn create_view(view: ViewId) -> EngineCommand {
