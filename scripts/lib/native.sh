@@ -57,8 +57,8 @@ bounded() {
   return "$status"
 }
 
-# How long a simctl call that prepares or frees a simulator (create, delete, shutdown, uninstall, keychain reset, the
-# keyboard's `defaults` spawn) may take, in seconds.
+# How long a simctl call that prepares or frees a simulator (create, boot, delete, shutdown, uninstall, keychain reset,
+# the keyboard's `defaults` spawn and the services' `launchctl` spawns) may take, in seconds.
 # shellcheck disable=SC2034 # for the sourcing scripts
 SIMCTL_SECONDS=120
 

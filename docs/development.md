@@ -884,10 +884,11 @@ does the same right before a test run: it creates the simulator again if it is g
 boot took, disables the simulator's own services that no test uses and that start processes of hundreds of MB at times
 of their own (widgets, Health, Shortcuts, Apple Intelligence, Siri's voices: `QUIET_SERVICES`) while it boots, before
 the widgets start, and again once it is up, and prints its UDID
-(`build-ios.sh`, `ios-sim-runner.sh` and `test-ios-e2e.sh` call it). A boot has 15
-minutes: one that fails or runs out of time prints the simulators' state and the Mac's load, and the simulator is
-made again and booted once more. The simctl calls that prepare or free a simulator (create, delete, shutdown, uninstall,
-keychain reset, the keyboard's `defaults` spawn and the services' `launchctl` spawns) have 2 minutes each; the spawn of a test binary in
+(`build-ios.sh`, `ios-sim-runner.sh` and `test-ios-e2e.sh` call it). The wait for a boot has 15 minutes, after the
+boot call and the quieting while it boots; the boot time that it prints includes both. A boot that fails or runs out
+of time prints the simulators' state and the Mac's load, and the simulator is made again and booted once more. The
+simctl calls that prepare or free a simulator (create, boot, delete, shutdown, uninstall, keychain reset, the
+keyboard's `defaults` spawn and the services' `launchctl` spawns) have 2 minutes each; the spawn of a test binary in
 `ios-sim-runner.sh` has no limit of its own. The header of `setup-ios.sh` has the notes for a Mac reached over ssh (rustup's
 `PATH`, a host that can't reach `ziglang.org`).
 
