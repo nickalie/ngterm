@@ -276,8 +276,8 @@ TRAILING_BUTTONS = (
 )  # fmt: skip
 WINDOWS_ONLY = pytest.mark.skipif(
     sys.platform != "win32",
-    reason="the window manager moves the window and shows its menu: the suite's Xvfb runs none, and macOS has no "
-    "Rust UI leg",
+    reason="the window manager maximizes and moves the window and shows its menu: the suite's Xvfb runs none, and "
+    "macOS has no Rust UI leg",
 )
 
 
@@ -302,6 +302,7 @@ def _bar_point(ui):
     return window, ((left + right) / 2 - x) / width, (ty + th / 2 - y) / height
 
 
+@WINDOWS_ONLY
 @pytest.mark.covers("window.zoom", "field:window.zoomed")
 def test_a_double_click_on_the_title_bar_toggles_the_window_zoom(ctl, ui):
     assert _window_node(ctl)["zoomed"] is False
@@ -309,31 +310,41 @@ def test_a_double_click_on_the_title_bar_toggles_the_window_zoom(ctl, ui):
         for zoomed in (True, False):
             window, ox, oy = _bar_point(ui)
             ui.mouse_double_click(window, offset=(ox, oy))
-            wait_until(lambda: _window_node(ctl)["zoomed"] is zoomed, timeout=ui.timeout)
+
+            def reads(zoomed=zoomed):
+                assert _window_node(ctl)["zoomed"] is zoomed, f"zoomed is not {zoomed}"
+                return True
+
+            reads.__qualname__ = f"the window reading zoomed {zoomed}"
+            wait_until(reads, timeout=ui.timeout)
     finally:
         if _window_node(ctl)["zoomed"]:
             ctl.request("window.zoom")
 
 
 @WINDOWS_ONLY
-@pytest.mark.covers("field:window.geometry")
 def test_dragging_the_title_bar_moves_the_window(ctl, ui):
-    before = _window_node(ctl)["geometry"]
-    window, ox, oy = _bar_point(ui)
-    try:
-        ui.drag_by(window, 120, 80, offset=(ox, oy), steps=12, press_for=0.2, duration=0.4, hold_for=0.2)
+    """The window's frame as UI Automation reads it: the build reads no window position back over the protocol (it
+    does not claim `window-geometry`). A drag back puts the window where it was."""
+    DRAG = {"steps": 12, "press_for": 0.2, "duration": 0.4, "hold_for": 0.2}
 
-        def moved():
-            after = _window_node(ctl)["geometry"]
-            assert after["x"] - before["x"] > 40 and after["y"] - before["y"] > 25, (before, after)
-            assert (after["width"], after["height"]) == (before["width"], before["height"]), (before, after)
+    def moved_to(target):
+        def check():
+            frame = ui.frame(ui.window())
+            assert all(abs(a - b) <= 2 for a, b in zip(frame, target)), (frame, target)
             return True
 
-        moved.__qualname__ = "the window moved right and down at its size"
-        wait_until(moved, timeout=ui.timeout)
-        ctl.wait_tree(lambda tree: bool(session_ids(tree)))
-    finally:
-        ctl.request("window.move", x=before["x"], y=before["y"])
+        check.__qualname__ = f"the window's frame at {target}"
+        wait_until(check, timeout=ui.timeout)
+
+    window, ox, oy = _bar_point(ui)
+    before = ui.frame(window)
+    ui.drag_by(window, 120, 80, offset=(ox, oy), **DRAG)
+    moved_to((before[0] + 120, before[1] + 80, before[2], before[3]))
+    assert _window_node(ctl)["zoomed"] is False
+    window, ox, oy = _bar_point(ui)
+    ui.drag_by(window, -120, -80, offset=(ox, oy), **DRAG)
+    moved_to(before)
 
 
 @WINDOWS_ONLY
