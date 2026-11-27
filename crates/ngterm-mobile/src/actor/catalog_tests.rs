@@ -219,6 +219,16 @@ fn post_create(actor: &Actor, name: Option<&str>) -> oneshot::Receiver<Result<Re
     answer
 }
 
+fn post_duplicate(actor: &Actor, session_id: &str) -> oneshot::Receiver<Result<RemoteSession, MobileError>> {
+    let (reply, answer) = oneshot::channel();
+    actor.post(Command::DuplicateSession {
+        machine_id: "m1".to_owned(),
+        session_id: session_id.to_owned(),
+        reply,
+    });
+    answer
+}
+
 fn post_end(actor: &Actor, session_id: &str) -> oneshot::Receiver<Result<(), MobileError>> {
     let (reply, answer) = oneshot::channel();
     actor.post(Command::EndSession {
@@ -990,6 +1000,46 @@ fn a_plain_new_session_while_the_stream_is_down_stays_listed_until_a_snapshot() 
             Some(&Vec::new()),
             "the catalog's word after that"
         );
+    });
+}
+
+#[test]
+fn a_duplicate_while_the_stream_is_down_stays_listed() {
+    use ngterm_core::remote::origin_replies::{RESTORE_MODE_ARGUMENTS, duplicate_session_arguments};
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        peer.end(ChannelEnd::Exit {
+            code: Some(1),
+            signal: None,
+        })
+        .await;
+        settle().await;
+        actor.sink.take();
+        let made = uuid_string(id(7));
+        let live = json!({"ok": true, "result": {"restore": {"configured": "live", "requestedAtLaunch": "live",
+            "active": "live", "restartRequired": false}}});
+        actor.transport.script(
+            &control_tail(OriginShell::Posix, &RESTORE_MODE_ARGUMENTS),
+            Script::ok(&live.to_string()),
+        );
+        actor.transport.script(
+            &control_tail(OriginShell::Posix, &duplicate_session_arguments(&main_id())),
+            Script::ok(&json!({"ok": true, "result": {"id": made}}).to_string()),
+        );
+        for tail in [
+            tree_tail(OriginShell::Posix),
+            ngterm_core::remote::ssh::tree_tail_for(OriginShell::Posix, Some(ngterm_proto::RemotePeer::Ngterm)),
+        ] {
+            actor.transport.script(&tail, listing_with(&made, "main copy"));
+        }
+
+        assert_eq!(post_duplicate(&actor, &main_id()).await.unwrap().unwrap().id, made);
+        let mut expected = first_rows();
+        expected.push(row("main copy", "work", None, false));
+        assert_eq!(trees(&actor.sink.take()).last(), Some(&expected));
+        actor.list().await;
+        assert_eq!(trees(&actor.sink.take()).last(), Some(&expected), "a refresh keeps it");
     });
 }
 
