@@ -81,13 +81,6 @@ pub(crate) mod upper {
     pub(crate) fn slice<S: Serializer>(ids: &[Uuid], serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(ids.iter().map(|id| uuid_string(*id)))
     }
-
-    pub(crate) fn keys<S: Serializer, V: serde::Serialize>(
-        map: &std::collections::BTreeMap<Uuid, V>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.collect_map(map.iter().map(|(id, value)| (uuid_string(*id), value)))
-    }
 }
 
 /// Parses a window file's stem as `UUID(uuidString:)` does: the 36-character hyphenated form, either case.

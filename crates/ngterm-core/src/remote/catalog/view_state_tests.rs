@@ -86,3 +86,28 @@ fn the_file_names_every_id_in_upper_case() {
     state.save(&path).unwrap();
     assert_eq!(RemoteWindowViewState::load(&path), state);
 }
+
+#[test]
+fn the_sessions_are_one_array_of_alternating_ids_and_views_as_upstream_writes_them() {
+    let id = Uuid::new_v4();
+    let view = SessionView {
+        font_size: Some(15.0),
+        ..SessionView::default()
+    };
+    let state = RemoteWindowViewState {
+        sessions: [(id, view.clone())].into(),
+        ..RemoteWindowViewState::default()
+    };
+    let upper = id.to_string().to_uppercase();
+    let written = serde_json::to_value(&state).unwrap();
+    assert_eq!(written["sessions"], serde_json::json!([upper, {"fontSize": 15.0}]));
+    let upstream = serde_json::json!({"sessions": [upper, {"fontSize": 15.0}]});
+    assert_eq!(
+        serde_json::from_value::<RemoteWindowViewState>(upstream).unwrap(),
+        state
+    );
+    let keyed = serde_json::json!({"sessions": {upper.clone(): {"fontSize": 15.0}}});
+    assert_eq!(serde_json::from_value::<RemoteWindowViewState>(keyed).unwrap(), state);
+    let odd = serde_json::json!({"sessions": [upper]});
+    assert!(serde_json::from_value::<RemoteWindowViewState>(odd).is_err());
+}

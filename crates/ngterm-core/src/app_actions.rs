@@ -609,17 +609,14 @@ impl Core {
     /// Toggle Split (upstream's `toggleSplit(axis:)`): inert under a shown full overlay; a shown scratch is dismissed
     /// instead, so the panes come into view first.
     fn toggle_split_action(&mut self, window: Uuid, session: Uuid, horizontal: bool) {
-        let Some(store) = self.library_mut().store_mut(window) else {
-            return;
-        };
-        let Some(state) = store.session(session) else {
+        let Some(state) = self.library().store(window).and_then(|store| store.session(session)) else {
             return;
         };
         if state.full_overlay_visible() {
             return;
         }
         if state.scratch_active {
-            store.toggle_scratch(session, true);
+            self.hide_scratch(window, session);
             return;
         }
         let args = Args {
@@ -807,12 +804,30 @@ impl Core {
             return store.close_overlay(session);
         }
         if state.scratch_active {
-            store.toggle_scratch(session, true);
+            self.hide_scratch(window, session);
             return true;
         }
         match state.focused_overlay_pane() {
             Some(pane) => store.close_pane_overlay(session, pane),
             None => false,
+        }
+    }
+
+    /// Hides session `session`'s shown scratch (upstream's `setScratchShown(false)`): a remote window's goes through
+    /// `session.scratch`, which a remote window refuses, so the server's scratch is never hidden only here.
+    fn hide_scratch(&mut self, window: Uuid, session: Uuid) {
+        if self.library().is_remote_window(window) {
+            let args = Args {
+                mode: Some("off".to_owned()),
+                ..Args::default()
+            };
+            self.run_request(
+                Command::Session(SessionCmd::Scratch),
+                Some(uuid_string(session)),
+                window_args(window, args),
+            );
+        } else if let Some(store) = self.library_mut().store_mut(window) {
+            store.toggle_scratch(session, true);
         }
     }
 

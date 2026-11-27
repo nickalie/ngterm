@@ -12,7 +12,8 @@ the same frame handling: the revision step, the hello epoch check and the resubs
 copies become different.
 
 Possible fix: make `ngterm-mobile` use the constants and `retry_delay` of `ngterm_core::remote::catalog`, then build
-the mobile `Mirror` on `CatalogStream`. Do this in one change with the mobile tests, because the `Mirror` is in the
-UniFFI surface of the Android and iOS apps.
+the mobile `Mirror` on `CatalogStream`. Do this in one change with the mobile tests. The `Mirror` is internal to the
+mobile actor, but `CatalogState` is in the UniFFI surface of the Android and iOS apps: to use the `CatalogState` of
+`ngterm-core` there, add the UniFFI derive to it or map it.
 
 Reported in the revmux review of task #318 (the remote window's core), round 1.

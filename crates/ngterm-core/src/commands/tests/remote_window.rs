@@ -18,9 +18,10 @@ use crate::app_actions::ActionOrigin;
 use crate::catalog::fixture::{self as catalog, pane, session, session_with, snapshot, workspace};
 use crate::catalog::frames::{self, CatalogChange, CatalogFrame, CatalogScratch, CatalogSnapshot, Lifecycle};
 use crate::keymap::BuiltinAction;
-use crate::model::{AppStore, Session};
+use crate::model::{AgentIndicator, AgentStatus, AppStore, Session};
 use crate::palette::{PaletteAction, PaletteMode};
 use crate::palette_catalog::PaletteCommand;
+use crate::pane_env::StatusPane;
 use crate::persist::LibraryPersistence;
 use crate::remote::catalog::CatalogState;
 use crate::remote::catalog::{RemoteWindowViewState, SessionView};
@@ -1132,4 +1133,40 @@ fn the_menu_and_palette_change_no_mirrored_row() {
     assert!(!remote.fixture.core.palette_entry_enabled(window, &row));
     let store = remote.store();
     assert_eq!(store.workspace(other).map(|w| w.sessions.len()), Some(0));
+}
+
+#[test]
+fn the_gui_leaves_a_shown_server_scratch_shown() {
+    let mut remote = Remote::opened(&server_version());
+    let mut a = session_with(Uuid::new_v4(), "a", vec![pane(), pane()]);
+    a.fields.scratch = Some(CatalogScratch {
+        pane: pane(),
+        shown: true,
+    });
+    remote.snapshot(snapshot(vec![workspace(Uuid::new_v4(), "w", vec![a.clone()])]));
+    let window = remote.window;
+    remote
+        .fixture
+        .core
+        .library_mut()
+        .store_mut(window)
+        .unwrap()
+        .select_session(Some(a.id()));
+    let origin = ActionOrigin { window, quick: false };
+    for action in [
+        BuiltinAction::ToggleSplit,
+        BuiltinAction::ToggleHorizontalSplit,
+        BuiltinAction::CloseSession,
+    ] {
+        remote.fixture.core.perform_builtin(origin, action);
+        assert!(remote.row(a.id()).scratch_active, "{action:?}");
+    }
+    let indicator = AgentIndicator {
+        status: AgentStatus::Blocked,
+        status_pane: Some(StatusPane::Left),
+        ..AgentIndicator::default()
+    };
+    remote.fixture.core.reveal_blocked_pane(a.id(), Some(&indicator));
+    assert!(remote.row(a.id()).scratch_active, "reveal");
+    assert_eq!(remote.rows(), vec![a.id()]);
 }

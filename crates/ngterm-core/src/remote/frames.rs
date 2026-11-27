@@ -984,17 +984,13 @@ pub struct PresentationAgent {
 /// discarding the rest of a snapshot or disconnecting its stream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PresentationLayout {
-    #[serde(serialize_with = "serialize_uuids")]
+    #[serde(serialize_with = "crate::persist::upper::slice")]
     pub panes: Vec<Uuid>,
     #[serde(serialize_with = "serialize_uuid")]
     pub primary: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub axis: Option<String>,
     pub shown: bool,
-}
-
-fn serialize_uuids<S: Serializer>(ids: &[Uuid], serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.collect_seq(ids.iter().map(|id| uuid_string(*id)))
 }
 
 impl PresentationLayout {

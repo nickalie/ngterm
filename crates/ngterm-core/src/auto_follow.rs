@@ -315,10 +315,10 @@ impl Core {
         let Some(indicator) = indicator.filter(|indicator| indicator.status.needs_attention()) else {
             return;
         };
-        let Some(store) = self.library_mut().store_for_session_mut(session) else {
+        let Some(window) = self.library().window_id_for_session(session) else {
             return;
         };
-        reveal_pane(store, session, indicator.status_pane);
+        self.reveal_pane_in(window, session, indicator.status_pane);
     }
 
     /// [`Core::reveal_blocked_pane`] in window `window`'s copy of `session`, for a caller that already resolved the
@@ -328,24 +328,29 @@ impl Core {
         let Some(indicator) = indicator.filter(|indicator| indicator.status.needs_attention()) else {
             return;
         };
-        let Some(store) = self.library_mut().store_mut(window) else {
-            return;
-        };
-        reveal_pane(store, session, indicator.status_pane);
+        self.reveal_pane_in(window, session, indicator.status_pane);
+    }
+
+    /// A remote window's scratch is the server's, so the reveal leaves it as it is there.
+    fn reveal_pane_in(&mut self, window: Uuid, id: Uuid, pane: Option<StatusPane>) {
+        let scratch_here = !self.library().is_remote_window(window);
+        if let Some(store) = self.library_mut().store_mut(window) {
+            reveal_pane(store, id, pane, scratch_here);
+        }
     }
 }
 
-fn reveal_pane(store: &mut AppStore, id: Uuid, pane: Option<StatusPane>) {
+fn reveal_pane(store: &mut AppStore, id: Uuid, pane: Option<StatusPane>, scratch_here: bool) {
     let Some(current) = store.session(id) else {
         return;
     };
     let (scratch_shown, has_split_surface) = (current.scratch_active, current.split_surface.is_present());
-    if pane != Some(StatusPane::Scratch) && scratch_shown {
+    if scratch_here && pane != Some(StatusPane::Scratch) && scratch_shown {
         store.toggle_scratch(id, true);
     }
     match pane {
         Some(StatusPane::Scratch) => {
-            if !scratch_shown {
+            if scratch_here && !scratch_shown {
                 store.toggle_scratch(id, true);
             }
         }

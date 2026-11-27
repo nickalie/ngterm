@@ -66,7 +66,8 @@ pub struct RemoteWindowViewState {
     pub selected_session_id: Option<Uuid>,
     #[serde(default, serialize_with = "upper::slice")]
     pub collapsed_workspaces: Vec<Uuid>,
-    #[serde(default, serialize_with = "upper::keys")]
+    /// Written as Swift's `JSONEncoder` writes a `[UUID: SessionView]`: one array of alternating ids and views.
+    #[serde(default, with = "pairs")]
     pub sessions: BTreeMap<Uuid, SessionView>,
 }
 
@@ -116,6 +117,60 @@ impl RemoteWindowViewState {
         if let Some(view) = self.sessions.get(&session.id()) {
             view.apply(session);
         }
+    }
+}
+
+/// The alternating `[id, view, id, view, …]` array of upstream's file; an object keyed by id reads too, as earlier
+/// builds wrote it.
+mod pairs {
+    use std::collections::BTreeMap;
+
+    use serde::de::Error as _;
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    use super::SessionView;
+    use crate::pane_env::uuid_string;
+
+    pub(super) fn serialize<S: Serializer>(
+        map: &BTreeMap<Uuid, SessionView>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(map.len() * 2))?;
+        for (id, view) in map {
+            seq.serialize_element(&uuid_string(*id))?;
+            seq.serialize_element(view)?;
+        }
+        seq.end()
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Shape {
+        Pairs(Vec<Value>),
+        Keyed(BTreeMap<Uuid, SessionView>),
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<Uuid, SessionView>, D::Error> {
+        let items = match Shape::deserialize(deserializer)? {
+            Shape::Keyed(map) => return Ok(map),
+            Shape::Pairs(items) => items,
+        };
+        if items.len() % 2 != 0 {
+            return Err(D::Error::custom("an id without a view"));
+        }
+        items
+            .chunks(2)
+            .map(|pair| {
+                let id = Uuid::deserialize(&pair[0]).map_err(D::Error::custom)?;
+                let view = SessionView::deserialize(&pair[1]).map_err(D::Error::custom)?;
+                Ok((id, view))
+            })
+            .collect()
     }
 }
 

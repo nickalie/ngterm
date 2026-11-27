@@ -359,14 +359,10 @@ pub struct SessionCounts {
 pub struct Outcome {
     pub panes: PaneCounts,
     /// Panes whose old leader survived the kill: their launch payloads must be suppressed.
-    #[serde(serialize_with = "upper_vec")]
+    #[serde(serialize_with = "crate::persist::upper::slice")]
     pub unconfirmed: Vec<Uuid>,
     pub sessions: SessionCounts,
     pub inventory_failed: bool,
-}
-
-fn upper_vec<S: serde::Serializer>(ids: &[Uuid], serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.collect_seq(ids.iter().map(|id| crate::pane_env::uuid_string(*id)))
 }
 
 /// The outcome of `narrowed` given the leader pids still alive after the kill and the poll (`survivors`).
