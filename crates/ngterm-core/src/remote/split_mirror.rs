@@ -152,9 +152,13 @@ impl Core {
                 run.changes.pop_front();
                 continue;
             };
-            let answer = control_command(&run.host, run.peer, &words)
-                .ok()
-                .and_then(|argv| run_off_thread(&self.remote.runner, argv, COMPANION_DEADLINE));
+            let answer = control_command(&run.host, run.peer, &words).ok().and_then(|argv| {
+                run_off_thread(
+                    &self.remote.runner,
+                    argv,
+                    super::connect_timeout::after_connect(&run.host, COMPANION_DEADLINE),
+                )
+            });
             if answer.is_some() {
                 run.answer = answer;
                 return true;

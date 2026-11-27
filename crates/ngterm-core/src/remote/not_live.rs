@@ -19,7 +19,7 @@ use super::tree::{self, RemoteCommandResult, RemoteCommandRunner};
 
 /// The line [`with_restore`] puts ahead of agterm's answer to `restore mode`, after the listing it follows.
 pub const AGTERM_RESTORE: &str = "ngterm-peer: agterm-restore";
-/// How long agterm may take to name its restore mode; a later answer leaves the listing without a reason.
+/// How long agterm may take to name its restore mode once connected; a later answer leaves the listing without a reason.
 pub const RESTORE_DEADLINE: Duration = Duration::from_secs(5);
 
 /// The remote command asking an agterm origin for its restore mode: `agtermctl restore mode --json`.
@@ -61,9 +61,9 @@ pub fn run_listing(runner: &dyn RemoteCommandRunner, host: &str, deadline: Durat
     if !asks_restore_mode(&listing) {
         return listing;
     }
-    let mut argv = tree::ssh_arguments(host, 5, false);
+    let mut argv = tree::ssh_arguments(host, false);
     argv.push(restore_tail());
-    let restore = runner.run(&argv, RESTORE_DEADLINE);
+    let restore = runner.run(&argv, super::connect_timeout::after_connect(host, RESTORE_DEADLINE));
     with_restore(listing, &restore)
 }
 

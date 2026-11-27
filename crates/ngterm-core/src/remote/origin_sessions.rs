@@ -17,6 +17,7 @@ use ngterm_proto::{ControlRemoteSession, ControlRemoteTree};
 use uuid::Uuid;
 
 use super::attach::{ActionPanel, AttachFlow, PROGRESS_SECONDS, Placement, Step};
+use super::connect_timeout::after_connect;
 use super::origin_replies::COMPANION_DEADLINE;
 use super::origin_replies::{
     ListingWait, NEW_SESSION_ARGUMENTS, RESTORE_MODE_ARGUMENTS, WaitStep, check_restore_mode,
@@ -147,7 +148,7 @@ impl Core {
     /// Runs `arguments` of `peer`'s CLI on `host` off the main thread.
     fn ask_origin(&self, host: &str, peer: RemotePeer, arguments: &[&str]) -> Option<Answer> {
         let argv = control_command(host, peer, arguments).ok()?;
-        run_off_thread(&self.remote.runner, argv, COMPANION_DEADLINE)
+        run_off_thread(&self.remote.runner, argv, after_connect(host, COMPANION_DEADLINE))
     }
 
     /// Asks `peer` on `host` for a session, as `flow`'s next step; `None` once the flow ended.
@@ -243,7 +244,7 @@ impl Core {
         };
         self.attach_progress(flow, "attaching the session…");
         Some(CreateStage::Waiting(Waiting {
-            wait: ListingWait::new(created, self.remote_now()),
+            wait: ListingWait::for_host(created, self.remote_now(), host),
             read: None,
         }))
     }

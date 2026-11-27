@@ -38,7 +38,7 @@ fn is_path(value: &str) -> bool {
 pub fn present_command(host: &str, peer: RemotePeer, session: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
     let tail = present_tail(OriginForm::of(host, peer), session)?;
-    let mut argv = ssh_arguments(host, 5, false);
+    let mut argv = ssh_arguments(host, false);
     argv.push(tail);
     Ok(argv)
 }
@@ -175,7 +175,7 @@ pub fn run_job_command(
         )),
         OriginShell::Windows => windows_cli_tail(&words),
     };
-    let mut argv = ssh_arguments(host, 5, true);
+    let mut argv = ssh_arguments(host, true);
     argv.push(tail);
     Ok(argv)
 }
@@ -201,7 +201,7 @@ pub fn page_serve_command(host: &str, peer: RemotePeer, token: &str) -> Result<V
         )),
         OriginShell::Windows => windows_cli_tail(&["session", "overlay", "page-serve", token]),
     };
-    let mut argv = ssh_arguments(host, 5, false);
+    let mut argv = ssh_arguments(host, false);
     argv.push(tail);
     Ok(argv)
 }
@@ -221,7 +221,7 @@ pub fn tunnel_command(host: &str, plan: &super::page_tunnel::TunnelPlan) -> Resu
     if !is_plain(&plan.target_host) {
         return Err(InvocationError::InvalidSession);
     }
-    let mut argv = ssh_arguments(host, 5, false);
+    let mut argv = ssh_arguments(host, false);
     let destination = argv.pop().unwrap_or_default();
     let forward = format!(
         "127.0.0.1:{}:{}:{}",
@@ -285,7 +285,7 @@ pub fn attach_command(
 ) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
     let tail = attach_tail(endpoint, daemon, lead)?;
-    let mut argv = ssh_arguments(host, 5, true);
+    let mut argv = ssh_arguments(host, true);
     argv.push(tail);
     let at = argv.len() - 2;
     argv.splice(at..at, ["-o".to_owned(), "LogLevel=ERROR".to_owned()]);
@@ -508,7 +508,7 @@ fn posix_pane_command(argv: &[String], report: &str, lost: Option<&LostLink>) ->
 /// A host ssh may not take.
 pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
-    let mut argv = ssh_arguments(host, 5, false);
+    let mut argv = ssh_arguments(host, false);
     // `true` is no command in `cmd.exe` or PowerShell, whose `exit 0` is every shell's
     argv.push(
         if origin::shell_of(host) == OriginShell::Windows {
@@ -534,7 +534,7 @@ pub fn control_command<S: AsRef<str>>(
     arguments: &[S],
 ) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
-    let mut argv = ssh_arguments(host, 5, false);
+    let mut argv = ssh_arguments(host, false);
     argv.push(control_tail(OriginForm::of(host, peer), arguments));
     Ok(argv)
 }
@@ -767,7 +767,7 @@ mod tests {
 
     /// The destination and options every non-interactive desktop line opens with.
     fn plain_prefix() -> Vec<String> {
-        ssh_arguments("me@box", 5, false)
+        ssh_arguments("me@box", false)
     }
 
     /// `prefix` followed by `tail`, the whole argv desktop runs.
@@ -820,7 +820,7 @@ mod tests {
         let cleared = "'/usr/bin/env' 'NGTERM_LIVE_SESSION=' 'NGTERM_LIVE_SESSION_PREFIX=' \
                        'NGTERM_LIVE_NO_DETACH_KEY=1' 'NGTERM_LIVE_DIR=/tmp/ngterm-live-abc' ";
         let rest = r"'/opt/My Apps/ngterm-session' 'attach' 'ngterm-00000000000000000000000000000042' '/bin/sh' '-c' 'printf '\''%s\n'\'' '\''ngterm: remote session is gone'\''; exit 1'";
-        let mut prefix = ssh_arguments("me@box", 5, true);
+        let mut prefix = ssh_arguments("me@box", true);
         prefix.splice(6..6, ["-o".to_owned(), "LogLevel=ERROR".to_owned()]);
         let cases = [
             (None, format!("{cleared}{rest}")),
@@ -957,7 +957,15 @@ mod tests {
         let argv = present_command("buildbox", RemotePeer::Ngterm, "S1").unwrap();
         assert_eq!(
             &argv[..7],
-            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
+            [
+                "ssh",
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "buildbox"
+            ]
         );
         let remote = argv.last().unwrap();
         assert!(remote.starts_with("'/bin/sh' '-c' "));
@@ -1024,7 +1032,15 @@ mod tests {
         let argv = page_serve_command("buildbox", RemotePeer::Ngterm, "tok-1").unwrap();
         assert_eq!(
             &argv[..7],
-            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
+            [
+                "ssh",
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "buildbox"
+            ]
         );
         assert_eq!(argv.len(), 8);
         assert!(argv[7].contains("$HOME/.local/bin"), "{}", argv[7]);
@@ -1225,7 +1241,15 @@ mod tests {
         let argv = control_command("buildbox", RemotePeer::Ngterm, &["session", "new"]).unwrap();
         assert_eq!(
             &argv[..7],
-            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
+            [
+                "ssh",
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "buildbox"
+            ]
         );
         assert_eq!(argv.len(), 8);
         assert!(argv[7].starts_with("'/bin/sh' '-c' '"), "{}", argv[7]);
@@ -1312,7 +1336,7 @@ mod tests {
                 "-o",
                 "BatchMode=yes",
                 "-o",
-                "ConnectTimeout=5",
+                "ConnectTimeout=10",
                 "mini",
                 "true"
             ]

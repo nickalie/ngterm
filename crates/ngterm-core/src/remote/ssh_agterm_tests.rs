@@ -153,7 +153,7 @@ fn an_agterm_pane_attaches_its_zmx_under_zmx_names_with_no_bridge() {
             "-o",
             "BatchMode=yes",
             "-o",
-            "ConnectTimeout=5",
+            "ConnectTimeout=10",
             "-o",
             "LogLevel=ERROR",
             "studio"

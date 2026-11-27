@@ -127,6 +127,9 @@ as a searchable Go to window over every session and pane.
 Any computer running ngterm can share its Live sessions over ssh. On your desktop, list the machine in `remotes.conf`
 (one `destination [label]` per line, with key-based ssh set up), then choose **File ▸ Attach Remote…**.
 
+ngterm gives ssh 10 seconds to reach a machine. To change that, add a line to `remotes.conf`:
+`connect-timeout = 20` for every machine, or `connect-timeout HOST = 30` for one machine (1 to 300 seconds).
+
 On a phone, the app creates an ssh key on first launch and shows the line to add to `~/.ssh/authorized_keys` on each
 machine. Then add the machine by host, port and user.
 

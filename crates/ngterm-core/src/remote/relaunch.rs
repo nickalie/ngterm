@@ -151,7 +151,7 @@ impl Core {
                 return None;
             }
             let listing = super::peer::pinned(&read.host, read.peer);
-            match run_tree_off_thread(&self.remote.runner, &listing, tree::TREE_DEADLINE) {
+            match run_tree_off_thread(&self.remote.runner, &listing, tree::tree_deadline(&listing)) {
                 Some(answer) => read.answer = Some(answer),
                 None => return self.relaunch_failed(read, now, "the listing could not start"),
             }

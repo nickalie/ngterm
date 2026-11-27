@@ -427,7 +427,7 @@ struct FakeRunner {
 
 impl RemoteCommandRunner for FakeRunner {
     fn run(&self, argv: &[String], deadline: Duration) -> RemoteCommandResult {
-        assert_eq!(deadline, crate::remote::tree::TREE_DEADLINE);
+        assert_eq!(deadline, crate::remote::tree::TREE_DEADLINE + Duration::from_secs(10));
         *self.argv.lock().unwrap() = argv.to_vec();
         self.result.clone()
     }

@@ -6,7 +6,8 @@
 //! - [`frames`] and [`hub`]: the `live.present` stream that carries a session's presentation (status, context, info,
 //!   name, layout, HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter;
 //!   what each pane runs goes only to a viewer that asks for it ([`agents`]);
-//! - [`remotes`]: `remotes.conf`, the hosts offered for an attach; [`origin`]: which shell a host's remote commands
+//! - [`remotes`]: `remotes.conf`, the hosts offered for an attach and [`connect_timeout`], how long an ssh to each
+//!   may take to connect; [`origin`]: which shell a host's remote commands
 //!   go to, and a Windows origin's form of them;
 //! - the viewer side: `live.attach` and File ▸ Attach Remote ([`attach`]), the ssh lines it runs ([`ssh`]), each
 //!   attached row's presentation client ([`client`]) and what its frames put on the row ([`viewer`], [`layout`]), and
@@ -38,6 +39,7 @@ pub mod client;
 pub mod clipboard;
 mod companion_page;
 pub(crate) mod companions;
+pub mod connect_timeout;
 pub(crate) mod ended_rows;
 pub mod frames;
 /// One parent and its freshly discovered companion group.

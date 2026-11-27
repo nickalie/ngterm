@@ -26,12 +26,13 @@ use ngterm_proto::{Command, ControlRemoteSession, ControlRemoteTree, ControlResu
 use uuid::Uuid;
 
 use super::attach::{ActionPanel, AttachRequest, ERROR_SECONDS, PROGRESS_SECONDS, Placement};
+use super::connect_timeout::after_connect;
 use super::frames::{self, PresentationCompanion, PresentationPage, PresentationPageSource};
 use super::origin_replies::{
     COMPANION_DEADLINE, NOT_ATTACHABLE, PAUSE, READY_BUDGET, origin_created, read_peer_tree, reply_of, unattached,
 };
 use super::ssh::{control_command, page_serve_command};
-use super::tree::{RemoteCommandResult, TREE_DEADLINE};
+use super::tree::{RemoteCommandResult, tree_deadline};
 use super::viewer::{Answer, run_off_thread, take_answer};
 use crate::Core;
 use crate::dispatch::Dispatched;
@@ -436,7 +437,7 @@ impl Core {
         let (host, parent) = (host.to_owned(), parent.id());
         let peer = self.remote_row_peer(row, &host);
         let create = control_command(&host, peer, &request.arguments(&origin)).map_err(|_| INVALID_HOST.to_owned())?;
-        let answer = super::attach::start_peer_tree_read_within(self, &host, peer, TREE_DEADLINE)
+        let answer = super::attach::start_peer_tree_read_within(self, &host, peer, tree_deadline(&host))
             .map_err(|error| error.to_string())?;
         Ok(CompanionFlow {
             progress: Some(format!("creating a companion on {host}…")),
@@ -502,7 +503,7 @@ impl Core {
                 "the session on {host} is not attachable now; nothing was created"
             )));
         }
-        match run_off_thread(&self.remote.runner, create, COMPANION_DEADLINE) {
+        match run_off_thread(&self.remote.runner, create, after_connect(&host, COMPANION_DEADLINE)) {
             Some(answer) => {
                 flow.stage = Stage::Creating(answer);
                 Step::Pending(flow, POLL)
@@ -534,7 +535,7 @@ impl Core {
         }
         flow.stage = Stage::Waiting {
             created,
-            deadline: self.remote_now() + READY_BUDGET,
+            deadline: self.remote_now() + after_connect(&host, READY_BUDGET),
             reason: NOT_ATTACHABLE.to_owned(),
             read: None,
         };
@@ -559,7 +560,7 @@ impl Core {
             if remaining.is_zero() {
                 return fail(&reason);
             }
-            let within = remaining.min(TREE_DEADLINE);
+            let within = remaining.min(tree_deadline(&host));
             let answer = match super::attach::start_peer_tree_read_within(self, &host, flow.peer, within) {
                 Ok(answer) => answer,
                 Err(error) => return fail(&error.to_string()),
@@ -653,7 +654,7 @@ impl Core {
             &["session", "overlay", "page-attach", "--target", origin_session],
         )
         .map_err(|_| INVALID_HOST.to_owned())?;
-        let answer = run_off_thread(&self.remote.runner, argv, COMPANION_DEADLINE)
+        let answer = run_off_thread(&self.remote.runner, argv, after_connect(host, COMPANION_DEADLINE))
             .ok_or_else(|| format!("the remote command failed on {host}"))?;
         Ok(PageAttach {
             origin_session: origin_session.to_owned(),
@@ -904,7 +905,7 @@ impl Core {
                 .ok()
             })
             .flatten();
-        let answer = argv.and_then(|argv| run_off_thread(&self.remote.runner, argv, TREE_DEADLINE));
+        let answer = argv.and_then(|argv| run_off_thread(&self.remote.runner, argv, tree_deadline(host)));
         match answer {
             Some(answer) => self.remote.viewer.page_endings.push(PageEnding { local, row, answer }),
             None => self.close_ended_page_companion(local, row),

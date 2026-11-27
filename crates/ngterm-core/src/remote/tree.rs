@@ -21,8 +21,14 @@ use super::frames;
 use crate::command_restore::shell_quoted_line;
 use crate::live::is_daemon_name;
 
-/// How long the remote form waits for the far side's answer (upstream's `remoteTreeDeadline`).
+/// How long the remote form waits for the far side's answer once connected (upstream's `remoteTreeDeadline`).
 pub const TREE_DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long a listing of `host` over a new ssh connection waits: its connect timeout, then [`TREE_DEADLINE`].
+#[must_use]
+pub fn tree_deadline(host: &str) -> Duration {
+    super::connect_timeout::after_connect(host, TREE_DEADLINE)
+}
 /// What a remote command that did not finish within its deadline answers.
 pub const NO_ANSWER_IN_TIME: &str = "the remote did not answer in time";
 /// Why a remote session id that is not one plain token ([`is_plain`]) is refused before anything runs.
@@ -111,9 +117,11 @@ pub fn peer_cli_chain(peer: super::peer::RemotePeer, invocation: &str) -> String
     shell_quoted_line(&["/bin/sh", "-c", chain.as_str()])
 }
 
-/// The ssh options every invocation carries: no pty unless `interactive`, never a prompt, a bounded handshake.
+/// The ssh options every invocation carries: no pty unless `interactive`, never a prompt, a handshake bounded by
+/// `host`'s connect timeout ([`super::connect_timeout`]).
 #[must_use]
-pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec<String> {
+pub fn ssh_arguments(host: &str, interactive: bool) -> Vec<String> {
+    let connect_timeout = super::connect_timeout::seconds(host);
     vec![
         "ssh".to_owned(),
         if interactive { "-tt" } else { "-T" }.to_owned(),
@@ -125,11 +133,19 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
     ]
 }
 
+/// Sets the `ConnectTimeout` option of `argv`, built by [`ssh_arguments`] for `host`, to `host`'s current value, so a
+/// line kept for relaunches follows `remotes.conf`.
+pub fn renew_connect_timeout(argv: &mut [String], host: &str) {
+    if let Some(option) = argv.iter_mut().find(|word| word.starts_with("ConnectTimeout=")) {
+        *option = format!("ConnectTimeout={}", super::connect_timeout::seconds(host));
+    }
+}
+
 /// One ssh invocation running the far side's own `live tree`, which answers across every open window in one document
 /// (upstream's `RemoteSession.treeCommand`), for a host already validated, in `shell`'s form: [`ssh_arguments`] plus
 /// [`super::ssh::tree_tail_for`] the app the host's destination pins, if any.
 pub(crate) fn tree_argv(host: &str, shell: super::origin::OriginShell) -> Vec<String> {
-    let mut argv = ssh_arguments(host, 5, false);
+    let mut argv = ssh_arguments(host, false);
     argv.push(super::ssh::tree_tail_for(shell, super::peer::destination(host).0));
     argv
 }
@@ -1471,7 +1487,15 @@ mod tests {
         let argv = tree_argv("ngterm:buildbox", super::super::origin::OriginShell::Posix);
         assert_eq!(
             argv[..7],
-            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
+            [
+                "ssh",
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "buildbox"
+            ]
         );
         assert_eq!(
             argv[7],

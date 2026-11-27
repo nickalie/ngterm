@@ -31,7 +31,7 @@ use crate::presentation::{
 };
 use crate::sessions::RemoteSession;
 use crate::transport::Transport;
-use crate::transport::russh::RusshTransport;
+use crate::transport::russh::{ConnectTimeout, RusshTransport};
 
 /// A machine the app knows, as it stores it and passes it in.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -45,6 +45,10 @@ pub struct Machine {
     pub user: String,
     /// The [`KeyVault`] id of the private key the machine is reached with.
     pub key_id: String,
+    /// How long a connect to this machine may take to reach it, in seconds, over the app-wide value
+    /// ([`MobileCore::set_connect_timeout_secs`]); `None`, or a value outside 1 to 300, takes the app-wide one.
+    #[uniffi(default = None)]
+    pub connect_timeout_secs: Option<u32>,
 }
 
 impl Machine {
@@ -382,6 +386,7 @@ pub trait HostKeyStore: Send + Sync {
 #[derive(uniffi::Object)]
 pub struct MobileCore {
     actor: Actor,
+    connect_timeout: ConnectTimeout,
 }
 
 #[uniffi::export]
@@ -400,8 +405,10 @@ impl MobileCore {
     ) -> Result<Arc<Self>, MobileError> {
         let sink = LoggedSink::wrap(sink);
         let transport = RusshTransport::new(vault, hosts, Arc::clone(&sink));
+        let connect_timeout = transport.connect_timeout();
         Ok(Arc::new(Self {
             actor: Actor::spawn(transport, sink, InputTiming::default())?,
+            connect_timeout,
         }))
     }
 }
@@ -430,6 +437,7 @@ impl MobileCore {
     {
         Ok(Arc::new(Self {
             actor: Actor::spawn(transport, LoggedSink::wrap(sink), timing)?,
+            connect_timeout: ConnectTimeout::default(),
         }))
     }
 }
@@ -452,6 +460,19 @@ impl MobileCore {
         let (reply, answer) = oneshot::channel();
         self.actor.post(Command::Connect { machine, reply })?;
         answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// Sets how long a connect may take to reach a machine that sets no value of its own
+    /// ([`Machine::connect_timeout_secs`]), in seconds, from the next connect or reconnect on: 10 until the app sets
+    /// one; a value outside 1 to 300 sets 10.
+    pub fn set_connect_timeout_secs(&self, secs: u32) {
+        self.connect_timeout.set_secs(secs);
+    }
+
+    /// The app-wide connect timeout in seconds, as [`MobileCore::set_connect_timeout_secs`] last set it.
+    #[must_use]
+    pub fn connect_timeout_secs(&self) -> u32 {
+        self.connect_timeout.secs()
     }
 
     /// Closes the connection to `machine_id`, if any, cancels a connect or reconnect in flight, ends its attached
@@ -1080,6 +1101,7 @@ mod tests {
             port: 22,
             user: "nick".to_owned(),
             key_id: key_id.to_owned(),
+            connect_timeout_secs: None,
         }
     }
 

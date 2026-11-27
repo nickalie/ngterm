@@ -61,7 +61,7 @@ pub(crate) const SHOWN_OUTSIDE_GROUP: &str = "shown here in a row outside this g
 ///
 /// `invalid host`: the host is not echoed, as it is refused for carrying control characters a terminal would print.
 pub(crate) fn start_tree_read(core: &Core, host: &str) -> Result<Answer, ControlError> {
-    start_tree_read_within(core, host, tree::TREE_DEADLINE)
+    start_tree_read_within(core, host, tree::tree_deadline(host))
 }
 
 /// [`start_tree_read`] given `deadline` to answer.
@@ -83,7 +83,7 @@ pub(crate) fn start_tree_read_within(core: &Core, host: &str, deadline: Duration
 /// As [`start_tree_read`].
 pub(crate) fn start_listing_read(core: &Core, host: &str) -> Result<Answer, ControlError> {
     tree::validate(host).map_err(|_| ControlError::rejected("invalid host"))?;
-    run_listing_off_thread(&core.remote.runner, host, tree::TREE_DEADLINE)
+    run_listing_off_thread(&core.remote.runner, host, tree::tree_deadline(host))
         .ok_or_else(|| ControlError::rejected(format!("the remote command failed on {host}")))
 }
 

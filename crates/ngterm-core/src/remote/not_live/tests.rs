@@ -208,9 +208,9 @@ fn a_listing_asks_the_mode_in_one_more_ssh_call_only_when_agterm_listed_nothing(
     let calls = runner.calls();
     assert_eq!(calls.len(), 2);
     let (argv, deadline) = &calls[1];
-    assert_eq!(*deadline, RESTORE_DEADLINE);
+    assert_eq!(*deadline, RESTORE_DEADLINE + Duration::from_secs(10));
     assert_eq!(argv.last(), Some(&restore_tail()));
-    assert_eq!(argv[..argv.len() - 1], tree::ssh_arguments("studio", 5, false)[..]);
+    assert_eq!(argv[..argv.len() - 1], tree::ssh_arguments("studio", false)[..]);
     let tree = tree::decode(&result.stdout).unwrap().stamped("agterm:studio");
     assert_eq!(hint(&tree).as_deref(), Some(OFF));
 

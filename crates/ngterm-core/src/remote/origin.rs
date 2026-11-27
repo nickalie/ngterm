@@ -32,7 +32,7 @@ pub const ORIGIN_RUN: &str = "origin-run";
 pub const WINDOWS_PROBE: &str = "echo %OS%$env:OS";
 const WINDOWS_ANSWER: &str = "Windows_NT";
 
-/// How long the [`WINDOWS_PROBE`] may take.
+/// How long the [`WINDOWS_PROBE`] may take once connected.
 pub const WINDOWS_PROBE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// What a Windows origin's attach prints before it exits 1, the POSIX form's guard in `cmd.exe`'s words (`cmd.exe`
@@ -154,7 +154,7 @@ pub fn is_windows_answer(result: &RemoteCommandResult) -> bool {
 /// [`WINDOWS_PROBE`] for `host`, as an ssh argv.
 #[must_use]
 pub fn windows_probe_command(host: &str) -> Vec<String> {
-    let mut argv = ssh_arguments(host, 5, false);
+    let mut argv = ssh_arguments(host, false);
     argv.push(WINDOWS_PROBE.to_owned());
     argv
 }
@@ -172,7 +172,10 @@ pub fn run_learning(
     if shell == OriginShell::Windows || !rejected_by_windows_shell(&first) {
         return first;
     }
-    if !is_windows_answer(&runner.run(&windows_probe_command(host), WINDOWS_PROBE_DEADLINE)) {
+    if !is_windows_answer(&runner.run(
+        &windows_probe_command(host),
+        super::connect_timeout::after_connect(host, WINDOWS_PROBE_DEADLINE),
+    )) {
         return first;
     }
     learn(host, OriginShell::Windows);

@@ -1,11 +1,16 @@
 //! `remotes.conf`, the hosts offered for `live tree`/attach (upstream's `Remotes.swift`): one `destination [label...]`
 //! per line. Only a whole-line `#` is a comment; the rest of a line after the destination is its label verbatim. A bad
 //! line is diagnosed and skipped, and later lines still parse.
+//!
+//! ngterm adds one setting, which upstream's file has not: `connect-timeout = SECONDS` for every machine and
+//! `connect-timeout DESTINATION = SECONDS` for one ([`super::connect_timeout`]). A line whose first word is followed by
+//! `=` is a setting; the only setting that names a destination is `connect-timeout`.
 
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::connect_timeout::{self, ConnectTimeouts};
 use super::tree::is_host;
 use crate::hooks::read_config_text;
 use crate::keymap::KeymapDiagnostic;
@@ -22,6 +27,7 @@ pub struct RemoteEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Remotes {
     pub entries: Vec<RemoteEntry>,
+    pub connect_timeouts: ConnectTimeouts,
 }
 
 /// Foundation's `.whitespaces`: horizontal blanks only, never a line break.
@@ -39,6 +45,7 @@ pub fn parse_remotes_conf(text: &str) -> (Remotes, Vec<KeymapDiagnostic>) {
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
     let mut diagnostics = Vec::new();
+    let mut settings = Settings::default();
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     for (index, raw) in normalized.split('\n').enumerate() {
         let line_number = index + 1;
@@ -47,6 +54,13 @@ pub fn parse_remotes_conf(text: &str) -> (Remotes, Vec<KeymapDiagnostic>) {
             continue;
         }
         let destination: String = line.chars().take_while(|ch| !ch.is_whitespace()).collect();
+        let rest = line[destination.len()..].trim_matches(is_blank);
+        if let Some(setting) = setting_of(&destination, rest) {
+            if let Err(message) = settings.apply(setting) {
+                diagnostics.push(KeymapDiagnostic::new(line_number, message));
+            }
+            continue;
+        }
         if !is_host(&destination) {
             diagnostics.push(KeymapDiagnostic::new(
                 line_number,
@@ -54,7 +68,6 @@ pub fn parse_remotes_conf(text: &str) -> (Remotes, Vec<KeymapDiagnostic>) {
             ));
             continue;
         }
-        let rest = line[destination.len()..].trim_matches(is_blank);
         if rest
             .chars()
             .any(|ch| (u32::from(ch) < 0x20 && ch != '\t') || u32::from(ch) == 0x7f)
@@ -83,7 +96,74 @@ pub fn parse_remotes_conf(text: &str) -> (Remotes, Vec<KeymapDiagnostic>) {
             line: line_number,
         });
     }
-    (Remotes { entries }, diagnostics)
+    let remotes = Remotes {
+        entries,
+        connect_timeouts: settings.connect_timeouts,
+    };
+    (remotes, diagnostics)
+}
+
+/// One setting line: `key = value`, or `key destination = value`.
+#[derive(Clone, Copy)]
+struct Setting<'a> {
+    key: &'a str,
+    destination: Option<&'a str>,
+    value: &'a str,
+}
+
+/// The setting `line` holds, given its first word and the rest: the rest starts with `=`, or the first word is
+/// [`connect_timeout::SETTING`] and the rest is `DESTINATION = SECONDS`. Anything else is a remote.
+fn setting_of<'a>(word: &'a str, rest: &'a str) -> Option<Setting<'a>> {
+    if let Some(value) = rest.strip_prefix('=') {
+        return Some(Setting {
+            key: word,
+            destination: None,
+            value: value.trim_matches(is_blank),
+        });
+    }
+    if word != connect_timeout::SETTING {
+        return None;
+    }
+    let (destination, value) = rest.split_once('=')?;
+    Some(Setting {
+        key: word,
+        destination: Some(destination.trim_matches(is_blank)),
+        value: value.trim_matches(is_blank),
+    })
+}
+
+/// The settings read so far; the first line that sets a value wins, as the first line of a destination does.
+#[derive(Default)]
+struct Settings {
+    connect_timeouts: ConnectTimeouts,
+    default_set: bool,
+}
+
+impl Settings {
+    fn apply(&mut self, setting: Setting<'_>) -> Result<(), String> {
+        if setting.key != connect_timeout::SETTING {
+            return Err(format!("unknown setting '{}'; line skipped", setting.key));
+        }
+        let name = connect_timeout::SETTING;
+        match setting.destination {
+            None if self.default_set => Err(format!("{name} is already set; line skipped")),
+            None => {
+                let seconds = connect_timeout::parse_seconds(setting.value)?;
+                self.connect_timeouts.set_default(seconds);
+                self.default_set = true;
+                Ok(())
+            }
+            Some(destination) if !is_host(destination) => Err(format!("invalid destination for {name}; line skipped")),
+            Some(destination) if self.connect_timeouts.has_own(destination) => {
+                Err(format!("{name} for '{destination}' is already set; line skipped"))
+            }
+            Some(destination) => {
+                let seconds = connect_timeout::parse_seconds(setting.value)?;
+                self.connect_timeouts.set_for(destination, seconds);
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Reads `remotes.conf` at `path` (upstream's `RemotesFile.load`). A missing file is an empty list.
@@ -105,6 +185,7 @@ pub fn load_remotes(path: &Path) -> io::Result<(Remotes, Vec<KeymapDiagnostic>)>
 pub struct RemotesState {
     path: PathBuf,
     entries: Vec<RemoteEntry>,
+    connect_timeouts: ConnectTimeouts,
     issue_count: usize,
 }
 
@@ -129,6 +210,13 @@ impl RemotesState {
         &self.entries
     }
 
+    /// The connect timeouts of the last read, which every ssh line reads ([`connect_timeout::seconds`]); an unreadable
+    /// file sets none.
+    #[must_use]
+    pub fn connect_timeouts(&self) -> &ConnectTimeouts {
+        &self.connect_timeouts
+    }
+
     /// How many problems the file had at the last read: its parse diagnostics, or one when it exists and cannot be
     /// read.
     #[must_use]
@@ -145,15 +233,29 @@ impl RemotesState {
     /// Reads the file again. The issue count when `reporting` and the read turned a clean file into one with problems,
     /// once per such episode: a file that stays broken is not reported again.
     pub fn refresh(&mut self, reporting: bool) -> Option<usize> {
-        let (entries, issues) = match load_remotes(&self.path) {
-            Ok((remotes, diagnostics)) => (remotes.entries, diagnostics.len()),
+        let (remotes, issues) = match load_remotes(&self.path) {
+            Ok((remotes, diagnostics)) => {
+                for diagnostic in &diagnostics {
+                    tracing::warn!(
+                        path = %self.path.display(),
+                        line = diagnostic.line,
+                        "remotes.conf: {}",
+                        diagnostic.message
+                    );
+                }
+                (remotes, diagnostics.len())
+            }
             Err(error) => {
                 tracing::debug!(path = %self.path.display(), %error, "remotes.conf could not be read");
-                (Vec::new(), 1)
+                (Remotes::default(), 1)
             }
         };
         let turned_bad = self.issue_count == 0 && issues > 0;
-        self.entries = entries;
+        if remotes.connect_timeouts != self.connect_timeouts {
+            connect_timeout::install(remotes.connect_timeouts.clone());
+        }
+        self.connect_timeouts = remotes.connect_timeouts;
+        self.entries = remotes.entries;
         self.issue_count = issues;
         (reporting && turned_bad).then_some(issues)
     }
@@ -364,6 +466,72 @@ mod tests {
         assert_eq!(destinations(&state), ["mini"]);
         assert_eq!(state.issue_count(), 1);
         assert_eq!(state.refresh(true), None);
+    }
+
+    #[test]
+    fn the_connect_timeout_settings_are_read_and_are_no_remotes() {
+        let text = "connect-timeout = 25\nstudio Mac Studio\nconnect-timeout   agterm:studio=40\nmini\n";
+        let (remotes, diagnostics) = parse_remotes_conf(text);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(
+            remotes.entries,
+            [entry("studio", "Mac Studio", 2), entry("mini", "mini", 4)]
+        );
+        assert_eq!(remotes.connect_timeouts.seconds_for("studio"), 40);
+        assert_eq!(remotes.connect_timeouts.seconds_for("mini"), 25);
+        let (remotes, _) = parse_remotes_conf("studio\n");
+        assert_eq!(
+            remotes.connect_timeouts.seconds_for("studio"),
+            10,
+            "a file without the setting"
+        );
+    }
+
+    #[test]
+    fn a_bad_setting_is_diagnosed_and_skipped() {
+        let text = "connect-timeout = 0\nconnect-timeout = 15\nconnect-timeout = 20\nconnect-timeout studio = 1.5\n\
+                    connect-timeout -bad = 30\nconnect-timeout mini = 30\nconnect-timeout mini = 31\ntimeout = 5\n";
+        let (remotes, diagnostics) = parse_remotes_conf(text);
+        assert!(remotes.entries.is_empty());
+        let messages: Vec<(usize, &str)> = diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.line, diagnostic.message.as_str()))
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                (
+                    1,
+                    "invalid connect-timeout '0' (whole seconds, 1 to 300); the setting is skipped"
+                ),
+                (3, "connect-timeout is already set; line skipped"),
+                (
+                    4,
+                    "invalid connect-timeout '1.5' (whole seconds, 1 to 300); the setting is skipped"
+                ),
+                (5, "invalid destination for connect-timeout; line skipped"),
+                (7, "connect-timeout for 'mini' is already set; line skipped"),
+                (8, "unknown setting 'timeout'; line skipped"),
+            ]
+        );
+        assert_eq!(remotes.connect_timeouts.seconds_for("studio"), 15);
+        assert_eq!(remotes.connect_timeouts.seconds_for("mini"), 30);
+    }
+
+    #[test]
+    fn a_read_installs_the_timeouts_every_ssh_line_takes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remotes.conf");
+        std::fs::write(&path, "connect-timeout = 20\nconnect-timeout studio = 45\n").unwrap();
+        let mut state = RemotesState::at(path.clone());
+        assert_eq!(state.connect_timeouts().seconds_for("mini"), 20);
+        let option = |host: &str| super::super::tree::ssh_arguments(host, false)[5].clone();
+        assert_eq!(option("studio"), "ConnectTimeout=45");
+        assert_eq!(option("ngterm:mini"), "ConnectTimeout=20");
+        replace(&path, "connect-timeout = nope\n");
+        assert_eq!(state.refresh(true), Some(1));
+        assert_eq!(option("studio"), "ConnectTimeout=10");
+        assert_eq!(option("mini"), "ConnectTimeout=10");
     }
 
     #[test]

@@ -30,7 +30,7 @@ use crate::model::{
 };
 use crate::pane_env::uuid_string;
 
-/// How long a reconnect probe may take (upstream's `reconnectProbeDeadline`).
+/// How long a reconnect probe may take once connected (upstream's `reconnectProbeDeadline`).
 const PROBE_DEADLINE: Duration = Duration::from_secs(10);
 /// How often the clients and the reconnect book are ticked while anything is up (upstream's one-second remote tick).
 const TICK: Duration = Duration::from_secs(1);
@@ -85,9 +85,11 @@ fn read_off_thread(
 ) -> Option<Answer> {
     let answer: Answer = Arc::new(Mutex::new(None));
     let (runner, slot, host) = (Arc::clone(runner), Arc::clone(&answer), host.to_owned());
+    let timeouts = super::connect_timeout::inherited();
     std::thread::Builder::new()
         .name("ngterm.remote-tree".to_owned())
         .spawn(move || {
+            timeouts.adopt();
             let result = read(&*runner, &host, deadline);
             *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
         })
@@ -444,8 +446,10 @@ impl Core {
             return;
         };
         let version = binding.presentation_version;
+        let host = host.to_owned();
         self.remote.viewer.last_client += 1;
-        let mut client = PresentationClient::new(session, self.remote.viewer.last_client, argv, version);
+        let mut client =
+            PresentationClient::new(session, self.remote.viewer.last_client, argv, version).over_ssh_to(&host);
         client.set_shows_pages(self.shows_replica_pages());
         client.set_shows_picks(true);
         client.set_takes_held(true);
@@ -1030,8 +1034,11 @@ impl Core {
                 .reconnects
                 .entry(pane)
                 .filter(|entry| self.waiting_surface(pane, entry.session))
-                .and_then(|entry| super::ssh::probe_command(&entry.host).ok());
-            let answer = argv.and_then(|argv| run_off_thread(&self.remote.runner, argv, PROBE_DEADLINE));
+                .and_then(|entry| {
+                    let argv = super::ssh::probe_command(&entry.host).ok()?;
+                    Some((argv, super::connect_timeout::after_connect(&entry.host, PROBE_DEADLINE)))
+                });
+            let answer = argv.and_then(|(argv, deadline)| run_off_thread(&self.remote.runner, argv, deadline));
             match answer {
                 Some(answer) => self.remote.viewer.probes.push(Probe { pane, answer }),
                 None => self.remote.viewer.reconnects.cancel(pane),

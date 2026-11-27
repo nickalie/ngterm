@@ -155,6 +155,9 @@ pub struct PresentationClient {
     generation: Option<i64>,
     revision: i64,
     last_frame_at: Option<Instant>,
+    /// The machine `argv` reaches over ssh, whose connect timeout each launch follows; `None` for a line over a
+    /// connection that is already up.
+    host: Option<String>,
     retry_at: Option<Instant>,
     failures: u32,
     warned_reason: Option<String>,
@@ -203,6 +206,7 @@ impl PresentationClient {
             generation: None,
             revision: -1,
             last_frame_at: None,
+            host: None,
             retry_at: None,
             failures: 0,
             warned_reason: None,
@@ -215,6 +219,14 @@ impl PresentationClient {
             opt_in: Vec::new(),
             origin_kinds: Vec::new(),
         }
+    }
+
+    /// The client of a line that reaches `host` over a new ssh connection at each launch: each launch takes `host`'s
+    /// current connect timeout, and its first frame may come that much later.
+    #[must_use]
+    pub fn over_ssh_to(mut self, host: &str) -> Self {
+        self.host = Some(host.to_owned());
+        self
     }
 
     /// Whether this machine shows handed-over pages, which the next hello says.
@@ -499,7 +511,12 @@ impl PresentationClient {
         self.generation = None;
         self.revision = -1;
         self.pending = PendingBatch::default();
-        self.last_frame_at = Some(now);
+        // A launch's first frame may also wait for ssh to connect.
+        let connecting = self.host.as_deref().map_or(Duration::ZERO, |host| {
+            super::tree::renew_connect_timeout(&mut self.argv, host);
+            Duration::from_secs(super::connect_timeout::seconds(host).into())
+        });
+        self.last_frame_at = Some(now + connecting);
         self.report(RemoteConnection::Connecting, effects);
         self.launch_count += 1;
         let key = LinkKey {
@@ -1380,6 +1397,34 @@ mod tests {
             harness.connections().last(),
             Some(&RemoteConnection::Failed("no frames for 30 seconds".to_owned()))
         );
+    }
+
+    #[test]
+    fn a_launch_over_ssh_follows_the_connect_timeout_and_waits_for_it() {
+        use crate::remote::connect_timeout::{self, ConnectTimeouts};
+        let mut timeouts = ConnectTimeouts::default();
+        timeouts.set_for("buildbox", 40);
+        connect_timeout::install(timeouts);
+        let argv = crate::remote::tree::ssh_arguments("buildbox", false);
+        let mut harness = Harness::new(Some(1));
+        harness.client = PresentationClient::new(Uuid::new_v4(), 1, argv, Some(1)).over_ssh_to("buildbox");
+        let mut timeouts = ConnectTimeouts::default();
+        timeouts.set_for("buildbox", 50);
+        connect_timeout::install(timeouts);
+        harness.start();
+        assert!(
+            harness.transport.launches.borrow()[0]
+                .0
+                .contains(&"ConnectTimeout=50".to_owned())
+        );
+        // no first frame yet: the connect's 50 s, then the stale limit
+        harness.advance(50 + 30);
+        harness.tick();
+        assert!(!harness.transport.link(0).0.borrow().stopped);
+        harness.advance(1);
+        harness.tick();
+        assert!(harness.transport.link(0).0.borrow().stopped);
+        connect_timeout::install(ConnectTimeouts::default());
     }
 
     #[test]

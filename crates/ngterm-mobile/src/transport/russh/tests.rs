@@ -16,9 +16,9 @@ use tokio::sync::mpsc;
 use tokio::task::LocalSet;
 
 use super::{
-    CHANNEL_CLOSED, CONNECTION_LOST, Client, Deadline, HOST_KEY_CHANGED, HOST_KEY_REFUSED, HOST_KEY_UNCONFIRMED,
-    HOST_KEY_WITHDRAWN, OUTPUT_BUDGET, OUTPUT_OVERRUN, RusshConnection, RusshTransport, SIGN_IN_UNFINISHED, Timing,
-    banner_link, banner_text,
+    CHANNEL_CLOSED, CONNECTION_LOST, Client, ConnectTimeout, Deadline, HOST_KEY_CHANGED, HOST_KEY_REFUSED,
+    HOST_KEY_UNCONFIRMED, HOST_KEY_WITHDRAWN, OUTPUT_BUDGET, OUTPUT_OVERRUN, RusshConnection, RusshTransport,
+    SIGN_IN_UNFINISHED, Timing, banner_link, banner_text,
 };
 use crate::api::{EventSink, HostKeyStore, KeyVault, Machine, MobileEvent, VaultError};
 use crate::applog::tests::Captured;
@@ -420,6 +420,7 @@ fn machine(port: u16) -> Machine {
         port,
         user: USER.to_owned(),
         key_id: KEY_ID.to_owned(),
+        connect_timeout_secs: None,
     }
 }
 
@@ -703,6 +704,63 @@ fn a_machine_that_never_answers_times_out() {
         );
         drop(listener);
     });
+}
+
+/// How long a connect to a machine that accepts the connection but never speaks ssh takes to give up.
+async fn silent_connect(fixture: &Fixture, connect_timeout_secs: Option<u32>) -> Duration {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    fixture.hosts.pin("m1".to_owned(), "SHA256:any".to_owned());
+    let started = std::time::Instant::now();
+    let connected = fixture
+        .transport
+        .connect(&Machine {
+            connect_timeout_secs,
+            ..machine(port)
+        })
+        .await;
+    assert!(connected.is_err());
+    drop(listener);
+    started.elapsed()
+}
+
+#[test]
+fn a_machine_value_and_the_app_value_bound_the_connect() {
+    run(async {
+        let fixture = fixture(Timing {
+            connect: Duration::from_millis(200),
+            ..quick()
+        });
+        let own = silent_connect(&fixture, Some(1)).await;
+        assert!(own >= Duration::from_secs(1) && own < Duration::from_secs(5), "{own:?}");
+        let out_of_range = silent_connect(&fixture, Some(0)).await;
+        assert!(
+            out_of_range < Duration::from_millis(900),
+            "the app value: {out_of_range:?}"
+        );
+        fixture.transport.connect_timeout().set_secs(1);
+        let app = silent_connect(&fixture, None).await;
+        assert!(app >= Duration::from_secs(1) && app < Duration::from_secs(5), "{app:?}");
+    });
+}
+
+#[test]
+fn the_app_value_is_ten_seconds_until_set_and_a_bad_one_sets_ten() {
+    let timeout = ConnectTimeout::default();
+    assert_eq!(timeout.secs(), 10);
+    assert_eq!(Timing::default().connect, Duration::from_secs(10));
+    timeout.set_secs(45);
+    assert_eq!(timeout.secs(), 45);
+    assert_eq!(timeout.for_machine(&machine(22)), Duration::from_secs(45));
+    let own = Machine {
+        connect_timeout_secs: Some(300),
+        ..machine(22)
+    };
+    assert_eq!(timeout.for_machine(&own), Duration::from_secs(300));
+    for bad in [0, 301] {
+        timeout.set_secs(bad);
+        assert_eq!(timeout.secs(), 10);
+    }
 }
 
 #[test]
@@ -1332,6 +1390,42 @@ fn the_core_asks_about_an_unknown_host_and_connects_once_answered() {
         })
     );
     assert_eq!(hosts.pins(), HashMap::from([("m1".to_owned(), fingerprint)]));
+}
+
+#[test]
+fn the_core_s_app_value_bounds_its_next_connect() {
+    let hosts = Arc::new(Hosts::default());
+    hosts.pin("m1".to_owned(), "SHA256:any".to_owned());
+    let pair = keys::generate("test").unwrap();
+    let vault = Arc::new(Vault {
+        keys: HashMap::from([(KEY_ID.to_owned(), pair.private_key)]),
+    });
+    let (sender, _events) = std::sync::mpsc::channel();
+    let core = crate::MobileCore::new(
+        Arc::new(ThreadSink {
+            events: Mutex::new(sender),
+        }),
+        vault,
+        hosts,
+    )
+    .unwrap();
+    assert_eq!(core.connect_timeout_secs(), 10);
+    core.set_connect_timeout_secs(1);
+    assert_eq!(core.connect_timeout_secs(), 1);
+    // The kernel completes the TCP handshake; nothing ever speaks ssh.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let started = std::time::Instant::now();
+    let connected = futures_lite::future::block_on(core.connect(machine(port)));
+    let took = started.elapsed();
+    assert!(connected.is_err());
+    assert!(
+        took >= Duration::from_secs(1) && took < Duration::from_secs(5),
+        "{took:?}"
+    );
+    core.set_connect_timeout_secs(0);
+    assert_eq!(core.connect_timeout_secs(), 10, "a bad value sets the default");
+    drop(listener);
 }
 
 /// A core over the real transport, reaching a server on its own thread run by `script`, with its host key pinned.

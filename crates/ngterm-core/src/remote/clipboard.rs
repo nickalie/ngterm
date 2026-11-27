@@ -10,6 +10,7 @@ use super::origin::{self, OriginRun, OriginShell};
 use super::tree::{is_host, ssh_arguments};
 use crate::command_restore::shell_quoted_line;
 
+/// The far side's time for a transfer once connected.
 const DEADLINE: Duration = Duration::from_secs(60);
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
@@ -21,7 +22,13 @@ const MAX_BYTES: usize = 64 * 1024 * 1024;
 pub fn upload(host: &str, extension: &str, bytes: &[u8]) -> Result<String, String> {
     let shell = origin::shell_of(host);
     let argv = upload_command(host, extension, shell)?;
-    transfer(&argv, bytes, DEADLINE, shell).map_err(|error| error.to_string())
+    transfer(
+        &argv,
+        bytes,
+        super::connect_timeout::after_connect(host, DEADLINE),
+        shell,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn upload_command(host: &str, extension: &str, shell: OriginShell) -> Result<Vec<String>, String> {
@@ -29,7 +36,7 @@ fn upload_command(host: &str, extension: &str, shell: OriginShell) -> Result<Vec
         return Err("Invalid image upload destination or format".to_owned());
     }
     if shell == OriginShell::Windows {
-        let mut argv = ssh_arguments(host, 5, false);
+        let mut argv = ssh_arguments(host, false);
         argv.push(
             OriginRun::Paste {
                 extension: extension.to_owned(),
@@ -46,7 +53,7 @@ fn upload_command(host: &str, extension: &str, shell: OriginShell) -> Result<Vec
          trap 'rm -f \"$file\"; rmdir \"$dir\"' 0 1 2 15; \
          cat >\"$file\" || exit 1; trap - 0 1 2 15; printf '%s' \"$file\""
     );
-    let mut argv = ssh_arguments(host, 5, false);
+    let mut argv = ssh_arguments(host, false);
     argv.push(shell_quoted_line(&["/bin/sh", "-c", &script]));
     Ok(argv)
 }

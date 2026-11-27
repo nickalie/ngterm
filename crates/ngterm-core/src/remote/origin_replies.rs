@@ -258,6 +258,8 @@ pub enum WaitStep {
 pub struct ListingWait {
     created: String,
     deadline: Instant,
+    /// The longest one listing may take.
+    listing_cap: Duration,
     /// When the next listing starts.
     due: Instant,
     /// Why it is not attached yet, for the failure if it never is.
@@ -271,8 +273,20 @@ impl ListingWait {
         Self {
             created,
             deadline: now + READY_BUDGET,
+            listing_cap: TREE_DEADLINE,
             due: now,
             reason: NOT_ATTACHABLE.to_owned(),
+        }
+    }
+
+    /// [`ListingWait::new`] for listings that each open a new ssh connection to `host`: the budget and each listing
+    /// get `host`'s connect timeout on top.
+    #[must_use]
+    pub fn for_host(created: String, now: Instant, host: &str) -> Self {
+        Self {
+            deadline: now + super::connect_timeout::after_connect(host, READY_BUDGET),
+            listing_cap: super::tree::tree_deadline(host),
+            ..Self::new(created, now)
         }
     }
 
@@ -292,7 +306,7 @@ impl ListingWait {
         if remaining.is_zero() {
             return WaitStep::GiveUp(self.reason.clone());
         }
-        WaitStep::List(remaining.min(TREE_DEADLINE))
+        WaitStep::List(remaining.min(self.listing_cap))
     }
 
     /// A listing of `host` finished at `now`: the created session and the listing once it is there; otherwise the

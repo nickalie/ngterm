@@ -210,6 +210,7 @@ impl Client {
             port,
             user: account(),
             key_id: KEY_ID.to_owned(),
+            connect_timeout_secs: None,
         };
         block_on(self.core.connect(machine)).unwrap_or_else(|error| panic!("{}: connect: {error:?}", self.label));
     }

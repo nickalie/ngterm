@@ -133,6 +133,7 @@ impl Fixture {
             port: 22,
             user: "nick".to_owned(),
             key_id: "key".to_owned(),
+            connect_timeout_secs: None,
         };
         block_on(core.connect(machine)).unwrap();
         block_on(core.list_sessions(MACHINE.to_owned())).unwrap();
@@ -566,6 +567,7 @@ fn two_machines_showing_one_origin_pane_each_attach_again_after_its_respawn() {
         port: 22,
         user: "nick".to_owned(),
         key_id: "key".to_owned(),
+        connect_timeout_secs: None,
     };
     block_on(fixture.core.connect(other)).unwrap();
     block_on(fixture.core.list_sessions(OTHER.to_owned())).unwrap();

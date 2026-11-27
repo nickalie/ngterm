@@ -25,7 +25,7 @@ use uuid::Uuid;
 use super::frames::PresentationMode;
 use super::origin_replies::{PAUSE, reply_of};
 use super::ssh::control_command;
-use super::tree::{RemoteCommandResult, TREE_DEADLINE};
+use super::tree::{RemoteCommandResult, tree_deadline};
 use super::viewer::{Answer, run_off_thread, take_answer};
 use crate::Core;
 use crate::model::{RemoteConnection, Session};
@@ -121,7 +121,7 @@ impl Core {
             if check.due <= now {
                 let peer = self.remote_row_peer(check.row, &check.host);
                 let argv = control_command(&check.host, peer, &["live", "list"]).ok()?;
-                check.read = Some(run_off_thread(&self.remote.runner, argv, TREE_DEADLINE)?);
+                check.read = Some(run_off_thread(&self.remote.runner, argv, tree_deadline(&check.host))?);
             }
             return Some(check);
         };

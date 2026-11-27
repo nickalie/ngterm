@@ -8,11 +8,12 @@ use ngterm_proto::ControlRemoteTree;
 use uuid::Uuid;
 
 use super::attach::start_peer_tree_read_within;
+use super::connect_timeout::after_connect;
 use super::frames::PresentationPane;
 use super::origin_replies::{COMPANION_DEADLINE, PAUSE, READY_BUDGET, read_peer_tree, reply_of};
 use super::split_mirror::MirrorRun;
 use super::ssh::{PaneLabel, attach_pane_command, control_command};
-use super::tree::TREE_DEADLINE;
+use super::tree::tree_deadline;
 use super::viewer::{Answer, run_off_thread, take_answer};
 use crate::Core;
 use crate::command_restore::shell_quoted_line;
@@ -177,7 +178,7 @@ impl Core {
         );
         let answer = argv
             .ok()
-            .and_then(|argv| run_off_thread(&self.remote.runner, argv, COMPANION_DEADLINE));
+            .and_then(|argv| run_off_thread(&self.remote.runner, argv, after_connect(&host, COMPANION_DEADLINE)));
         let Some(answer) = answer else {
             self.fail_remote_split(id, pane, "the remote split command could not start");
             return true;
@@ -245,7 +246,7 @@ impl Core {
                 run.stage = Stage::Listing {
                     answer: None,
                     due: now,
-                    deadline: now + READY_BUDGET,
+                    deadline: now + after_connect(&run.target.host, READY_BUDGET),
                     reason: "the remote split did not become attachable".to_owned(),
                 };
             }
@@ -282,7 +283,7 @@ impl Core {
                             self,
                             &run.target.host,
                             run.target.peer,
-                            remaining.min(TREE_DEADLINE),
+                            remaining.min(tree_deadline(&run.target.host)),
                         )
                         .map_err(|error| error.to_string())?,
                     );

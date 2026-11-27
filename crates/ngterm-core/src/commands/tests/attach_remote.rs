@@ -41,13 +41,17 @@ struct Gate {
     hosts: Vec<String>,
     /// The remote line of every command run, in order.
     lines: Vec<String>,
+    /// The `ConnectTimeout` option and the deadline of every command run, in order.
+    timeouts: Vec<(String, Duration)>,
     /// The answers given so far, by call.
     answers: Vec<Option<RemoteCommandResult>>,
 }
 
 impl RemoteCommandRunner for GatedRunner {
-    fn run(&self, argv: &[String], _deadline: Duration) -> RemoteCommandResult {
+    fn run(&self, argv: &[String], deadline: Duration) -> RemoteCommandResult {
         let mut gate = self.state.lock().unwrap();
+        let option = argv.iter().find(|word| word.starts_with("ConnectTimeout="));
+        gate.timeouts.push((option.cloned().unwrap_or_default(), deadline));
         // the destination is the argument before the remote command line
         let host = argv.get(argv.len().saturating_sub(2)).cloned().unwrap_or_default();
         let call = gate.hosts.len();
@@ -78,6 +82,10 @@ impl GatedRunner {
 
     fn lines(&self) -> Vec<String> {
         self.state.lock().unwrap().lines.clone()
+    }
+
+    fn timeouts(&self) -> Vec<(String, Duration)> {
+        self.state.lock().unwrap().timeouts.clone()
     }
 
     fn answer(&self, call: usize, result: RemoteCommandResult) {
@@ -384,6 +392,61 @@ fn a_config_directory_switch_reads_the_new_file_and_reports_nothing() {
         "the file of the directory switched to"
     );
     assert!(remotes_banners(&mut attach).is_empty(), "a switch never reports");
+}
+
+// MARK: - the connect timeout
+
+/// Lists `host` through the core and gives the run's `ConnectTimeout` option and deadline.
+fn listing_timeout(attach: &mut Attach, host: &str) -> (String, Duration) {
+    let call = attach.runner.hosts().len();
+    let _answer = crate::remote::attach::start_listing_read(attach.core(), host).unwrap();
+    attach.wait_for_runs(call + 1);
+    attach.runner.answer(call, listing(&[build_session()]));
+    attach.runner.timeouts()[call].clone()
+}
+
+fn timeout(seconds: u64, deadline: u64) -> (String, Duration) {
+    (format!("ConnectTimeout={seconds}"), Duration::from_secs(deadline))
+}
+
+#[test]
+fn an_ssh_takes_ten_seconds_to_connect_unless_remotes_conf_says_otherwise() {
+    let mut attach = Attach::new(Some(
+        "studio
+",
+    ));
+    attach.core().load_remotes_at_launch();
+    assert_eq!(listing_timeout(&mut attach, "studio"), timeout(10, 20));
+}
+
+#[test]
+fn the_file_value_and_a_machine_value_reach_the_ssh_line_and_its_deadline() {
+    let text = "connect-timeout = 25\nconnect-timeout ngterm:studio = 40\nstudio\nmini\n";
+    let mut attach = Attach::new(Some(text));
+    attach.core().load_remotes_at_launch();
+    assert!(attach.banners().is_empty());
+    assert_eq!(listing_timeout(&mut attach, "studio"), timeout(40, 50));
+    assert_eq!(listing_timeout(&mut attach, "agterm:studio"), timeout(40, 50));
+    assert_eq!(listing_timeout(&mut attach, "mini"), timeout(25, 35));
+    replace(&attach.remotes_file(), "connect-timeout = 7\nstudio\n");
+    attach.core().refresh_remotes(true);
+    assert_eq!(
+        listing_timeout(&mut attach, "studio"),
+        timeout(7, 17),
+        "an edit reaches the next ssh"
+    );
+}
+
+#[test]
+fn a_bad_value_is_an_issue_and_leaves_ten_seconds() {
+    let mut attach = Attach::new(Some("connect-timeout = soon\nconnect-timeout mini = 0\nstudio\n"));
+    attach.core().load_remotes_at_launch();
+    assert_eq!(
+        attach.banners(),
+        ["remotes-diagnostics|Remotes|2 issues in remotes.conf"]
+    );
+    assert_eq!(listing_timeout(&mut attach, "studio"), timeout(10, 20));
+    assert_eq!(listing_timeout(&mut attach, "mini"), timeout(10, 20));
 }
 
 // MARK: - the flow
@@ -1292,9 +1355,10 @@ fn a_session_never_attachable_names_what_attaches_it() {
     attach.runner.answer(2, created_receipt());
     attach.wait_for_runs(4);
     attach.runner.answer(3, listing(&[]));
-    // past the whole budget on every tick, so a listing however late is past its pause and the deadline ends the wait
+    // past the whole budget (the connect timeout included) on every tick, so a listing however late is past its pause
+    // and the deadline ends the wait
     attach.drive("the wait ends", |attach| {
-        *elapsed.lock().unwrap() += Duration::from_secs(21);
+        *elapsed.lock().unwrap() += Duration::from_secs(31);
         attach.hud().is_some_and(|hud| hud.spinner.is_none())
     });
     assert_eq!(

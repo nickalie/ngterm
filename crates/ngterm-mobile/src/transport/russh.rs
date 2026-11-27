@@ -61,6 +61,7 @@ use ::russh::client::{self, AuthResult, Handle, Msg};
 use ::russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use ::russh::{ChannelMsg, Disconnect, Sig};
 
+use ngterm_core::remote::connect_timeout::{DEFAULT_SECONDS, MAX_SECONDS};
 use ngterm_term::GridSize;
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
@@ -91,7 +92,8 @@ pub const PTY_TERM: &str = "xterm-256color";
 /// How long a connect and a connection wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timing {
-    /// Reaching the machine: resolving, connecting, the handshake and authentication, not counting the wait for the
+    /// Reaching the machine: resolving, connecting, the handshake and authentication: the app-wide value a connect
+    /// starts with ([`ConnectTimeout`]), and a machine may set its own; not counting the wait for the
     /// user's answer about an unknown host key, and given up for [`Timing::sign_in`] once the machine sends a banner
     /// with a link (before the app is told, which waits for [`Timing::sign_in_grace`]).
     pub connect: Duration,
@@ -107,13 +109,62 @@ pub struct Timing {
     pub keepalive: Duration,
 }
 
+/// The app-wide connect timeout ([`Timing::connect`]), which the app may change while connects run; a machine's own
+/// ([`Machine::connect_timeout_secs`]) wins over it.
+#[derive(Debug, Clone)]
+pub struct ConnectTimeout(Arc<AtomicU64>);
+
+impl Default for ConnectTimeout {
+    fn default() -> Self {
+        Self::of(Timing::default().connect)
+    }
+}
+
+impl ConnectTimeout {
+    fn of(limit: Duration) -> Self {
+        Self(Arc::new(AtomicU64::new(
+            u64::try_from(limit.as_millis()).unwrap_or(u64::MAX),
+        )))
+    }
+
+    fn valid(secs: u32) -> bool {
+        (1..=MAX_SECONDS).contains(&secs)
+    }
+
+    /// Sets the app-wide value; one outside 1 to [`MAX_SECONDS`] sets [`DEFAULT_SECONDS`].
+    pub fn set_secs(&self, secs: u32) {
+        let secs = if Self::valid(secs) {
+            secs
+        } else {
+            note!(WARN, tag::SSH, "connect timeout out of range", secs = secs);
+            DEFAULT_SECONDS
+        };
+        self.0.store(u64::from(secs) * 1000, Ordering::Relaxed);
+    }
+
+    /// The app-wide value in whole seconds.
+    #[must_use]
+    pub fn secs(&self) -> u32 {
+        u32::try_from(self.0.load(Ordering::Relaxed) / 1000).unwrap_or(u32::MAX)
+    }
+
+    /// How long a connect to `machine` may take: its own valid value, else the app-wide one.
+    #[must_use]
+    pub fn for_machine(&self, machine: &Machine) -> Duration {
+        match machine.connect_timeout_secs {
+            Some(secs) if Self::valid(secs) => Duration::from_secs(secs.into()),
+            _ => Duration::from_millis(self.0.load(Ordering::Relaxed)),
+        }
+    }
+}
+
 /// Unanswered keepalives after which a connection is given up.
 pub const KEEPALIVE_MAX: usize = 3;
 
 impl Default for Timing {
     fn default() -> Self {
         Self {
-            connect: Duration::from_secs(15),
+            connect: Duration::from_secs(DEFAULT_SECONDS.into()),
             confirm: Duration::from_secs(120),
             sign_in: Duration::from_mins(10),
             sign_in_grace: Duration::from_secs(1),
@@ -129,6 +180,7 @@ pub struct RusshTransport {
     sink: Arc<dyn EventSink>,
     challenges: Arc<Challenges>,
     timing: Timing,
+    connect_timeout: ConnectTimeout,
 }
 
 impl RusshTransport {
@@ -152,7 +204,14 @@ impl RusshTransport {
             sink,
             challenges: Arc::new(Challenges::default()),
             timing,
+            connect_timeout: ConnectTimeout::of(timing.connect),
         }
+    }
+
+    /// The app-wide connect timeout this transport's connects read.
+    #[must_use]
+    pub fn connect_timeout(&self) -> ConnectTimeout {
+        self.connect_timeout.clone()
     }
 
     fn config(&self) -> Arc<client::Config> {
@@ -172,7 +231,7 @@ impl RusshTransport {
     ) -> Result<RusshConnection, TransportError> {
         // One deadline for resolving, connecting, the handshake and authentication, held off while the user is asked
         // about the host key, and replaced by the sign-in's once the machine sends a banner with a link.
-        let deadline = Arc::new(Deadline::new(self.timing.connect));
+        let deadline = Arc::new(Deadline::new(self.connect_timeout.for_machine(machine)));
         let refusal = Arc::new(Mutex::new(None));
         let (sign_in, asked) = mpsc::unbounded_channel();
         // Dropped with the client when russh's session ends: the connection's `lost`.

@@ -55,6 +55,7 @@ pub(super) fn machine() -> Machine {
         port: 22,
         user: "nick".to_owned(),
         key_id: "key".to_owned(),
+        connect_timeout_secs: None,
     }
 }
 
