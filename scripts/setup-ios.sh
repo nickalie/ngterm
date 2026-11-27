@@ -322,13 +322,19 @@ QUIET_SERVICES=(com.apple.chronod com.apple.healthappd com.apple.siriactionsd co
   com.apple.intelligencecontextd com.apple.sirittsd com.apple.photoanalysisd com.apple.newsd)
 
 # Disable the QUIET_SERVICES in simulator $1 ($2, its UDID), so they do not start again, and stop those that run. A
-# service the runtime does not have, or one that does not run, is left as it is: the run goes on without it. The
-# simulator keeps no disabled service on disk to write before its boot, and a spawn can take a minute on a Mac that the
-# boot's own burst holds up, so the services are quieted side by side.
+# service already disabled is left as it is (the runner readies its simulator once per test binary), and so is one
+# that the runtime does not have or that does not run: the run goes on without it. The simulator keeps no disabled
+# service on disk to write before its boot, and a spawn can take a minute on a Mac that the boot's own burst holds up,
+# so the services are quieted side by side.
 quiet_simulator() {
-  local name="$1" udid="$2" label quieted="" done_dir
+  local name="$1" udid="$2" label disabled quieted="" done_dir
+  disabled="$(simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl print-disabled system 2>/dev/null)" || disabled=""
   done_dir="$(mktemp -d)"
   for label in "${QUIET_SERVICES[@]}"; do
+    if grep -qF "\"$label\" => disabled" <<<"$disabled"; then
+      touch "$done_dir/$label"
+      continue
+    fi
     if simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl disable "system/$label" >/dev/null 2>&1; then
       touch "$done_dir/$label"
       simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl bootout "system/$label" >/dev/null 2>&1 || true
