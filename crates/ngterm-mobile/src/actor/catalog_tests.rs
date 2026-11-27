@@ -991,12 +991,12 @@ fn a_plain_rename_while_the_stream_is_down_names_the_row_it_shows() {
     });
 }
 
-/// A listing of the headless machine's main session and the session `made` named `name`.
 /// The pane of the session that [`listing_with`] adds.
 fn made_pane() -> Uuid {
     Uuid::from_u128(0xb7)
 }
 
+/// A listing of the headless machine's main session and the session `made` named `name`.
 fn listing_with(made: &str, name: &str) -> Script {
     let session = |id: &str, name: &str, daemon: &str| {
         json!({

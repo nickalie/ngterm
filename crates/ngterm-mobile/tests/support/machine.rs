@@ -40,20 +40,24 @@ pub(crate) struct World {
     pub(crate) headless: Headless,
     pub(crate) key: KeyPair,
     pub(crate) host_fingerprint: String,
-    /// The run's scratch directory ([`WORK_VARIABLE`]).
+    /// The world's scratch directory: the run's ([`WORK_VARIABLE`]), or a directory of its own under it.
     pub(crate) work: PathBuf,
 }
 
 impl World {
     pub(crate) fn start(binary: &Path) -> Self {
-        Self::start_with(binary, |_| {})
+        Self::start_in(binary, run_work(), |_| {})
     }
 
     /// [`World::start`], with `seed` given the instance's private state dir before the instance starts: the saved
-    /// state it then restores.
+    /// state it then restores. The seeded world has a directory of its own, `<work>/c`, so the worlds of the other
+    /// tests restore nothing of it.
     pub(crate) fn start_with(binary: &Path, seed: impl FnOnce(&Path)) -> Self {
+        Self::start_in(binary, run_work().join("c"), seed)
+    }
+
+    fn start_in(binary: &Path, work: PathBuf, seed: impl FnOnce(&Path)) -> Self {
         let stage = PathBuf::from(std::env::var_os(STAGE_VARIABLE).expect("MOBILE_E2E_STAGE: run the script"));
-        let work = PathBuf::from(std::env::var_os(WORK_VARIABLE).expect("MOBILE_E2E_WORK: run the script"));
         let user = account();
         let saved = work.join("s");
         fs::create_dir_all(&saved).expect("create the private state dir");
@@ -83,6 +87,11 @@ impl World {
             work,
         }
     }
+}
+
+/// The run's scratch directory ([`WORK_VARIABLE`]).
+fn run_work() -> PathBuf {
+    PathBuf::from(std::env::var_os(WORK_VARIABLE).expect("MOBILE_E2E_WORK: run the script"))
 }
 
 /// The account the test runs as, which the `sshd` lets in.

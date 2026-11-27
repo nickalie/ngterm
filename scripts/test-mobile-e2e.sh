@@ -13,6 +13,7 @@
 # Its third test has one machine that runs both apps (a second private instance with a stand-in agterm beside it, under
 # b/ there, behind a third sshd) and a server that views it (a third private instance with an ssh of its own, under v/):
 # the phone lists the sessions of both apps, and the server lists and attaches them with ngtermctl live tree and attach.
+# The catalog test's instance restores a seeded saved state from a directory of its own, under c/ there.
 #
 # The build and stage keep the caller's NGTERM_* build overrides (NGTERM_VENDOR, NGTERM_GHOSTTY_VT_PREFIX); the tests,
 # and so the instances and sshd they start, run with every NGTERM_* stripped, so nothing they start can reach an ngterm
@@ -139,8 +140,9 @@ reap() {
   local user
   user="$(id -un)"
   local session="$WORK/stage/bin/ngterm-session" root pid names
-  # the first test's instance, the machine that runs both apps and the server that views it
-  for root in "$WORK" "$WORK/b" "$WORK/v"; do
+  # the first test's instance, the catalog test's seeded one, the machine that runs both apps and the server that
+  # views it
+  for root in "$WORK" "$WORK/c" "$WORK/b" "$WORK/v"; do
     local private=(env -i "NGTERM_STATE_DIR=$root/s" "HOME=$root/home" "PATH=$WORK/stage/bin:/usr/bin:/bin"
       "USER=$user" "LOGNAME=$user" LANG=C.UTF-8)
     # an instrumented session client's profile goes to the pool, not to a default.profraw in the checkout
@@ -158,9 +160,9 @@ reap() {
       fi
     fi
   done
-  # the machine's sshd, the stand-in agterm Mac's and the both-apps machine's
+  # the machine's sshd, the seeded machine's, the stand-in agterm Mac's and the both-apps machine's
   local sshd
-  for sshd in "$WORK/sshd" "$WORK/agterm/sshd" "$WORK/b/sshd"; do
+  for sshd in "$WORK/sshd" "$WORK/c/sshd" "$WORK/agterm/sshd" "$WORK/b/sshd"; do
     [[ -s "$sshd/sshd.pid" ]] || continue
     pid="$(<"$sshd/sshd.pid")"
     if tr '\0' ' ' 2>/dev/null <"/proc/$pid/cmdline" | grep -qF "$sshd/sshd_config"; then

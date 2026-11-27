@@ -216,12 +216,12 @@ fn a_lost_reply_leaves_the_outcome_unknown(world: &World, phone: &mut Client) {
     let stopped = Stopped::new(world.headless.child.id());
     let creating =
         thread::spawn(move || block_on(core.create_session(MACHINE_ID.to_owned(), Some("e2e-lost".to_owned()))));
+    let before = receipts(world).len();
     let state = world.headless.private.state.clone();
-    poll("New Session in flight on the machine", || {
-        in_flight(&state).then_some(())
+    let command = poll("New Session in flight on the machine", || in_flight(&state));
+    poll("New Session's request queued at the stopped machine's socket", || {
+        request_queued(command).then_some(())
     });
-    // the command has reached the stopped machine's socket by now; then the reply is lost with the link
-    thread::sleep(std::time::Duration::from_millis(500));
     world.proxy.sever();
     let answer = creating.join().expect("the New Session thread");
     let expected = format!(
@@ -239,6 +239,16 @@ fn a_lost_reply_leaves_the_outcome_unknown(world: &World, phone: &mut Client) {
     phone.wait("the catalog connected again", |seen| {
         seen.catalog.last() == Some(&CatalogState::Connected)
     });
+    let applied = poll("the machine applied the lost New Session", || {
+        let receipts = receipts(world);
+        (receipts.len() > before).then_some(receipts)
+    });
+    assert_eq!(applied.len(), before + 1, "{applied:?}");
+    assert_eq!(applied.last().map(|(_, outcome)| outcome.as_str()), Some("applied"));
+    assert!(
+        origin_rows(world).iter().any(|(name, ..)| name == "e2e-lost"),
+        "the machine has no e2e-lost session"
+    );
     follow_the_origin(world, phone);
 }
 
@@ -422,16 +432,35 @@ fn processes() -> Vec<(u32, Vec<String>)> {
         .collect()
 }
 
-/// Whether an `ngtermctl session new` under an operation id runs against the instance of `state`.
-fn in_flight(state: &Path) -> bool {
+/// The pid of an `ngtermctl session new` under an operation id that runs against the instance of `state`.
+fn in_flight(state: &Path) -> Option<u32> {
     let ours = format!("NGTERM_STATE_DIR={}", state.display());
-    processes().into_iter().any(|(pid, words)| {
+    processes().into_iter().find_map(|(pid, words)| {
         let program = words.first().map(PathBuf::from);
-        program.is_some_and(|program| program.file_name().is_some_and(|name| name == "ngtermctl"))
+        (program.is_some_and(|program| program.file_name().is_some_and(|name| name == "ngtermctl"))
             && words.iter().any(|word| word == "--op-id")
             && words.iter().any(|word| word == "new")
             && fs::read(format!("/proc/{pid}/environ"))
-                .is_ok_and(|environ| environ.split(|byte| *byte == 0).any(|entry| entry == ours.as_bytes()))
+                .is_ok_and(|environ| environ.split(|byte| *byte == 0).any(|entry| entry == ours.as_bytes())))
+        .then_some(pid)
+    })
+}
+
+/// Whether a connected Unix socket of `pid` has bytes its peer has not read (`ss`'s Send-Q): the request waits in
+/// the stopped machine's socket.
+fn request_queued(pid: u32) -> bool {
+    let Ok(output) = Command::new("ss").args(["-xpH"]).output() else {
+        return false;
+    };
+    let owner = format!("pid={pid},");
+    String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+        let columns: Vec<&str> = line.split_whitespace().collect();
+        line.contains(&owner)
+            && columns.get(1) == Some(&"ESTAB")
+            && columns
+                .get(3)
+                .and_then(|queued| queued.parse::<u64>().ok())
+                .is_some_and(|queued| queued > 0)
     })
 }
 
