@@ -1,17 +1,11 @@
 package com.nickalie.ngterm.android.e2e
 
-import androidx.compose.ui.test.hasAnyAncestor
-import androidx.compose.ui.test.hasContentDescription
-import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isDialog
-import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.nickalie.ngterm.android.R
-import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.CONNECT_WAIT_MS
-import com.nickalie.ngterm.android.e2e.SessionLinkDriver.Companion.MACHINE
+import com.nickalie.ngterm.android.e2e.CatalogDriving.SHOWS
+import com.nickalie.ngterm.android.e2e.CatalogDriving.awaitNoRow
+import com.nickalie.ngterm.android.e2e.CatalogDriving.awaitRow
+import com.nickalie.ngterm.android.e2e.CatalogDriving.openTheMachine
+import com.nickalie.ngterm.android.e2e.CatalogDriving.renameOnThePhone
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -45,40 +39,21 @@ class CatalogListE2eTest {
             openANewSession(session)
             run(
                 "ngtermctl session new --no-select --name $signal >/dev/null\n" +
-                    // five minutes outlast the phone's waits in each window; a failed run leaves no poller
-                    "shows() { n=0; until ngtermctl tree | grep -qF -- \"\$1\"; do " +
-                    "n=\$((n+1)); [ \$n -gt 300 ] && return 1; sleep 1; done; }\n" +
+                    SHOWS +
                     "(shows $opened && id=\$(ngtermctl session new --no-select --name $made) && " +
                     "shows $seen && ngtermctl session rename --target \"\$id\" $renamed) >/dev/null 2>&1 &\n" +
                     "echo catalog-armed\n",
             )
             awaitTerminal("catalog-armed")
-            // the session view fills the screen: Back shows the destinations again
-            compose.onNode(hasContentDescription(text(R.string.action_back))).performClick()
-            awaitText(text(R.string.nav_machines))
-            compose.onAllNodesWithText(text(R.string.nav_machines))[0].performClick()
-            awaitText(MACHINE)
-            compose.onNodeWithText(MACHINE).performClick()
-            awaitText(signal)
+            openTheMachine()
+            awaitRow(signal)
 
             renameOnThePhone(signal, opened)
-            awaitText(made)
+            awaitRow(made)
             screenshot("catalog-made")
             renameOnThePhone(opened, seen)
-            awaitText(renamed)
-            compose.waitUntil(CONNECT_WAIT_MS) { nodes(hasText(made)) == 0 }
+            awaitRow(renamed)
+            awaitNoRow(made)
             screenshot("catalog-renamed")
         }
-
-    private fun SessionLinkDriver.renameOnThePhone(
-        from: String,
-        to: String,
-    ) {
-        compose.onNode(more(from)).performClick()
-        compose.onNodeWithText(text(R.string.machine_sessions_rename)).performClick()
-        compose.onNode(hasText(from) and hasAnyAncestor(isDialog())).performTextReplacement(to)
-        compose.onNode(hasText(text(R.string.rename_session_save)) and hasAnyAncestor(isDialog())).performClick()
-        awaitText(to)
-        compose.waitUntil(CONNECT_WAIT_MS) { nodes(hasText(from)) == 0 }
-    }
 }
