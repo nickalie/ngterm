@@ -10,6 +10,7 @@ import com.nickalie.ngterm.android.data.MachinePeer
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.data.reason
+import com.nickalie.ngterm.core.ffi.CatalogState
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.RemoteSession
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +51,8 @@ data class MachineSessions(
     val peer: MachinePeer? = null,
     // the app of each session that isn't ngterm's, by session id: a machine may run both
     val sessionPeers: Map<String, MachinePeer> = emptyMap(),
+    // where the machine's catalog stream is; null for a machine with no catalog
+    val catalog: CatalogState? = null,
 )
 
 /** What a machine's sessions screen shows. */
@@ -65,6 +68,14 @@ sealed interface SessionsUiState {
     ) : SessionsUiState
 }
 
+/** The Rename session dialog while it is open on [sessionId]: whether the rename is [running], why it [failed]. */
+data class RenameState(
+    val sessionId: String,
+    val name: String,
+    val running: Boolean = false,
+    val failed: String? = null,
+)
+
 /** The New session dialog while it is open: whether the create is [running], and why the last one [failed]. */
 data class NewSessionState(
     val running: Boolean = false,
@@ -74,7 +85,7 @@ data class NewSessionState(
 /**
  * A machine's sessions: its listing with each session's status and whether this app has it attached, refreshing it,
  * New session (named or not; the dialog's state lives here so a rotation keeps a create under way), Duplicate session
- * (landing as New session does), End session,
+ * (landing as New session does), Rename session, End session,
  * attaching and detaching. [opened] lists the machine afresh. [notice] carries what a list can't show (a create, an
  * End or an attach that failed) for a snackbar.
  */
@@ -86,11 +97,15 @@ class SessionsViewModel(
     private val refreshing = MutableStateFlow(false)
     private val ending = MutableStateFlow<Set<String>>(emptySet())
     private val newSession = MutableStateFlow<NewSessionState?>(null)
+    private val renames = MutableStateFlow<RenameState?>(null)
     private val lands = MutableStateFlow<SessionKey?>(null)
     private val notices = MutableStateFlow<String?>(null)
 
     // which opening of the New session dialog is showing (main thread): a create answers only the dialog it began in
     private var dialog = 0
+
+    // the same for the Rename session dialog
+    private var renameDialog = 0
     private val connections = graph.connections
 
     private val machine =
@@ -102,19 +117,33 @@ class SessionsViewModel(
             connections.trees,
             combine(connections.treeFailures, connections.hints, ::Pair),
             connections.attached,
-            combine(graph.chats.chatViewItems, connections.peers, connections.sessionPeers, ::Triple),
-        ) { links, trees, (failures, hints), attached, (chatViews, peers, sessionPeers) ->
+            combine(
+                graph.chats.chatViewItems,
+                connections.peers,
+                connections.sessionPeers,
+                connections.catalogs,
+                ::Peers,
+            ),
+        ) { links, trees, (failures, hints), attached, peers ->
             Live(
                 links[machineId] ?: Link.Offline,
                 trees[machineId],
                 failures[machineId],
                 attached[machineId].orEmpty(),
-                chatViews,
-                peers[machineId],
-                sessionPeers.filterKeys { it.machineId == machineId }.mapKeys { it.key.sessionId },
+                peers.chatViews,
+                peers.peers[machineId],
+                peers.sessionPeers.filterKeys { it.machineId == machineId }.mapKeys { it.key.sessionId },
                 hints[machineId],
+                peers.catalogs[machineId],
             )
         }
+
+    private data class Peers(
+        val chatViews: ChatViews,
+        val peers: Map<String, MachinePeer>,
+        val sessionPeers: Map<SessionKey, MachinePeer>,
+        val catalogs: Map<String, CatalogState>,
+    )
 
     private data class Live(
         val link: Link,
@@ -125,6 +154,7 @@ class SessionsViewModel(
         val peer: MachinePeer?,
         val sessionPeers: Map<String, MachinePeer>,
         val hint: String?,
+        val catalog: CatalogState?,
     )
 
     private val creates = graph.creates
@@ -158,11 +188,15 @@ class SessionsViewModel(
                         peer = live.peer,
                         sessionPeers = live.sessionPeers,
                         hint = live.hint,
+                        catalog = live.catalog,
                     ),
                 )
             }
         }.catch { emit(SessionsUiState.Gone) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, SessionsUiState.Loading)
+
+    /** The Rename session dialog, or null while it is closed. */
+    val renaming: StateFlow<RenameState?> = renames.asStateFlow()
 
     /** The New session dialog, or null while it is closed. */
     val creating: StateFlow<NewSessionState?> = newSession.asStateFlow()
@@ -291,6 +325,44 @@ class SessionsViewModel(
         lands.value = null
     }
 
+    /** Opens the Rename session dialog on [sessionId], its field holding the session's name. */
+    fun openRename(sessionId: String) {
+        if (renames.value != null) return
+        val session = listed(sessionId) ?: return
+        renameDialog += 1
+        renames.value = RenameState(sessionId, session.name)
+    }
+
+    /** Closes the Rename session dialog; a rename under way goes on, and its failure goes to the snackbar. */
+    fun closeRename() {
+        renameDialog += 1
+        renames.value = null
+    }
+
+    /** Renames the dialog's session to [name]: the dialog closes once it is done, or shows why it failed. */
+    fun rename(name: String) {
+        val open = renames.value ?: return
+        if (open.running || name.isBlank()) return
+        val mine = renameDialog
+        renames.value = open.copy(running = true, failed = null)
+        viewModelScope.launch {
+            try {
+                connections.renameSession(machineId, open.sessionId, name)
+                if (renameDialog == mine) renames.value = null
+            } catch (error: MobileException) {
+                val reason = error.reason()
+                if (renameDialog == mine) {
+                    renames.update { it?.copy(running = false, failed = reason) }
+                } else {
+                    notices.value = reason
+                }
+            }
+        }
+    }
+
+    private fun listed(sessionId: String): RemoteSession? =
+        (state.value as? SessionsUiState.Ready)?.sessions?.sessions?.firstOrNull { it.id == sessionId }
+
     /** Ends the session [sessionId] there, with no undo (the screen confirms first). */
     fun end(sessionId: String) {
         if (sessionId in ending.value) return
@@ -306,11 +378,12 @@ class SessionsViewModel(
         }
     }
 
-    /** Attaches the session [sessionId], then runs [onAttached]. */
+    /** Attaches the session [sessionId], then runs [onAttached]; an ended session or a page row is not attached. */
     fun attach(
         sessionId: String,
         onAttached: () -> Unit = {},
     ) {
+        if (listed(sessionId)?.attachable == false) return
         viewModelScope.launch {
             try {
                 connections.attach(machineId, sessionId)

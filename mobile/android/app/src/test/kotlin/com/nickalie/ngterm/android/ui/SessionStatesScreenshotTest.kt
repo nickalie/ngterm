@@ -9,7 +9,11 @@ import com.github.takahirom.roborazzi.captureScreenRoboImage
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.ui.sessions.NewSessionDialog
 import com.nickalie.ngterm.android.ui.sessions.NewSessionState
+import com.nickalie.ngterm.android.ui.sessions.RenameSessionDialog
+import com.nickalie.ngterm.android.ui.sessions.RenameState
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.CatalogState
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,8 +26,9 @@ private const val PHONE_NIGHT = "w411dp-h891dp-night-xhdpi"
 
 /**
  * A machine's sessions in its other states (empty, reading, not connected, offline, unreachable, ngtermctl missing, a
- * failed refresh over the list, an agterm outside Live sessions mode), a New session under way and the New session
- * dialog, on a phone in light and dark.
+ * failed refresh over the list, an agterm outside Live sessions mode, a headless machine's catalog with its ended and
+ * page rows while its stream is down), a New session under way and the New session and Rename session dialogs, on a
+ * phone in light and dark.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -51,6 +56,27 @@ class SessionStatesScreenshotTest {
                 "agterm on build-01 is not in Live sessions mode: set Settings > General > Restore sessions to Live " +
                     "sessions and restart agterm; only sessions started after that can be attached",
         )
+
+    private val catalog =
+        SampleSessions.copy(
+            sessions =
+                SampleSessions.sessions.orEmpty() +
+                    listOf(
+                        fakeSession("s6", name = "migrate-db").copy(cwd = "/srv/app", ended = true),
+                        fakeSession("p1", name = "release-notes.md").copy(cwd = "", page = "file"),
+                        fakeSession("p2", name = "grafana").copy(cwd = "", page = "url"),
+                    ),
+            ending = emptySet(),
+            catalog = CatalogState.Disconnected("connection reset by peer"),
+        )
+
+    @Test
+    @Config(qualifiers = PHONE)
+    fun catalogLight() = capture("machine_sessions_catalog_light") { SessionsSample(catalog) }
+
+    @Test
+    @Config(qualifiers = PHONE_NIGHT)
+    fun catalogDark() = capture("machine_sessions_catalog_dark") { SessionsSample(catalog) }
 
     @Test
     @Config(qualifiers = PHONE)
@@ -134,5 +160,22 @@ class SessionStatesScreenshotTest {
         }
         compose.waitForIdle()
         captureScreenRoboImage("src/test/screenshots/screens/new_session_failed.png")
+    }
+
+    @OptIn(ExperimentalRoborazziApi::class)
+    @Test
+    fun renameSessionDialog() {
+        compose.setContent {
+            NgtermTheme {
+                Ground { SessionsSample(SampleSessions) }
+                RenameSessionDialog(
+                    state = RenameState("s3", "docs-site", failed = "build-01 did not run Rename docs-site"),
+                    onRename = {},
+                    onDismiss = {},
+                )
+            }
+        }
+        compose.waitForIdle()
+        captureScreenRoboImage("src/test/screenshots/screens/rename_session_failed.png")
     }
 }

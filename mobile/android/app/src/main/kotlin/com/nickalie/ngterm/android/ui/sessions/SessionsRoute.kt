@@ -23,10 +23,11 @@ import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.data.SessionKey
 
 /**
- * A machine's sessions, over its [SessionsViewModel]: the list, the New named session dialog and the snackbar for what
- * failed out of sight (a create, an End, an attach). It lists the machine afresh when it opens (not again on a
- * rotation), and goes [onBack] when the machine is removed meanwhile. [onReviewHostKey] opens the changed-key stop;
- * tapping a session attaches it and opens its view ([onOpenSession]), as New session does with the one it creates.
+ * A machine's sessions, over its [SessionsViewModel]: the list, the New named session and Rename session dialogs and
+ * the snackbar for what failed out of sight (a create, an End, an attach, a rename whose dialog was closed). It lists
+ * the machine afresh when it opens (not again on a rotation), and goes [onBack] when the machine is removed meanwhile.
+ * [onReviewHostKey] opens the changed-key stop; tapping a session attaches it and opens its view ([onOpenSession]), as
+ * New session does with the one it creates.
  */
 @Composable
 fun SessionsRoute(
@@ -40,6 +41,7 @@ fun SessionsRoute(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val creating by viewModel.creating.collectAsStateWithLifecycle()
+    val renaming by viewModel.renaming.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val landing by viewModel.landing.collectAsStateWithLifecycle()
@@ -76,6 +78,9 @@ fun SessionsRoute(
                     onDismiss = viewModel::closeNewSession,
                 )
             }
+            renaming?.let {
+                RenameSessionDialog(state = it, onRename = viewModel::rename, onDismiss = viewModel::closeRename)
+            }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
     }
@@ -103,6 +108,7 @@ private fun rememberActions(
             onDetach = viewModel::detach,
             onEnd = viewModel::end,
             onDuplicate = viewModel::duplicate,
+            onRename = viewModel::openRename,
             onChatView = viewModel::setChatView,
         )
     }

@@ -190,14 +190,19 @@ private fun NoteAndAction(
     }
 }
 
-/** The sessions' aggregate status: a badge per status the origin reports, with how many sessions have it. */
+/**
+ * The sessions' aggregate status: a badge per status the origin reports, with how many sessions have it, then the idle
+ * and the ended ones. A page row is no terminal session, so it is not counted.
+ */
 @Composable
-private fun Sessions(sessions: List<RemoteSession>) {
+private fun Sessions(listed: List<RemoteSession>) {
+    val sessions = listed.filter { it.page == null }
     if (sessions.isEmpty()) {
         Note(stringResource(R.string.machine_no_sessions))
         return
     }
-    val (withStatus, idle) = sessions.partition { !it.status.isNullOrBlank() }
+    val (ended, live) = sessions.partition { it.ended }
+    val (withStatus, idle) = live.partition { !it.status.isNullOrBlank() }
     withStatus.groupBy { it.status.orEmpty() }.forEach { (status, group) ->
         val first = group.first()
         AgentStatusBadge(
@@ -211,6 +216,12 @@ private fun Sessions(sessions: List<RemoteSession>) {
         StatusBadge(
             StatusTone.Idle,
             label = pluralStringResource(R.plurals.machine_idle_sessions, idle.size, idle.size),
+        )
+    }
+    if (ended.isNotEmpty()) {
+        StatusBadge(
+            StatusTone.Offline,
+            label = pluralStringResource(R.plurals.machine_ended_sessions, ended.size, ended.size),
         )
     }
 }

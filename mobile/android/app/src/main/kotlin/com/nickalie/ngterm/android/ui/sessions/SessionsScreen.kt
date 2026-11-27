@@ -51,20 +51,17 @@ import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.badge
 import com.nickalie.ngterm.android.ui.NavLayout
-import com.nickalie.ngterm.android.ui.components.Banner
 import com.nickalie.ngterm.android.ui.components.ConfirmDialog
 import com.nickalie.ngterm.android.ui.components.EmptyState
 import com.nickalie.ngterm.android.ui.components.ErrorState
 import com.nickalie.ngterm.android.ui.components.OfflineState
 import com.nickalie.ngterm.android.ui.components.PanelAction
 import com.nickalie.ngterm.android.ui.components.PeerBadge
-import com.nickalie.ngterm.android.ui.components.SectionAction
 import com.nickalie.ngterm.android.ui.components.SectionHeader
 import com.nickalie.ngterm.android.ui.currentNavLayout
 import com.nickalie.ngterm.android.ui.machines.countdown
 import com.nickalie.ngterm.android.ui.session.EndSessionDialog
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
-import com.nickalie.ngterm.android.ui.theme.StatusTone
 
 /**
  * A machine's sessions: a top row with Back, the machine's name (with its app's [PeerBadge] when that isn't ngterm)
@@ -244,29 +241,6 @@ private fun Waiting(
     }
 }
 
-// what is said over the list or the empty state: the device is offline, the last refresh failed, why agterm there
-// lists nothing (the fix is on the machine, so it has no action: a refresh lists again once it is made)
-@Composable
-private fun Banners(
-    offline: Boolean,
-    failure: String?,
-    hint: String?,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(NgtermTheme.spacing.sm)) {
-        if (offline) Banner(StatusTone.Offline, stringResource(R.string.machines_offline))
-        if (failure != null) {
-            Banner(
-                tone = StatusTone.Error,
-                message = stringResource(R.string.machine_sessions_failed_banner, failure),
-                action = SectionAction(stringResource(R.string.action_retry), onRetry),
-            )
-        }
-        if (hint != null) Banner(StatusTone.Attention, hint)
-    }
-}
-
 // no sessions: the invitation to start one, centered under what the banners say; the two scroll as one when they are
 // taller than the window (a long hint at a large font scale), and the scroller lets pull to refresh work
 @Composable
@@ -291,7 +265,7 @@ private fun Empty(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             val wide = Modifier.widthIn(max = spacing.readableWidth)
-            Banners(state.offline, failure, state.hint, actions.onRefresh, wide)
+            Banners(state, failure, actions.onRefresh, wide)
             Spacer(Modifier.weight(1f))
             EmptyState(
                 icon = R.drawable.ic_sessions,
@@ -335,13 +309,16 @@ private fun Listing(
         contentPadding = PaddingValues(horizontal = gutter(), vertical = spacing.sm),
         verticalArrangement = Arrangement.spacedBy(spacing.xs),
     ) {
-        if (state.offline || body.failure != null || state.hint != null) {
+        if (state.banners || body.failure != null) {
             item(key = "banners") {
-                Banners(state.offline, body.failure, state.hint, actions.onRefresh, wide.padding(bottom = spacing.sm))
+                Banners(state, body.failure, actions.onRefresh, wide.padding(bottom = spacing.sm))
             }
         }
-        group(attached, body.attached, actions, onAskEnd, wide)
-        group(others, body.others, actions, onAskEnd, wide)
+        val entry = @Composable { line: SessionLine, rowModifier: Modifier ->
+            SessionEntry(line, name, actions, { onAskEnd(line.session.id) }, rowModifier)
+        }
+        group(attached, body.attached, wide, entry)
+        group(others, body.others, wide, entry)
         item(key = "end") { Box(Modifier.heightIn(min = spacing.xxxl)) }
     }
 }
@@ -349,15 +326,14 @@ private fun Listing(
 private fun LazyListScope.group(
     title: String,
     lines: List<SessionLine>,
-    actions: SessionActions,
-    onAskEnd: (String) -> Unit,
     modifier: Modifier,
+    entry: @Composable (SessionLine, Modifier) -> Unit,
 ) {
     if (lines.isEmpty()) return
     item(key = "header:$title") {
         SectionHeader(title = title, count = lines.size, modifier = modifier.animateItem())
     }
     items(lines, key = { it.session.id }) { line ->
-        SessionEntry(line, actions, { onAskEnd(line.session.id) }, modifier.animateItem())
+        entry(line, modifier.animateItem())
     }
 }

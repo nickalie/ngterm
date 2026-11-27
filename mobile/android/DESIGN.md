@@ -182,8 +182,9 @@ white on nothing, as Android masks it. The status glyphs are 16dp filled or stro
 | `BusBar` | the copper bar marking where you are |
 | `StatusGlyph`, `StatusBadge`, `AgentStatusBadge` | a status's glyph; glyph and word for an app tone; for an origin's status |
 | `MachineCard` | a machine: name, mono address (with its app's `PeerBadge` beside it, moving under it when both don't fit), connection badge, and a summary slot for its sessions' status |
+| `OutlineTag` | a fact about a thing as a word: `labelMedium`, on-surface-variant ink, inside a 1dp `outline` hairline at the badges' 6dp radius; no fill and no status color. `PeerBadge` is one; a page row's kind ("File page", "Web page") is another |
 | `PeerBadge` | the app a machine runs when it isn't ngterm ("agterm"): the word in `labelMedium`, on-surface-variant ink, inside a 1dp `outline` hairline at the badges' 6dp radius; no fill and no status color, since it is a fact about the machine, not a state or a place. With the app's note it takes a tap (48dp target) or a long press and shows the note in a rich tooltip under it, titled with the word; TalkBack reads "agterm. Attached from agterm: …" with the action "Show what it lacks". Without one it is a plain label |
-| `SessionRow` | a session: name, context or companion line (a machine's list indents every companion; Sessions only one under its attached parent), status slot, its app's `PeerBadge` as a plain label when the machine's own app is another, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Duplicate session, Chat view, End session) |
+| `SessionRow` | a session: name, context or companion line (a machine's list indents every companion; Sessions only one under its attached parent), status slot, its app's `PeerBadge` as a plain label when the machine's own app is another, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Duplicate session, Chat view, Rename session, End session). A row that is not `enabled` (an ended session, a page) takes no tap and draws its name in on-surface-variant ink; its menu still works |
 | `SectionHeader` | a group's heading with an optional count and one text action |
 | `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it (busy while it runs: a small spinner, no taps); at most one quieter text-button action under it, for a retry after the fix the main one points to. The action is left out only while the same one shows right beside the panel (a banner's). Compact, for a window its host knows to be short: no icon, the title in `titleLarge`, 8dp between the parts; it scrolls itself when even that does not fit |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
@@ -280,7 +281,8 @@ reading, not a poster), the mark on top of the welcome.
   the end of the line: Not connected / Connect, The connection dropped / Retry now (the badge counts down "in 4 s"),
   the core's reason / Retry, Host key changed / Review, Waiting for sign-in (the attention diamond) / "Sign in at its
   link to connect" with no action, as the sheet over the app carries it. Connected shows the sessions' status instead: a badge per
-  status the origin reports with how many have it ("2 working"), then "1 idle". Tapping a card opens the machine's
+  status the origin reports with how many have it ("2 working"), then "1 idle", then "1 ended" (the Offline glyph); a
+  page row is no terminal session and is not counted. Tapping a card opens the machine's
   sessions; its More menu holds Connect or Disconnect, Edit and Remove (in the error color).
 - **States:** a spinner while the list is read; an error with Retry when it can't be; the empty state with Add
   machine; an offline banner over the list while the device has no network.
@@ -370,6 +372,21 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
   machine creates and lists it the button says Creating with a spinner and the field holds still; Cancel closes the
   dialog and the create goes on. A failed create shows under the field, in the core's words, and the name stays for
   another try; once created, the session lands as a one-tap New session's does.
+- **Rename session** (a row's More menu) opens a dialog over the list: "Rename docs-site", one Name field that starts
+  with the name selected, Rename and Cancel. Rename takes no blank name. While the machine renames it the button says
+  Renaming with a spinner and the field holds still; a failure shows under the field in the core's words (an unknown
+  outcome included), and the text stays for another try. Once renamed the dialog closes and the row takes the name the
+  list brings. A rename whose dialog was closed meanwhile reports its failure in a snackbar.
+- **A headless machine's catalog:** the list of an `ngterm-headless` machine follows its catalog live, with no
+  refresh. While the catalog is not live, a `Banner` over the list says so in upstream's words, with no action, as
+  the core retries by itself: "Connecting to build-01…" in the Connecting tone, "Disconnected: REASON. Retrying." in
+  the Offline tone (the rows shown are the last ones), and a refusal's reason in the Error tone (the machine keeps its
+  plain listing). It sits under the offline and failed-refresh banners and over the agterm hint.
+- **Ended and page rows:** an ended session stays listed until it is closed. Its row is not `enabled` and shows "Ended
+  on build-01" with the Offline glyph in place of its status. A page row (a file or a URL the machine shows in a
+  window) has its kind as an `OutlineTag` ("File page", "Web page") in the status slot and "Open it in ngterm on a
+  desktop" as its line; it is not `enabled` either. Neither is attached: their menus hold Rename session and End
+  session only (and Detach when an ended session is still attached).
 - **End session** confirms ("End docs-site?", "It stops on build-01, with everything running in it. This can't be
   undone.", End session in the error color). A failed End or attach is a snackbar in the core's words.
 - **States**, each a `MessagePanel` in place of the list: connecting and reading are a spinner with what is under

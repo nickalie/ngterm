@@ -113,4 +113,11 @@ class SessionsBodyTest {
         assertFalse(isMissingCli("build-01 gave no answer; nothing was created"))
         assertFalse(isMissingCli("session not found"))
     }
+
+    @Test
+    fun anEndedSessionAndAPageRowAreNotAttachable() {
+        assertTrue(fakeSession("s1").attachable)
+        assertFalse(fakeSession("s1").copy(ended = true).attachable)
+        assertFalse(fakeSession("p1").copy(page = "file").attachable)
+    }
 }

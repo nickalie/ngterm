@@ -43,6 +43,9 @@ data class SessionLine(
     val peer: String? = null,
 )
 
+/** Whether the session shows a terminal this app can attach: an ended session and a page row do not. */
+val RemoteSession.attachable: Boolean get() = !ended && page == null
+
 /** What the body of a machine's sessions screen is, by its link and its listing. */
 sealed interface SessionsBody {
     /** Connecting, or waiting for the host-key answer the sheet over the app asks for. */
@@ -161,4 +164,5 @@ data class SessionActions(
     val onChatView: (String, Boolean) -> Unit = { _, _ -> },
     val onNewNamedSession: () -> Unit = {},
     val onDuplicate: (String) -> Unit = {},
+    val onRename: (String) -> Unit = {},
 )

@@ -41,7 +41,7 @@ fun PeerBadge(
     note: String? = null,
 ) {
     if (note == null) {
-        Label(word, modifier.semantics { contentDescription = word })
+        OutlineTag(word, modifier.semantics { contentDescription = word })
         return
     }
     val state = rememberTooltipState(isPersistent = true)
@@ -67,13 +67,17 @@ fun PeerBadge(
                     ).semantics { contentDescription = description },
             contentAlignment = Alignment.Center,
         ) {
-            Label(word, Modifier.clearAndSetSemantics {})
+            OutlineTag(word, Modifier.clearAndSetSemantics {})
         }
     }
 }
 
+/**
+ * A fact about a thing as a word in dim ink inside a hairline outline: no fill and no status color. [PeerBadge] is one,
+ * and a page row's kind ("File page") is another.
+ */
 @Composable
-private fun Label(
+fun OutlineTag(
     word: String,
     modifier: Modifier = Modifier,
 ) {

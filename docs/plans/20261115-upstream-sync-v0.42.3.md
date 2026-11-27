@@ -915,7 +915,7 @@ actions carry operation ids; a page row is listed as a page, never attached as a
 
 - [ ] `ngterm-mobile`: the catalog client with reconnect from a fresh snapshot, receipts for New Session, rename
   and End Session, an unknown outcome reported; a non-headless origin keeps the listing it has; tests on its fakes.
-- [ ] Android: the list updates live, shows Ended and Disconnected states and a page row's kind, inside
+- [x] Android: the list updates live, shows Ended and Disconnected states and a page row's kind, inside
   `DESIGN.md`, with JVM tests and an emulator check against a loopback `ngterm-headless`.
 - [ ] iOS: the same inside its `DESIGN.md`, with unit tests and a simulator check.
 

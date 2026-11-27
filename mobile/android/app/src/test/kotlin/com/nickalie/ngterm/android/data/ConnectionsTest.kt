@@ -7,6 +7,7 @@ import com.nickalie.ngterm.core.fake.SIGN_IN_UNFINISHED
 import com.nickalie.ngterm.core.fake.TailscaleSignIn
 import com.nickalie.ngterm.core.fake.fakePeerCapabilities
 import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.CatalogState
 import com.nickalie.ngterm.core.ffi.HostKeyStore
 import com.nickalie.ngterm.core.ffi.Machine
 import com.nickalie.ngterm.core.ffi.MachineState
@@ -508,5 +509,50 @@ class ConnectionsTest {
             assertEquals("api", core.calls.last { it.method == "createSession" }.args[1])
             connections.endSession("m1", created.id)
             assertEquals(listOf("api"), connections.trees.value["m1"]?.map { it.name })
+        }
+
+    @Test
+    fun aCatalogsStateStaysUntilTheMachineIsDisconnectedOrEdited() =
+        runTest {
+            val connections = connections()
+            connections.connect(machine)
+            advanceUntilIdle()
+            assertEquals(null, connections.catalogs.value["m1"])
+            core.emit(MobileEvent.Catalog("m1", CatalogState.Connecting))
+            assertEquals(CatalogState.Connecting, connections.catalogs.value["m1"])
+            core.emit(MobileEvent.Catalog("m1", CatalogState.Disconnected("connection reset")))
+            assertEquals(CatalogState.Disconnected("connection reset"), connections.catalogs.value["m1"])
+
+            connections.connect(machine.copy(host = "build-02.lan"))
+            assertEquals(null, connections.catalogs.value["m1"])
+            advanceUntilIdle()
+            core.emit(MobileEvent.Catalog("m1", CatalogState.Refused("too old")))
+            connections.disconnect("m1")
+            assertEquals(null, connections.catalogs.value["m1"])
+        }
+
+    @Test
+    fun aCatalogsRowsReplaceTheListAsTheyArrive() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "api"))
+            connections.connect(machine)
+            advanceUntilIdle()
+            val ended = fakeSession("s1", name = "api").copy(ended = true)
+            val page = fakeSession("p1", name = "notes.md").copy(page = "file")
+            core.emit(MobileEvent.Tree("m1", listOf(ended, page), null))
+            assertEquals(listOf(ended, page), connections.trees.value["m1"])
+        }
+
+    @Test
+    fun aRenameGoesToTheCoreTrimmedAndItsListingNamesTheSession() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "api"))
+            connections.connect(machine)
+            advanceUntilIdle()
+            connections.renameSession("m1", "s1", "  billing  ")
+            assertEquals(listOf("m1", "s1", "billing"), core.calls.last { it.method == "renameSession" }.args)
+            assertEquals(listOf("billing"), connections.names())
         }
 }

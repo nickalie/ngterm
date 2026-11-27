@@ -24,6 +24,7 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 /**
  * [peer] is the app the session is one of when its machine's own is another (`PeerBadge`, a plain label here: the
  * row's tap attaches, and the session bar gives the app's note).
+ * [enabled] false makes a row that takes no tap and reads dimmed (an ended session, a page): its menu still works.
  * [nested] is separate from [companionOf] because Sessions indents a companion only under its attached parent, so one
  * whose parent isn't attached never reads as another session's; a machine's list indents every companion.
  */
@@ -38,6 +39,7 @@ fun SessionRow(
     companionOf: String? = null,
     nested: Boolean = companionOf != null,
     peer: String? = null,
+    enabled: Boolean = true,
     menu: (@Composable () -> Unit)? = null,
     status: @Composable () -> Unit = {},
 ) {
@@ -48,7 +50,7 @@ fun SessionRow(
                 .fillMaxWidth()
                 .heightIn(min = spacing.touchTarget + spacing.sm)
                 .clip(MaterialTheme.shapes.medium)
-                .selectable(selected = selected, role = Role.Button, onClick = onClick)
+                .selectable(selected = selected, enabled = enabled, role = Role.Button, onClick = onClick)
                 .padding(end = if (menu != null) spacing.xs else spacing.lg),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -61,7 +63,12 @@ fun SessionRow(
             Text(
                 text = name,
                 style = MaterialTheme.typography.titleSmall,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                color =
+                    when {
+                        selected -> MaterialTheme.colorScheme.primary
+                        enabled -> MaterialTheme.colorScheme.onSurface
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

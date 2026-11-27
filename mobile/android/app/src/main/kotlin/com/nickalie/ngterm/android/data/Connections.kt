@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.data
 
+import com.nickalie.ngterm.core.ffi.CatalogState
 import com.nickalie.ngterm.core.ffi.EventSink
 import com.nickalie.ngterm.core.ffi.Machine
 import com.nickalie.ngterm.core.ffi.MachineState
@@ -94,6 +95,7 @@ class Connections(
     private val attachedState = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
     private val peerState = MutableStateFlow<Map<String, MachinePeer>>(emptyMap())
     private val sessionPeerState = MutableStateFlow<Map<SessionKey, MachinePeer>>(emptyMap())
+    private val catalogState = MutableStateFlow<Map<String, CatalogState>>(emptyMap())
 
     // the record each machine was last connected with (main thread): a connect with another replaces the connection
     private val records = mutableMapOf<String, Machine>()
@@ -154,6 +156,13 @@ class Connections(
     /** The app of each listed session that isn't ngterm's; a session not here is ngterm's. */
     val sessionPeers: StateFlow<Map<SessionKey, MachinePeer>> = sessionPeerState.asStateFlow()
 
+    /**
+     * Where each headless machine's catalog stream is, by id, as the core last said: its [trees] follow the catalog
+     * live while it is [CatalogState.Connected]. A machine not here has no catalog: one with windows, or one not
+     * connected.
+     */
+    val catalogs: StateFlow<Map<String, CatalogState>> = catalogState.asStateFlow()
+
     // the app's other parts that take the core's events (clipboard reads, panes), called on the core's thread
     private val listeners = CopyOnWriteArrayList<(MobileEvent) -> Unit>()
 
@@ -168,6 +177,7 @@ class Connections(
             is MobileEvent.SignInRequested -> signInRequested(event.machineId, event.message, event.url)
             is MobileEvent.Tree -> listed(event.machineId, event.sessions, event.hint)
             is MobileEvent.SessionName -> named(event.machineId, event.sessionId, event.name)
+            is MobileEvent.Catalog -> catalogState.update { it + (event.machineId to event.state) }
             else -> Unit
         }
         listeners.forEach { it(event) }
@@ -369,6 +379,7 @@ class Connections(
             bump(machineId)
             forgetPeers(machineId)
         }
+        catalogState.update { it - machineId }
         attachedState.value[machineId].orEmpty().forEach { detach(machineId, it) }
     }
 
@@ -428,6 +439,17 @@ class Connections(
         core.endSession(machineId, sessionId)
         if (sessionId in attachedState.value[machineId].orEmpty()) detach(machineId, sessionId)
     }
+
+    /**
+     * Renames [sessionId] on [machineId] to [name] (trimmed); the listing with the new name arrives in [trees].
+     *
+     * @throws MobileException with the core's words when it could not.
+     */
+    suspend fun renameSession(
+        machineId: String,
+        sessionId: String,
+        name: String,
+    ) = core.renameSession(machineId, sessionId, name.trim())
 
     /**
      * Attaches [sessionId] of [machineId], a session of its last listing; attaching an attached one changes nothing.
@@ -490,6 +512,7 @@ class Connections(
             hintState.update { it - machineId }
             forgetPeers(machineId)
         }
+        catalogState.update { it - machineId }
         attachedState.update { it - machineId }
         streamNames.keys.removeIf { it.machineId == machineId }
     }

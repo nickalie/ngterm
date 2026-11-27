@@ -153,4 +153,27 @@ class MachineEntryTest {
         }
         compose.onNodeWithContentDescription("2 idle").assertExists()
     }
+
+    @Test
+    fun aPageRowIsNotCountedAndEndedSessionsAreCountedApart() {
+        item.value = item.value.copy(link = Link.Connected)
+        card()
+        compose.runOnIdle { item.value = item.value.copy(sessions = listOf(fakeSession("p").copy(page = "file"))) }
+        compose.onNodeWithText("No sessions").assertExists()
+        compose.runOnIdle {
+            item.value =
+                item.value.copy(
+                    sessions =
+                        listOf(
+                            fakeSession("a"),
+                            fakeSession("b").copy(ended = true),
+                            fakeSession("c").copy(ended = true, status = "active"),
+                            fakeSession("p").copy(page = "url"),
+                        ),
+                )
+        }
+        compose.onNodeWithContentDescription("1 idle").assertExists()
+        compose.onNodeWithContentDescription("2 ended").assertExists()
+        compose.onNodeWithContentDescription("1 working").assertDoesNotExist()
+    }
 }

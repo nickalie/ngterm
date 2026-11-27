@@ -11,6 +11,8 @@ import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.CatalogState
+import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -374,5 +376,55 @@ class SessionsViewModelTest {
         model.ready()
         runBlocking { test.graph.machines.delete("m1") }
         runBlocking { model.state.first { it == SessionsUiState.Gone } }
+    }
+
+    @Test
+    fun aRenameWhoseDialogClosedMeanwhileSaysWhyItFailedInTheSnackbar() {
+        connected("s1")
+        val model = model()
+        model.ready { it.sessions != null }
+        model.openRename("s1")
+        assertEquals(RenameState("s1", "s1"), model.renaming.value)
+        val held = CompletableDeferred<Unit>()
+        test.core.holds["renameSession"] = held
+        test.core.failNext("renameSession", MobileException.Remote("no such session"))
+        model.rename("api")
+        assertEquals(true, model.renaming.value?.running)
+        model.closeRename()
+        held.complete(Unit)
+        eventually { model.notice.value != null }
+        assertEquals("no such session", model.notice.value)
+        assertNull(model.renaming.value)
+    }
+
+    @Test
+    fun aBlankRenameIsNotSentAndADoneOneClosesTheDialog() {
+        connected("s1")
+        val model = model()
+        model.ready { it.sessions != null }
+        model.openRename("s1")
+        model.rename("  ")
+        assertEquals(RenameState("s1", "s1"), model.renaming.value)
+        model.rename("api")
+        eventually { model.renaming.value == null }
+        assertEquals(listOf("api"), model.ready { it.sessions?.firstOrNull()?.name == "api" }.sessions?.map { it.name })
+        // a session no longer listed opens no dialog
+        model.openRename("gone")
+        assertNull(model.renaming.value)
+    }
+
+    @Test
+    fun anEndedSessionOrAPageIsNotAttachedAndTheCatalogsStateIsTheScreens() {
+        connected("s1")
+        val model = model()
+        val rows = listOf(fakeSession("s1").copy(ended = true), fakeSession("p1").copy(page = "url"))
+        test.core.emit(MobileEvent.Tree("m1", rows, null))
+        test.core.emit(MobileEvent.Catalog("m1", CatalogState.Disconnected("reset")))
+        model.ready { it.sessions == rows && it.catalog == CatalogState.Disconnected("reset") }
+        var opened = 0
+        model.attach("s1") { opened += 1 }
+        model.attach("p1") { opened += 1 }
+        assertEquals(0, opened)
+        assertEquals(0, test.core.calls.count { it.method == "attachSession" })
     }
 }

@@ -10,16 +10,20 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.awaitDescription
 import com.nickalie.ngterm.android.awaitText
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.NavLayout
 import com.nickalie.ngterm.android.ui.NgtermApp
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.CatalogState
+import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -136,5 +140,73 @@ class SessionsFlowTest {
         compose.onNodeWithText("Detach").performClick()
         compose.awaitText("Nothing attached")
         assertEquals(null, test.connections.attached.value["m1"])
+    }
+
+    @Test
+    fun theCatalogsRowsShowLiveAndAnEndedOrPageRowIsNotAttached() {
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "build"))
+        openMachine()
+        compose.awaitText("build")
+        val rows =
+            listOf(
+                fakeSession("s1", name = "build").copy(ended = true),
+                fakeSession("p1", name = "notes.md").copy(page = "file"),
+            )
+        // the listing the screen makes as it opens may land after the catalog's rows: it brings the same ones
+        test.core.sessions["m1"] = rows.toMutableList()
+        test.core.emit(MobileEvent.Catalog("m1", CatalogState.Connected))
+        test.core.emit(MobileEvent.Tree("m1", rows, null))
+        compose.awaitDescription("Ended on build-01")
+        compose.onNodeWithText("File page").assertExists()
+        compose.onNodeWithText("build").performClick()
+        compose.onNodeWithText("notes.md").performClick()
+        compose.waitForIdle()
+        assertEquals(null, test.connections.attached.value["m1"])
+        assertEquals(0, test.core.calls.count { it.method == "attachSession" })
+        compose.onNodeWithContentDescription("More options for notes.md").performClick()
+        compose.onNodeWithText("Attach").assertDoesNotExist()
+        compose.onNodeWithText("Duplicate session").assertDoesNotExist()
+        compose.onNodeWithText("Rename session").assertExists()
+        compose.onNodeWithText("End session").assertExists()
+    }
+
+    @Test
+    fun theCatalogsStateShowsOverTheList() {
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "build"))
+        openMachine()
+        compose.awaitText("build")
+        test.core.emit(MobileEvent.Catalog("m1", CatalogState.Connecting))
+        compose.awaitText("Connecting to build-01…")
+        test.core.emit(MobileEvent.Catalog("m1", CatalogState.Disconnected("connection reset")))
+        compose.awaitText("Disconnected: connection reset. Retrying.")
+        test.core.emit(MobileEvent.Catalog("m1", CatalogState.Refused("build-01 runs an older ngterm")))
+        compose.awaitText("build-01 runs an older ngterm")
+        test.core.emit(MobileEvent.Catalog("m1", CatalogState.Connected))
+        gone("build-01 runs an older ngterm")
+        compose.onNodeWithText("build").assertExists()
+    }
+
+    @Test
+    fun renameSessionRenamesItAndShowsWhyItFailed() {
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "build"))
+        openMachine()
+        compose.awaitText("build")
+        compose.onNodeWithContentDescription("More options for build").performClick()
+        compose.onNodeWithText("Rename session").performClick()
+        compose.onNodeWithText("Rename build").assertExists()
+        test.core.failNext("renameSession", MobileException.Remote("build-01 did not run Rename"))
+        compose.onNodeWithText("Name").performTextClearance()
+        compose.onNodeWithText("Name").performTextInput("api")
+        compose.onNode(hasText("Rename") and hasAnyAncestor(isDialog())).performClick()
+        compose.awaitText("build-01 did not run Rename")
+        compose.onNode(hasText("Rename") and hasAnyAncestor(isDialog())).performClick()
+        gone("Rename build")
+        compose.awaitText("api")
+        assertEquals(
+            listOf("m1", "s1", "api"),
+            test.core.calls
+                .last { it.method == "renameSession" }
+                .args,
+        )
     }
 }

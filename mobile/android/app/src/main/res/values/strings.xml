@@ -113,6 +113,10 @@
     <item quantity="other">%1$d idle</item>
   </plurals>
   <string name="machine_status_count">%1$d %2$s</string>
+  <plurals name="machine_ended_sessions">
+    <item quantity="one">%1$d ended</item>
+    <item quantity="other">%1$d ended</item>
+  </plurals>
 
   <!-- the machine form -->
   <string name="form_add_title">Add machine</string>
@@ -202,6 +206,18 @@
   <string name="new_session_create">Create session</string>
   <string name="new_session_creating">Creating</string>
   <string name="new_session_named">New named session</string>
+  <string name="machine_sessions_rename">Rename session</string>
+  <string name="machine_sessions_ended">Ended on %1$s</string>
+  <string name="machine_sessions_page">Page</string>
+  <string name="machine_sessions_page_file">File page</string>
+  <string name="machine_sessions_page_url">Web page</string>
+  <string name="machine_sessions_page_note">Open it in ngterm on a desktop</string>
+  <string name="machine_sessions_catalog_connecting">Connecting to %1$s…</string>
+  <string name="machine_sessions_catalog_disconnected">Disconnected: %1$s. Retrying.</string>
+  <string name="rename_session_title">Rename %1$s</string>
+  <string name="rename_session_name">Name</string>
+  <string name="rename_session_save">Rename</string>
+  <string name="rename_session_renaming">Renaming</string>
 
   <!-- ui/terminal -->
   <string name="terminal_description">Terminal</string>
