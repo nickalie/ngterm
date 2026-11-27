@@ -18,6 +18,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
 use ngterm_core::remote::frames::{MAX_FRAME_BYTES, MAX_PENDING_FRAMES};
 use ngterm_core::remote::{LinkKey, PresentationLink, PresentationTransport};
@@ -381,15 +382,21 @@ fn read_lines<S: PresentationViewer>(stdout: impl Read, key: LinkKey, poster: &P
 
 /// Drains a child's stderr to its end, logging each line lossily as upstream does, so non-UTF-8 bytes don't stop it.
 /// A line holds at most the frame limit, as upstream's reader caps it; a longer one is logged in pieces of the read
-/// limit and the drain keeps going, so the child never blocks on or loses its stderr.
+/// limit and the drain keeps going, so the child never blocks on or loses its stderr. A run of identical lines logs
+/// its first line and then its count ([`Repeats`]), as ssh repeats one error for each refused try for hours.
 pub(crate) fn log_lines(stderr: impl Read, source: &str) {
+    log_lines_at(stderr, source, Instant::now);
+}
+
+fn log_lines_at(stderr: impl Read, source: &str, mut now: impl FnMut() -> Instant) {
     let mut reader = BufReader::new(stderr);
     let mut line = Vec::new();
+    let mut repeats = Repeats::default();
     let limit = u64::try_from(MAX_FRAME_BYTES + 1).unwrap_or(u64::MAX);
     loop {
         line.clear();
         match (&mut reader).take(limit).read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => return,
+            Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
         if line.last() == Some(&b'\n') {
@@ -398,7 +405,47 @@ pub(crate) fn log_lines(stderr: impl Read, source: &str) {
                 line.pop();
             }
         }
-        tracing::info!(line = %String::from_utf8_lossy(&line), "{source}");
+        repeats.line(&String::from_utf8_lossy(&line), now(), source);
+    }
+    repeats.flush(source);
+}
+
+/// How often a run of identical stderr lines logs its count while it goes on.
+const REPEAT_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The run of identical stderr lines that [`log_lines`] reads: the line, how many copies followed it since the last
+/// log event, and when that event was.
+#[derive(Default)]
+struct Repeats {
+    last: Option<String>,
+    count: u64,
+    since: Option<Instant>,
+}
+
+impl Repeats {
+    fn line(&mut self, text: &str, now: Instant, source: &str) {
+        if self.last.as_deref() != Some(text) {
+            self.flush(source);
+            tracing::info!(line = %text, "{source}");
+            self.last = Some(text.to_owned());
+            self.since = Some(now);
+            return;
+        }
+        self.count += 1;
+        if self
+            .since
+            .is_some_and(|since| now.duration_since(since) >= REPEAT_REPORT_INTERVAL)
+        {
+            self.flush(source);
+            self.since = Some(now);
+        }
+    }
+
+    fn flush(&mut self, source: &str) {
+        if self.count > 0 {
+            tracing::info!("{source}: the last line repeated {} times", self.count);
+            self.count = 0;
+        }
     }
 }
 
@@ -499,6 +546,11 @@ mod tests {
 
     /// What [`log_lines`] logs for `stderr`.
     fn stderr_log(stderr: &[u8]) -> String {
+        stderr_log_at(stderr, Instant::now)
+    }
+
+    /// What [`log_lines`] logs for `stderr` when `now` is its clock.
+    fn stderr_log_at(stderr: &[u8], now: impl FnMut() -> Instant) -> String {
         let log = tempfile::NamedTempFile::new().unwrap();
         let subscriber = tracing_subscriber::fmt()
             .without_time()
@@ -506,7 +558,7 @@ mod tests {
             .with_target(false)
             .with_writer(Mutex::new(log.reopen().unwrap()))
             .finish();
-        tracing::subscriber::with_default(subscriber, || log_lines(stderr, "test child"));
+        tracing::subscriber::with_default(subscriber, || log_lines_at(stderr, "test child", now));
         std::fs::read_to_string(log.path()).unwrap()
     }
 
@@ -516,6 +568,56 @@ mod tests {
         assert!(text.contains("test child line=plain\n"), "{text:?}");
         assert!(text.contains("test child line=bad \u{fffd}\n"), "{text:?}");
         assert!(text.contains("test child line=last\n"), "{text:?}");
+    }
+
+    /// A clock that moves `step` forward on each read.
+    fn ticking(step: Duration) -> impl FnMut() -> Instant {
+        let mut now = Instant::now();
+        move || {
+            now += step;
+            now
+        }
+    }
+
+    #[test]
+    fn a_run_of_identical_stderr_lines_logs_its_first_line_and_its_count() {
+        let mut stderr = b"channel 2: open failed\n".repeat(1000);
+        stderr.extend_from_slice(b"other\n");
+        let text = stderr_log(&stderr);
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                " INFO test child line=channel 2: open failed",
+                " INFO test child: the last line repeated 999 times",
+                " INFO test child line=other",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_of_identical_stderr_lines_logs_its_count_when_the_stream_ends() {
+        let text = stderr_log(b"refused\nrefused\r\nrefused");
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                " INFO test child line=refused",
+                " INFO test child: the last line repeated 2 times"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_run_of_identical_stderr_lines_logs_its_count_once_a_minute() {
+        let text = stderr_log_at(&b"refused\n".repeat(150), ticking(Duration::from_secs(1)));
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                " INFO test child line=refused",
+                " INFO test child: the last line repeated 60 times",
+                " INFO test child: the last line repeated 60 times",
+                " INFO test child: the last line repeated 29 times",
+            ]
+        );
     }
 
     #[test]
