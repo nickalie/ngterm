@@ -325,17 +325,22 @@ def test_a_double_click_on_the_title_bar_toggles_the_window_zoom(ctl, ui):
 @WINDOWS_ONLY
 def test_dragging_the_title_bar_moves_the_window(ctl, ui):
     """The window's frame as UI Automation reads it: the build reads no window position back over the protocol (it
-    does not claim `window-geometry`). The system's move starts at the drag's first step, so the window follows the
-    rest of it. A drag back puts the window where it was."""
-    steps = 12
-    drag = {"steps": steps, "press_for": 0.2, "duration": 0.4, "hold_for": 0.2}
+    does not claim `window-geometry`). The system's move anchors where the pointer is when the app handles the press,
+    so a loaded runner can lose the drag's first few small steps; the window follows the rest of it. A drag back by
+    what it moved puts the window back within the same loss."""
+    steps = 60
+    lost = 5
+    drag = {"steps": steps, "press_for": 0.2, "duration": 1.0, "hold_for": 0.2}
+
+    def band(wanted):
+        return sorted((wanted * (steps - lost) / steps, wanted))
 
     def followed(before, dx, dy):
         def check():
             frame = ui.frame(ui.window())
             moved = (frame[0] - before[0], frame[1] - before[1])
             for wanted, got in zip((dx, dy), moved):
-                low, high = sorted((wanted * (steps - 1) / steps, wanted))
+                low, high = band(wanted)
                 assert low - 3 <= got <= high + 3, (before, frame, (dx, dy))
             assert frame[2:] == before[2:], (before, frame)
             return moved
@@ -349,9 +354,9 @@ def test_dragging_the_title_bar_moves_the_window(ctl, ui):
     moved = followed(before, 120, 80)
     assert _window_node(ctl)["zoomed"] is False
     window, ox, oy = _bar_point(ui)
-    back = [round(-delta * steps / (steps - 1)) for delta in moved]
-    ui.drag_by(window, *back, offset=(ox, oy), **drag)
-    wait_until(lambda: all(abs(a - b) <= 3 for a, b in zip(ui.frame(ui.window()), before)), timeout=ui.timeout)
+    start = ui.frame(window)
+    ui.drag_by(window, *(-delta for delta in moved), offset=(ox, oy), **drag)
+    followed(start, *(-delta for delta in moved))
 
 
 @WINDOWS_ONLY

@@ -351,10 +351,12 @@ def _red_reads(ui, accept, description):
 
 
 @pytest.mark.covers("ui:htmlOverlay.page")
-def test_a_page_shows_over_the_window_and_settings_covers_it(launch, ui_for):
+def test_a_page_shows_over_the_window_and_settings_covers_it(adapter, launch, ui_for):
     """The page's web view shows its pixels in the window (WebView2's child window over GPUI's composition; the
     engine's frames as an external surface), and the in-window Settings popup covers them until it closes. The
     instance is the test's own: a failure leaves the screen as it was for the trace."""
+    if adapter.name != "rust":
+        pytest.skip("Settings is a window of its own upstream, which Escape does not close; the popup is ngterm's")
     ctl = launch()
     ui = ui_for(ctl)
     sid = _new(ctl)
