@@ -117,7 +117,7 @@ pub enum RemoteConnection {
     /// The origin predates the stream; final for the row, as nothing is ever launched.
     Unsupported,
     Failed(String),
-    /// The origin no longer has the session, so the stream stopped; final until a pane of the row attaches again.
+    /// The origin no longer has the session, so the stream stopped for good.
     Ended,
 }
 
@@ -135,7 +135,7 @@ impl RemoteConnection {
                 "Lost the connection to {host} ({reason}), retrying. Close and reattach the session to retry now."
             )),
             Self::Ended => Some(format!(
-                "The session ended on {host}. Reattach a pane to get its status, context and notifications again."
+                "The session ended on {host}. Press any key in a pane to close it."
             )),
         }
     }

@@ -172,7 +172,8 @@ split; these describe attribution, not permission grants),
 `remoteHost` (the machine an attached session came from — the read side of `live attach`; omitted for a
 local session; after a relaunch the row comes back under a new session id once that machine answers),
 `presentation` (on an attached session only: `state` is `connecting`, `connected`, `unsupported` for an
-origin too old to stream, or `failed` with the reason in `error`, and `mode` is `presenter` when this
+origin too old to stream, `ended` once that machine no longer has the session, or `failed` with the
+reason in `error`, and `mode` is `presenter` when this
 row's stream holds the presenter role (see Remote sessions) or `mirror` when it does not; it says whether the stream is up,
 never whether the panes' ssh connections are),
 `presenters` (on an origin session: `mirrors`, how many streams mirror it without presenting, one per
@@ -2475,8 +2476,10 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
 - A remote row whose panes have all stopped on their exit prompt asks its machine for the session, again each time its
   stream ends. Once that machine no longer has it, a terminal companion row closes here. Any other row keeps its last
   line, as does a companion with a local scratch shell or overlay open on it, and its stream stops for good:
-  `presentation.state` reads `ended` and nothing retries. A key on the exit line attaches the pane again and starts the
-  stream again. A machine that doesn't answer, or still has the session, leaves the row as it is.
+  `presentation.state` reads `ended`, `mode` reads `mirror`, and nothing retries. The row stays `ended` until it
+  closes: a key on the exit line closes the pane, as on any held exit. Attach the session again later with
+  `live attach` if the machine runs it again. A machine that doesn't answer, or still has the session, leaves the row
+  as it is.
 - `presentation.state` in `tree` reports the stream. `connected` means mirroring works; it is not a claim
   about the panes' ssh connections. An origin too old for it reads `unsupported` and the attach still works.
 - When the stream drops, the mirrored status, context, info line and HUD are cleared here and come back on reconnect. Retries

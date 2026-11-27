@@ -4,13 +4,15 @@
 //! - A terminal companion closes here too. A companion is a worker under its parent, so a finished one has nothing left
 //!   to show.
 //! - Any other row keeps its exit line, but its presentation stream stops, in the final `ended` state: each try would
-//!   only fail with "no such session" until the row closes. A reattach of one of its panes ([`Core::reattach_remote_pane`]) starts it again.
+//!   only fail with "no such session" until the row closes, and the row stops holding the presenter role. A key on the
+//!   exit line closes the pane, as on any held exit.
 //!
 //! The ssh of a replica ending says only that the attach stopped, so once every pane of a remote row is held, and again
 //! each time the stream of such a row ends, the origin's `live list` is read. The row ends when a complete inventory no
 //! longer has the session. That is the read, not `live tree`: `live tree` leaves out whatever cannot be attached right
 //! now, a session being restarted too. An origin that does not answer proves nothing, and neither does a session still
-//! there: the origin may not have noticed yet, so it is read a few times first. A stream that ends with "no such
+//! there: the origin may not have noticed yet, so a row whose panes just held is read a few times first; each stream end
+//! reads once. A stream that ends with "no such
 //! session" proves nothing alone either: an origin app that restarts lists the same sessions again.
 //!
 //! Closing a remote row only detaches it, so this can end nothing on the origin; a local scratch or overlay on a
@@ -20,6 +22,7 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
+use super::frames::PresentationMode;
 use super::origin_replies::{PAUSE, reply_of};
 use super::ssh::control_command;
 use super::tree::{RemoteCommandResult, TREE_DEADLINE};
@@ -136,6 +139,9 @@ impl Core {
                 Ending::StopStream => {
                     self.stop_remote_presentation(check.row);
                     self.set_remote_connection(check.row, RemoteConnection::Ended);
+                    if let Some(store) = self.library_mut().store_for_session_mut(check.row) {
+                        store.set_remote_mode(PresentationMode::Mirror, check.row);
+                    }
                 }
             }
             return None;

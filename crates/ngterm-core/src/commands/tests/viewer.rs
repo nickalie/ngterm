@@ -1794,7 +1794,7 @@ impl Viewer {
             .unwrap();
         assert_eq!(
             notice,
-            "The session ended on origin. Reattach a pane to get its status, context and notifications again."
+            "The session ended on origin. Press any key in a pane to close it."
         );
     }
 
@@ -1877,13 +1877,16 @@ fn a_stream_that_ends_after_every_pane_held_reads_the_origin_again() {
 fn a_connected_row_whose_session_is_gone_withdraws_what_its_stream_put_on_it() {
     let mut viewer = viewer_with(false);
     viewer.connect(&json!({"context": "release prep"}));
+    viewer.frame(json!({"kind": "presenter.granted"}));
     assert_eq!(viewer.node()["context"], "release prep");
+    assert_eq!(viewer.node()["presentation"]["mode"], "presenter");
     *viewer.runner.list.lock().unwrap() = inventory(&[]);
 
     viewer.primary_ends_gone();
     viewer.settle_checks(Instant::now());
 
     viewer.assert_ended();
+    assert_eq!(viewer.node()["presentation"]["mode"], "mirror");
     assert!(viewer.node().get("context").is_none());
 }
 
@@ -1965,8 +1968,7 @@ fn a_row_with_a_pane_still_running_is_not_read() {
     assert_eq!(viewer.launches(), 2, "the stream still retries");
 }
 
-/// A stopped stream starts again when the row's pane attaches again: by a key on its exit line, a reconnect or the
-/// origin's respawn.
+/// A stopped stream starts again if a pane of the row attaches again through the core.
 #[test]
 fn a_reattach_starts_a_stopped_stream_again() {
     let mut viewer = viewer_with(false);
