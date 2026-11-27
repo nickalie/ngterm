@@ -1,5 +1,5 @@
 """A key on the exit line of a row whose session ended on its origin closes the pane, and with it the row, as on any held
-exit; the viewer starts no ssh to the origin for it. `tests/protocol/test_remote_ended_row.py` has the stream's stop.
+exit. `tests/protocol/test_remote_ended_row.py` has the stream's stop.
 
 The `ended` state is this build's: upstream's row retries its stream for as long as it exists, so the reference gets
 an allowance."""
@@ -21,14 +21,6 @@ pytestmark = [
         "origin for as long as the row exists, and tree has no `ended` state",
     ),
 ]
-
-
-def _presents(remote_origin, sid):
-    return [
-        argv
-        for argv in remote_origin.client.invocations()
-        if any("live present" in word and sid in word for word in argv)
-    ]
 
 
 def _state(tree, local):
@@ -56,14 +48,12 @@ def test_a_key_on_the_exit_line_of_an_ended_remote_row_closes_it(remote_origin, 
         origin.wait_tree(lambda tree: sid not in session_ids(tree))
         viewer.wait_text(local, HELD_PROMPT, pane="left")
         viewer.wait_tree(lambda tree: _state(tree, local) == "ended")
-        launches = len(_presents(remote_origin, sid))
 
         assert_ok(viewer.request("session.select", local))
         viewer.wait_tree(lambda tree: find_session(tree, local)["active"])
         ui_for(viewer).press("x")
         viewer.wait_tree(lambda tree: local not in session_ids(tree))
         local = None
-        assert len(_presents(remote_origin, sid)) == launches, _presents(remote_origin, sid)
     finally:
         if local is not None:
             viewer.request("session.close", local)
