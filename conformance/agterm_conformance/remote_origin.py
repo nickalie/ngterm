@@ -34,6 +34,8 @@ from agterm_conformance import llvm_profiles
 from agterm_conformance.loopback_ssh import LOGIN_PATH, LoopbackMachine, SshClient, find_openssh
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from agterm_conformance.impls.base import Adapter, Instance
 
 ORIGIN_HOST = "origin"
@@ -148,14 +150,19 @@ def headless_program(adapter: Adapter) -> Path | None:
     return program if os.access(program, os.X_OK) else None
 
 
-def launch_headless(adapter: Adapter, program: Path) -> Instance:
+def launch_headless(
+    adapter: Adapter, program: Path, path_prefix: Sequence[os.PathLike[str] | str] = ()
+) -> Instance:
     """`program` (the staged `ngterm-headless`) on a private root laid out and isolated as `Adapter.launch` lays out an
-    instance's, without a display; the adapter stops it as it stops any instance."""
+    instance's, without a display, `path_prefix` ahead of its PATH as there; the adapter stops it as it stops any
+    instance."""
     from agterm_conformance.impls import base
 
     root = base.make_root()
     try:
         env = adapter.build_env(root)
+        if path_prefix:
+            env["PATH"] = os.pathsep.join([*map(os.fspath, path_prefix), env["PATH"]])
         state, home = Path(env[adapter.variable("STATE_DIR")]), Path(env["HOME"])
         base._prepare_tree(root, home, state, adapter.ghostty_config())
         if adapter.needs_runtime_dir:

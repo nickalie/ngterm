@@ -3,15 +3,16 @@ sets none, `connect-timeout = SECONDS` for every machine and `connect-timeout HO
 destination (`ngterm:HOST`) sharing its host's value. An edit reaches the next ssh; a bad value is logged as a
 `remotes.conf` problem (the "issues in remotes.conf" banner's log form) and the ssh uses 10.
 
-The setting is ngterm's only: upstream reads such a line as a remote, so the reference skips these tests. The viewer
-reaches the staged `ngterm-headless` behind the harness's own sshd (`remote_origin`) through `ngtermctl live tree HOST`,
-and the tests read the argv of each ssh it started in the private ssh client's call log (`SshClient.invocations()`)."""
+The setting is ngterm's only (upstream reads such a line as a remote); the reference claims no `live-any-shell`, so it
+skips these tests. The viewer, the build's GUI or, in one test, the staged `ngterm-headless`, reaches the staged
+`ngterm-headless` behind the harness's own sshd (`remote_origin`) through `ngtermctl live tree HOST`, and the tests read
+the argv of each ssh it started in the private ssh client's call log (`SshClient.invocations()`)."""
 
 import re
 
 import pytest
 from agterm_conformance.plugin import Cli
-from agterm_conformance.remote_origin import ORIGIN_HOST
+from agterm_conformance.remote_origin import ORIGIN_HOST, headless_program, launch_headless
 from agterm_conformance.wait import wait_until
 
 pytestmark = [
@@ -23,12 +24,6 @@ pytestmark = [
 DEFAULT = 10
 # the watcher reads an edited remotes.conf at once; this bounds a slow host
 EDIT_SECONDS = 20.0
-
-
-@pytest.fixture(autouse=True)
-def _rust_only(adapter):
-    if adapter.name != "rust":
-        pytest.skip("connect-timeout in remotes.conf is ngterm's own setting; upstream reads the line as a remote")
 
 
 @pytest.fixture
@@ -86,7 +81,10 @@ def test_an_ssh_waits_10_seconds_to_connect_when_remotes_conf_sets_nothing(vcli,
 
 @pytest.mark.covers("cli:live tree")
 def test_an_old_remotes_conf_without_the_setting_works_as_before(vcli, remote_viewer, remote_origin, remotes_conf):
+    remotes_conf.write_text(f"connect-timeout = 25\n{ORIGIN_HOST} Origin\n")
+    _lists_with(vcli, remote_origin, 25)
     problems = len(_problems(remote_viewer))
+
     remotes_conf.write_text(f"# my machines\n{ORIGIN_HOST} Origin\n")
     _lists_with(vcli, remote_origin, DEFAULT)
     result = vcli("live", "tree", ORIGIN_HOST)
@@ -153,3 +151,21 @@ def test_a_value_in_remotes_conf_at_launch_reaches_the_first_ssh(adapter, launch
     (config / "remotes.conf").write_text(f"connect-timeout {ORIGIN_HOST} = 33\n{ORIGIN_HOST} Origin\n")
     viewer = launch.relaunch(viewer)
     assert _list(Cli(adapter.ctl_path, viewer.instance, adapter.ctl_name), remote_origin) == 33
+
+
+@pytest.mark.covers("cli:live tree")
+def test_a_headless_viewer_follows_edits_of_its_remotes_conf(adapter, remote_origin):
+    program = headless_program(adapter)
+    assert program is not None, "the headless origin runs, so the staged ngterm-headless exists"
+    viewer = launch_headless(adapter, program, path_prefix=remote_origin.viewer_path)
+    try:
+        vcli = Cli(adapter.ctl_path, viewer, adapter.ctl_name)
+        config = viewer.state_dir / "config"
+        config.mkdir(exist_ok=True)
+        (config / "remotes.conf").write_text(f"connect-timeout = 25\n{ORIGIN_HOST} Origin\n")
+        _lists_with(vcli, remote_origin, 25)
+
+        (config / "remotes.conf").write_text(f"connect-timeout = 7\n{ORIGIN_HOST} Origin\n")
+        _lists_with(vcli, remote_origin, 7)
+    finally:
+        adapter.stop(viewer)
