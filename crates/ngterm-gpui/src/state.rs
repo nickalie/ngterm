@@ -272,7 +272,7 @@ pub struct AppState {
     /// The directories the core asked to reveal (`session.reveal`, Reveal in Files), for the frontend.
     revealed: Rc<RefCell<Vec<std::path::PathBuf>>>,
     /// The watch on `remotes.conf`; `None` until the launch starts it (and in tests).
-    remotes_watcher: Option<crate::remotes_watcher::RemotesWatcher>,
+    remotes_watcher: Option<ngterm_app::remotes_watcher::RemotesWatcher>,
 }
 
 /// The presentation bridges' reports ([`ngterm_app::remote`]).
@@ -339,7 +339,7 @@ impl AppState {
     /// directory at the next settle. Once, at launch.
     pub fn watch_remotes(&mut self) {
         let poster = self.poster.clone();
-        let watcher = crate::remotes_watcher::RemotesWatcher::new(move || {
+        let watcher = ngterm_app::remotes_watcher::RemotesWatcher::new(move || {
             post(&poster, |state: &mut Self| {
                 if !state.quitting {
                     state.core.refresh_remotes(true);

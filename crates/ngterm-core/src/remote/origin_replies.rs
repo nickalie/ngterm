@@ -12,10 +12,10 @@ use super::frames;
 use super::tree::{self, RemoteCommandResult, TREE_DEADLINE};
 
 /// How long a line run on the origin (`restore mode`, `session new`, `session close`, a companion's create) may take
-/// (upstream's `remoteCompanionDeadline`).
+/// once connected (upstream's `remoteCompanionDeadline`).
 pub const COMPANION_DEADLINE: Duration = Duration::from_secs(30);
-/// How long a created session may take to become attachable: every pane's daemon must run first (upstream's
-/// `remoteCompanionReadyBudget`).
+/// How long a created session may take to become attachable once connected: every pane's daemon must run first
+/// (upstream's `remoteCompanionReadyBudget`).
 pub const READY_BUDGET: Duration = Duration::from_secs(20);
 /// The pause between two listings while waiting for it (upstream's `remoteCompanionPause`).
 pub const PAUSE: Duration = Duration::from_secs(1);
@@ -252,8 +252,8 @@ pub enum WaitStep {
     GiveUp(String),
 }
 
-/// New Session's last stage: the origin is listed every [`PAUSE`] within [`READY_BUDGET`] until the created session
-/// is attachable, as every pane's daemon must run first.
+/// New Session's last stage: the origin is listed every [`PAUSE`] within [`READY_BUDGET`] (plus the connect timeout,
+/// [`ListingWait::for_host`]) until the created session is attachable, as every pane's daemon must run first.
 #[derive(Debug, Clone)]
 pub struct ListingWait {
     created: String,

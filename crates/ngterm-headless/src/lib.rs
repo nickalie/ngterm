@@ -366,6 +366,7 @@ pub fn run(options: &Options) -> i32 {
         post(&draining, move |state| state.drain_pane(session, &token));
     });
     let mut state = HeadlessState::new(core, poster.clone(), Panes::new(environment, drain));
+    state.watch_remotes();
     state.settle();
     state.land();
     let started = server.start(Arc::clone(&posting), |state: &mut HeadlessState, request| {

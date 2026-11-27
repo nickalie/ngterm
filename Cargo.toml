@@ -201,7 +201,7 @@ x11rb = "0.13.2"
 xkbcommon = { version = "0.8.0", default-features = false }
 # ngterm-gpui's SIGTERM quit on a thread of its own (GPUI installs no signal handling).
 signal-hook = "0.4"
-# ngterm-gpui's watch on `remotes.conf`: the platform's recommended watcher, inotify on Linux, FSEvents on macOS,
+# ngterm-app's watch on `remotes.conf`: the platform's recommended watcher, inotify on Linux, FSEvents on macOS,
 # ReadDirectoryChangesW on Windows. The version the lock already carries.
 notify = "8.2"
 # ngterm-gpui's last network source on Linux, as gio's netlink `NetworkMonitor` (GLib's fallback without

@@ -345,3 +345,57 @@ fn reconnect_replacements_rotate_the_expected_nonce_and_disable_it_for_old_endpo
         core.pane_replaced(replacement);
     }
 }
+
+/// One launch: its argv and its key.
+type Launch = (Vec<String>, LinkKey);
+
+/// A presentation transport that keeps every launch; its links hear nothing.
+#[derive(Clone, Default)]
+struct Launches(Rc<std::cell::RefCell<Vec<Launch>>>);
+
+struct Silent;
+
+impl super::super::client::PresentationLink for Silent {
+    fn send(&self, _line: &[u8]) {}
+
+    fn stop(&self) {}
+}
+
+impl PresentationTransport for Launches {
+    fn open(&self, argv: &[String], key: LinkKey) -> Box<dyn super::super::client::PresentationLink> {
+        self.0.borrow_mut().push((argv.to_vec(), key));
+        Box::new(Silent)
+    }
+}
+
+#[test]
+fn a_presentation_relaunch_takes_the_connect_timeout_as_edited_since() {
+    use crate::remote::connect_timeout::{self, ConnectTimeouts};
+    let install = |seconds| {
+        let mut timeouts = ConnectTimeouts::default();
+        timeouts.set_for("origin", seconds);
+        connect_timeout::install(timeouts);
+    };
+    let (mut core, _, session) = core();
+    let launches = Launches::default();
+    core.set_presentation_transport(Rc::new(launches.clone()));
+    install(40);
+    core.start_remote_presentation(session);
+    install(50);
+    let key = launches.0.borrow()[0].1;
+    core.viewer_closed(key, "the link dropped");
+    core.retry_remote_links_now(Instant::now());
+    let options: Vec<String> = launches
+        .0
+        .borrow()
+        .iter()
+        .map(|(argv, _)| {
+            argv.iter()
+                .find(|word| word.starts_with("ConnectTimeout="))
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect();
+    connect_timeout::install(ConnectTimeouts::default());
+    assert_eq!(options, ["ConnectTimeout=40", "ConnectTimeout=50"]);
+}

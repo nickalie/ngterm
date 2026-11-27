@@ -40,6 +40,24 @@ class FakeMobileCoreTest {
         )
 
     @Test
+    fun theConnectTimeoutIsTenUntilSetAndAValueOutOfBoundsSetsTen() {
+        val core = FakeMobileCore()
+        assertEquals(10u, core.connectTimeoutSecs())
+        core.setConnectTimeoutSecs(30u)
+        assertEquals(30u, core.connectTimeoutSecs())
+        core.setConnectTimeoutSecs(0u)
+        assertEquals(10u, core.connectTimeoutSecs())
+        core.setConnectTimeoutSecs(300u)
+        assertEquals(300u, core.connectTimeoutSecs())
+        core.setConnectTimeoutSecs(301u)
+        assertEquals(10u, core.connectTimeoutSecs())
+        assertEquals(
+            listOf(30u, 0u, 300u, 301u).map { FakeCall("setConnectTimeoutSecs", listOf(it)) },
+            core.calls,
+        )
+    }
+
+    @Test
     fun createListAndEndSessionsOnAConnectedMachine() =
         runTest {
             val events = mutableListOf<MobileEvent>()

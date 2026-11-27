@@ -551,12 +551,28 @@ class FakeMobileCore(
         question.answer.complete(trust && fingerprint == question.offered)
     }
 
+    // api.rs's ConnectTimeout: 10 s until set, and a value outside 1 to 300 sets 10
+    private var connectTimeout: UInt = DEFAULT_CONNECT_TIMEOUT_SECS
+
+    override fun setConnectTimeoutSecs(secs: UInt) {
+        record("setConnectTimeoutSecs", secs)
+        connectTimeout = if (secs in 1u..MAX_CONNECT_TIMEOUT_SECS) secs else DEFAULT_CONNECT_TIMEOUT_SECS
+    }
+
+    override fun connectTimeoutSecs(): UInt = connectTimeout
+
     override fun networkChanged() = record("networkChanged")
 
     override fun suspend() = record("suspend")
 
     override fun resume() = record("resume")
 }
+
+/** The core's app-wide connect timeout until the app sets one, in seconds. */
+const val DEFAULT_CONNECT_TIMEOUT_SECS: UInt = 10u
+
+/** The longest connect timeout the core takes, in seconds. */
+const val MAX_CONNECT_TIMEOUT_SECS: UInt = 300u
 
 /** The core's reason for a connect refused over a changed host key (transport/russh.rs's `HOST_KEY_CHANGED`). */
 const val HOST_KEY_CHANGED = "the host key changed"

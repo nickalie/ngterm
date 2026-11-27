@@ -414,7 +414,8 @@ impl MobileCore {
 }
 
 impl MobileCore {
-    /// A core over `transport`, its events going to `sink`.
+    /// A core over `transport`, its events going to `sink`. Its connect timeout ([`MobileCore::set_connect_timeout_secs`])
+    /// is its own and no connect of `transport` reads it: only [`MobileCore::new`]'s russh transport does.
     ///
     /// # Errors
     ///

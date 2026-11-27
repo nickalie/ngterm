@@ -3,8 +3,8 @@
 //! line is diagnosed and skipped, and later lines still parse.
 //!
 //! ngterm adds one setting, which upstream's file has not: `connect-timeout = SECONDS` for every machine and
-//! `connect-timeout DESTINATION = SECONDS` for one ([`super::connect_timeout`]). A line whose first word is followed by
-//! `=` is a setting; the only setting that names a destination is `connect-timeout`.
+//! `connect-timeout DESTINATION = SECONDS` for one ([`super::connect_timeout`]). A line that starts with the word
+//! `connect-timeout` is that setting, with or without blanks around `=`; every other line is a remote.
 
 use std::collections::HashSet;
 use std::io;
@@ -53,14 +53,14 @@ pub fn parse_remotes_conf(text: &str) -> (Remotes, Vec<KeymapDiagnostic>) {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let destination: String = line.chars().take_while(|ch| !ch.is_whitespace()).collect();
-        let rest = line[destination.len()..].trim_matches(is_blank);
-        if let Some(setting) = setting_of(&destination, rest) {
-            if let Err(message) = settings.apply(setting) {
+        if let Some(setting) = setting_of(line) {
+            if let Err(message) = setting.and_then(|setting| settings.apply(setting)) {
                 diagnostics.push(KeymapDiagnostic::new(line_number, message));
             }
             continue;
         }
+        let destination: String = line.chars().take_while(|ch| !ch.is_whitespace()).collect();
+        let rest = line[destination.len()..].trim_matches(is_blank);
         if !is_host(&destination) {
             diagnostics.push(KeymapDiagnostic::new(
                 line_number,
@@ -103,33 +103,31 @@ pub fn parse_remotes_conf(text: &str) -> (Remotes, Vec<KeymapDiagnostic>) {
     (remotes, diagnostics)
 }
 
-/// One setting line: `key = value`, or `key destination = value`.
+/// One setting line: `connect-timeout = SECONDS`, or `connect-timeout DESTINATION = SECONDS`.
 #[derive(Clone, Copy)]
 struct Setting<'a> {
-    key: &'a str,
     destination: Option<&'a str>,
     value: &'a str,
 }
 
-/// The setting `line` holds, given its first word and the rest: the rest starts with `=`, or the first word is
-/// [`connect_timeout::SETTING`] and the rest is `DESTINATION = SECONDS`. Anything else is a remote.
-fn setting_of<'a>(word: &'a str, rest: &'a str) -> Option<Setting<'a>> {
-    if let Some(value) = rest.strip_prefix('=') {
-        return Some(Setting {
-            key: word,
-            destination: None,
-            value: value.trim_matches(is_blank),
-        });
-    }
-    if word != connect_timeout::SETTING {
+/// The setting `line` holds when it starts with the word [`connect_timeout::SETTING`], blanks around `=` optional;
+/// anything else is a remote, as in upstream's file.
+fn setting_of(line: &str) -> Option<Result<Setting<'_>, String>> {
+    let rest = line.strip_prefix(connect_timeout::SETTING)?;
+    if !(rest.is_empty() || rest.starts_with('=') || rest.starts_with(is_blank)) {
         return None;
     }
-    let (destination, value) = rest.split_once('=')?;
-    Some(Setting {
-        key: word,
-        destination: Some(destination.trim_matches(is_blank)),
+    let Some((destination, value)) = rest.split_once('=') else {
+        return Some(Err(format!(
+            "{} needs '= SECONDS'; line skipped",
+            connect_timeout::SETTING
+        )));
+    };
+    let destination = destination.trim_matches(is_blank);
+    Some(Ok(Setting {
+        destination: (!destination.is_empty()).then_some(destination),
         value: value.trim_matches(is_blank),
-    })
+    }))
 }
 
 /// The settings read so far; the first line that sets a value wins, as the first line of a destination does.
@@ -141,9 +139,6 @@ struct Settings {
 
 impl Settings {
     fn apply(&mut self, setting: Setting<'_>) -> Result<(), String> {
-        if setting.key != connect_timeout::SETTING {
-            return Err(format!("unknown setting '{}'; line skipped", setting.key));
-        }
         let name = connect_timeout::SETTING;
         match setting.destination {
             None if self.default_set => Err(format!("{name} is already set; line skipped")),
@@ -208,13 +203,6 @@ impl RemotesState {
     #[must_use]
     pub fn entries(&self) -> &[RemoteEntry] {
         &self.entries
-    }
-
-    /// The connect timeouts of the last read, which every ssh line reads ([`connect_timeout::seconds`]); an unreadable
-    /// file sets none.
-    #[must_use]
-    pub fn connect_timeouts(&self) -> &ConnectTimeouts {
-        &self.connect_timeouts
     }
 
     /// How many problems the file had at the last read: its parse diagnostics, or one when it exists and cannot be
@@ -488,9 +476,37 @@ mod tests {
     }
 
     #[test]
+    fn every_spelling_of_the_setting_is_a_setting() {
+        for text in [
+            "connect-timeout=25\nconnect-timeout studio=40\n",
+            "connect-timeout= 25\nconnect-timeout studio= 40\n",
+            "connect-timeout =25\nconnect-timeout studio =40\n",
+            "connect-timeout\t=\t25\nconnect-timeout\tstudio\t=\t40\n",
+        ] {
+            let (remotes, diagnostics) = parse_remotes_conf(text);
+            assert!(diagnostics.is_empty(), "{text:?}: {diagnostics:?}");
+            assert!(remotes.entries.is_empty(), "{text:?}: {:?}", remotes.entries);
+            assert_eq!(remotes.connect_timeouts.seconds_for("mini"), 25, "{text:?}");
+            assert_eq!(remotes.connect_timeouts.seconds_for("studio"), 40, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_label_that_starts_with_an_equals_sign_stays_a_remote() {
+        let (remotes, diagnostics) = parse_remotes_conf("studio = Build box\nconnect-timeouts = 5\n");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(
+            remotes.entries,
+            [entry("studio", "= Build box", 1), entry("connect-timeouts", "= 5", 2)]
+        );
+        assert_eq!(remotes.connect_timeouts, ConnectTimeouts::default());
+    }
+
+    #[test]
     fn a_bad_setting_is_diagnosed_and_skipped() {
         let text = "connect-timeout = 0\nconnect-timeout = 15\nconnect-timeout = 20\nconnect-timeout studio = 1.5\n\
-                    connect-timeout -bad = 30\nconnect-timeout mini = 30\nconnect-timeout mini = 31\ntimeout = 5\n";
+                    connect-timeout -bad = 30\nconnect-timeout mini = 30\nconnect-timeout mini = 31\nconnect-timeout\n\
+                    connect-timeout 20\n";
         let (remotes, diagnostics) = parse_remotes_conf(text);
         assert!(remotes.entries.is_empty());
         let messages: Vec<(usize, &str)> = diagnostics
@@ -511,7 +527,8 @@ mod tests {
                 ),
                 (5, "invalid destination for connect-timeout; line skipped"),
                 (7, "connect-timeout for 'mini' is already set; line skipped"),
-                (8, "unknown setting 'timeout'; line skipped"),
+                (8, "connect-timeout needs '= SECONDS'; line skipped"),
+                (9, "connect-timeout needs '= SECONDS'; line skipped"),
             ]
         );
         assert_eq!(remotes.connect_timeouts.seconds_for("studio"), 15);
@@ -524,10 +541,10 @@ mod tests {
         let path = dir.path().join("remotes.conf");
         std::fs::write(&path, "connect-timeout = 20\nconnect-timeout studio = 45\n").unwrap();
         let mut state = RemotesState::at(path.clone());
-        assert_eq!(state.connect_timeouts().seconds_for("mini"), 20);
         let option = |host: &str| super::super::tree::ssh_arguments(host, false)[5].clone();
         assert_eq!(option("studio"), "ConnectTimeout=45");
         assert_eq!(option("ngterm:mini"), "ConnectTimeout=20");
+        assert_eq!(option("mini"), "ConnectTimeout=20");
         replace(&path, "connect-timeout = nope\n");
         assert_eq!(state.refresh(true), Some(1));
         assert_eq!(option("studio"), "ConnectTimeout=10");

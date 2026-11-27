@@ -1376,6 +1376,46 @@ fn a_session_never_attachable_names_what_attaches_it() {
 }
 
 #[test]
+fn new_session_adds_the_connect_timeout_to_each_line_and_to_the_ready_budget() {
+    let mut attach = Attach::new(Some("connect-timeout = 25\nstudio\n"));
+    attach.core().load_remotes_at_launch();
+    let start = Instant::now();
+    let elapsed = Arc::new(Mutex::new(Duration::ZERO));
+    let reading = Arc::clone(&elapsed);
+    attach.core().remote.clock = Box::new(move || start + *reading.lock().unwrap());
+    let picker = attach.open_session_picker(0, &[]);
+    attach.pick_new_session_on_live(1, &picker);
+    attach.runner.answer(2, created_receipt());
+    attach.wait_for_runs(4);
+    // the wait's second listing starts a little after 21 s, so its run gets what is left of the 45 s (the ready
+    // budget and the connect timeout): about 24 s, where the ready budget alone would have ended the wait
+    *elapsed.lock().unwrap() = Duration::from_secs(20);
+    attach.runner.answer(3, listing(&[]));
+    let stepping = Arc::clone(&elapsed);
+    attach.drive("the second listing starts", move |attach| {
+        *stepping.lock().unwrap() += Duration::from_millis(10);
+        attach.runner.hosts().len() == 5
+    });
+    let (option, second) = attach.runner.timeouts()[4].clone();
+    assert_eq!(option, "ConnectTimeout=25");
+    assert!(
+        (Duration::from_secs(15)..=Duration::from_secs(24)).contains(&second),
+        "{second:?}"
+    );
+    attach.runner.answer(4, listing(&[]));
+    let stepping = Arc::clone(&elapsed);
+    attach.drive("the wait ends", move |attach| {
+        *stepping.lock().unwrap() += Duration::from_secs(31);
+        attach.hud().is_some_and(|hud| hud.spinner.is_none())
+    });
+    assert_eq!(
+        attach.runner.timeouts()[..4],
+        [timeout(25, 35), timeout(25, 55), timeout(25, 55), timeout(25, 35),],
+        "the listing, restore mode, the create, then the wait's first listing"
+    );
+}
+
+#[test]
 fn a_create_the_origin_refuses_or_never_answers_says_so_and_attaches_nothing() {
     let answers = [
         (

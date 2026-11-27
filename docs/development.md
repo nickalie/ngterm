@@ -1130,10 +1130,12 @@ mobile core over its own ssh channels, and each only sends that Mac the command 
   and the phone apps add a line saying why nothing is listed and what to change on that Mac.
 - ssh's `ConnectTimeout` (`crates/ngterm-core/src/remote/connect_timeout.rs`): 10 s, or what `remotes.conf` sets, which
   upstream's file has not: `connect-timeout = SECONDS` for every machine, `connect-timeout DESTINATION = SECONDS` for one
-  (keyed by the ssh destination, past a pin). A line whose first word is followed by `=` is a setting, not a remote; a
-  bad value or an unknown setting is a diagnostic of the file (its banner and a warning in the log), and the line is
-  skipped, so the value stays 10 s or the file-wide one. Each read of the file (the watcher's too) replaces the
-  process-wide table every ssh line reads, so an edit reaches the next ssh call. A deadline around an ssh call is the
+  (keyed by the ssh destination, past a pin). A line that starts with the word `connect-timeout` is the setting, with or
+  without blanks around `=`; every other line is a remote, as upstream reads it. A bad value or a setting line without
+  `=` is a diagnostic of the file (its banner and a warning in the log), and the line is skipped, so the value stays
+  10 s or the file-wide one. Each read of the file replaces the process-wide table every ssh line reads, and the GPUI
+  frontend and `ngterm-headless` both watch the file (`ngterm-app`'s `remotes_watcher`), so an edit reaches the next
+  ssh call. A deadline around an ssh call is the
   connect timeout plus the far side's own time (`after_connect`, `tree_deadline`); a presentation client takes the
   current value at each launch and waits that much longer for its first frame. The mobile core has its own: an
   app-wide `MobileCore::set_connect_timeout_secs` (10 s until set) and `Machine.connect_timeout_secs`, which bound the

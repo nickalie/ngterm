@@ -41,7 +41,6 @@ pub mod popovers;
 pub mod quick;
 pub mod reduce_transparency;
 pub mod remote;
-pub mod remotes_watcher;
 pub mod row_icon;
 pub mod search;
 pub mod selectable;

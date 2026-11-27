@@ -11,6 +11,7 @@
 //! - [`quick_placement`]: the quick terminal's host and placement decisions.
 //! - [`integrations`]: the agent integrations' planners and installers.
 //! - [`remote`]: the presentation bridge to an attached row's origin as a child process.
+//! - [`remotes_watcher`]: the watch on `remotes.conf`, which reads it again on every change.
 //! - [`page_channel`]: the helper carrying a handed-over page's channel to its origin as a child process.
 
 pub mod coverage;
@@ -23,6 +24,7 @@ pub mod page_channel;
 pub mod process_table;
 pub mod quick_placement;
 pub mod remote;
+pub mod remotes_watcher;
 pub mod restore_launch;
 #[cfg(test)]
 mod test_shell;

@@ -2401,7 +2401,7 @@ fn the_remotes_watch_refreshes_the_model_and_stops_on_drop() {
     drop(state.remotes_watcher.take());
     drop(main_loop.take());
     std::fs::write(&path, "studio\nlaptop\nbuild\n").unwrap();
-    std::thread::sleep(crate::remotes_watcher::DEBOUNCE * 6);
+    std::thread::sleep(ngterm_app::remotes_watcher::DEBOUNCE * 6);
     assert!(main_loop.take().is_empty(), "a dropped watch sends nothing");
 }
 

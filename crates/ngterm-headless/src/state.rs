@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use ngterm_app::page_channel::{PageHelperOwner, PageHelperProcess};
 use ngterm_app::remote::{InboundGate, PresentationViewer, ProcessTransport};
+use ngterm_app::remotes_watcher::RemotesWatcher;
 use ngterm_core::auto_follow::AutoFollowTimer;
 use ngterm_core::events::{PANE_FOCUS_DEBOUNCE, PaneFocusTimer, TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
 use ngterm_core::model::PendingCloseTimer;
@@ -146,6 +147,8 @@ pub struct HeadlessState {
     armed: Armed,
     /// The last task changed nothing the terminals follow ([`ngterm_core::settles_after`]): [`Self::land`] skips them.
     unchanged: bool,
+    /// The watch on `remotes.conf`, whose connect timeouts every ssh this instance starts takes.
+    remotes_watcher: Option<RemotesWatcher>,
 }
 
 /// The presentation bridges of the sessions this instance attached from another machine ([`ngterm_app::remote`]).
@@ -196,6 +199,28 @@ impl HeadlessState {
             phase: Phase::Running,
             armed: Armed::default(),
             unchanged: false,
+            remotes_watcher: None,
+        }
+    }
+
+    /// Starts following `remotes.conf` on disk, as the GPUI frontend does: every settled change reads it again. The
+    /// watch moves with the config directory at the next settle. Once, at launch.
+    pub fn watch_remotes(&mut self) {
+        let poster = self.poster.clone();
+        let watcher = RemotesWatcher::new(move || {
+            post(&poster, |state| {
+                if !state.quitting() {
+                    state.core.refresh_remotes(true);
+                    state.settle();
+                }
+            });
+        });
+        match watcher {
+            Ok(mut watcher) => {
+                watcher.follow(self.core.watched_remotes_path());
+                self.remotes_watcher = Some(watcher);
+            }
+            Err(error) => tracing::error!(%error, "remotes.conf: not followed; edits are seen at the next launch"),
         }
     }
 
@@ -235,6 +260,9 @@ impl HeadlessState {
             self.schedule_live_quit(quit.relaunch);
         }
         self.take_alerts();
+        if let Some(watcher) = &mut self.remotes_watcher {
+            watcher.follow(self.core.watched_remotes_path());
+        }
         self.arm_auto_follow();
         self.arm_hud_timers();
         self.arm_info_timers();
@@ -649,6 +677,7 @@ impl HeadlessState {
 
     /// Detaches every terminal from its session (after the quit save).
     pub fn teardown(&mut self) {
+        drop(self.remotes_watcher.take());
         self.panes.teardown_all();
     }
 }
