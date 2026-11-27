@@ -88,8 +88,9 @@ Linux build unless it names another OS.
   answer is listed again on the reconnect schedule for up to a week, and a session gone there is named in a banner
   (`crates/ngterm-core/src/remote/relaunch.rs`).
 - Another extension beyond upstream, which forgets it: a split's focused pane survives a relaunch (`splitFocused` in
-  the session snapshot), so a hidden split shows the same pane after a relaunch, its terminal started at once
-  (`crates/ngterm-core/src/model/snapshot.rs`, `crates/ngterm-gpui/src/split.rs`).
+  the session snapshot), so a hidden split shows the same pane after a relaunch. A hidden split's focused pane gets
+  its terminal at once and shows, also on a `session.focus` to a pane that has no terminal yet, where upstream keeps
+  the left pane on screen (`crates/ngterm-core/src/model/snapshot.rs`, `crates/ngterm-gpui/src/split.rs`).
 - Another extension beyond upstream, which has no mobile app: Android and iOS apps that view and drive another
   machine's live sessions over ssh ([Android](#android), [iOS](#ios)); both also have a chat view of a pane running
   Claude Code or Codex. The origin serves the chat through the Rust-only `agent.*` commands (`ngtermctl

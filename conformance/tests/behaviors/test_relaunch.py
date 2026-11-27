@@ -428,6 +428,8 @@ def test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch
         return observed == {"left": "running", "right": "running"}
 
     ctl.wait_response(vocabulary.command("live.list"), None, both_running)
+    # the left pane keeps the focus, so the relaunch starts no terminal for the hidden right pane
+    assert_ok(ctl.request("session.focus", sid, pane="left"))
     assert_ok(ctl.request("session.split", sid, mode="off"))
     ctl.wait_tree(lambda tree: find_session(tree, sid)["split"] is False)
 
@@ -452,7 +454,6 @@ def test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch
     assert_ok(ctl.request("session.close", sid))
 
 
-
 def _shown_panes(ctl, sid, tree=None):
     node = find_session(tree or ctl.tree(), sid)
     shown = {s["kind"]: s["visible"] for s in node["surfaces"] if s["kind"] in ("left", "right")}
@@ -460,11 +461,22 @@ def _shown_panes(ctl, sid, tree=None):
 
 
 @LIVE_IN_ANY_SHELL
-@pytest.mark.parametrize("focus", ["left", "right"])
+@pytest.mark.parametrize(
+    "focus",
+    [
+        "left",
+        pytest.param(
+            "right",
+            marks=pytest.mark.requires(
+                "split-focus-survives-relaunch", reason="upstream restores every split on its left pane"
+            ),
+        ),
+    ],
+)
 @pytest.mark.covers("behavior:restore.live-session-survives-relaunch", "session.restart", "field:tree.session.splitFocused")
 def test_a_hidden_split_shows_the_same_pane_after_a_relaunch_and_a_restart(launch, focus):
     """A hidden split shows only its focused pane; the relaunch and a later restart of the main pane keep that pane on
-    screen (a Rust-build extension: upstream forgets the focus across a relaunch)."""
+    screen (the right pane: the Rust-only `split-focus-survives-relaunch`)."""
     ctl = launch(settings={"restoreMode": "live"})
     sid = _new(ctl)
     assert_ok(ctl.request("session.split", sid, mode="on"))

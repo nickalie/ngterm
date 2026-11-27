@@ -494,6 +494,20 @@ fn the_split_terminal_is_created_once_laid_out() {
 }
 
 #[test]
+fn a_page_session_never_gets_a_split_terminal() {
+    let mut page = Session::new(SessionSeed {
+        initial_cwd: "/home/u".to_owned(),
+        content: ngterm_core::model::SessionContent::Page,
+        ..SessionSeed::default()
+    });
+    page.split = split(false, true);
+    page.split_pane_identity = Some(Uuid::new_v4());
+    assert!(!needs(&page, None).split, "a focused hidden split");
+    page.split.shown = true;
+    assert!(!needs(&page, None).split, "a shown split");
+}
+
+#[test]
 fn the_scratch_terminal_is_created_while_shown_without_one() {
     let mut scratch = session(None, false);
     scratch.scratch_active = true;

@@ -124,6 +124,7 @@ share is asserted directly, with no capability.
 | `sidebar-search` |  | Rust-only: the sidebar's session search: a field over the sidebar (`focus_sidebar_search`, Search Sessions…) keeps the sessions whose name holds its text, case-insensitive, under their workspaces, a matching companion's parent as context; Return opens the first match, Escape empties it, and the tree reads its text back as `sidebarSearch` |
 | `auto-follow-skips-ended` |  | Rust-only: auto-follow never selects a blocked session that runs nothing: one whose live session was lost, or an attached row every pane of which holds its exit, since the build closes such a terminal companion row and the selection would come back at once |
 | `live-attach-no-select` |  | Rust-only: `live attach HOST SESSION --no-select`, also with `--companions` (`noSelect` on `live.attach` and `live.attach.group`), adds the rows and leaves the window's selection and keyboard focus where they were |
+| `split-focus-survives-relaunch` |  | Rust-only: a split's focused pane survives a relaunch (`splitFocused` in the session snapshot), so a hidden split shows the same pane after it; upstream restores every split on its left pane |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -172,7 +173,9 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `sidebar-search`: on every OS, the sidebar's session search, a Rust-only extension (below);
 - `auto-follow-skips-ended`: on every OS, auto-follow's skip of a blocked session that runs nothing, a Rust-only
   extension (below);
-- `live-attach-no-select`: on every OS, `live attach --no-select`, a Rust-only extension (below).
+- `live-attach-no-select`: on every OS, `live attach --no-select`, a Rust-only extension (below);
+- `split-focus-survives-relaunch`: on every OS, a split's focused pane kept across a relaunch, a Rust-only extension
+  (below).
 
 It does not claim:
 
@@ -217,8 +220,9 @@ ghostty config sets `copy-on-select = false`.
 A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as
 `unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
 instead, with `--must-pass` on the capability in every job whose host can claim it.
-Today there are ten: `live-any-shell`, `agent-chat`, `pages-survive`, `kitty-clipboard`, `agterm-peer`,
-`shell-profiles`, `web-worker-faults`, `sidebar-search`, `auto-follow-skips-ended` and `live-attach-no-select`. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
+Today there are eleven: `live-any-shell`, `agent-chat`, `pages-survive`, `kitty-clipboard`, `agterm-peer`,
+`shell-profiles`, `web-worker-faults`, `sidebar-search`, `auto-follow-skips-ended`, `live-attach-no-select` and
+`split-focus-survives-relaunch`. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
 shell, or the one ghostty `command` names in its place), zsh and fish as upstream, bash and PowerShell as well, each
 started with its shell integration the way libghostty starts a shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in
 POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's root merged in front of the pane's own value as
@@ -342,6 +346,13 @@ build claims both on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and 
 Windows skips them (no `posix-command-line`), and no CI job runs this build's suite on macOS: the Linux legs are the
 only check of the two capabilities. No event shows the keyboard focus of a new row, so the core's unit tests check
 that `--no-select` keeps it.
+
+`split-focus-survives-relaunch`: upstream's session snapshot has no split focus, so a relaunch restores every split
+on its left pane, and a hidden split focused on its right pane comes back showing the left one. This build saves
+`splitFocused` in the snapshot and starts the focused pane's terminal at once, so a hidden split shows the same pane
+after a relaunch. Its test is in `tests/behaviors/test_relaunch.py` and needs a Live host too. The build claims it on
+every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and the three Linux legs run with
+`--must-pass split-focus-survives-relaunch`.
 
 ### Commands
 

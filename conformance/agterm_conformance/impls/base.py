@@ -211,6 +211,8 @@ CAPABILITIES: Mapping[str, str] = {
     "live-attach-no-select": "Rust-only: `live attach HOST SESSION --no-select`, also with `--companions` "
     "(`noSelect` on `live.attach` and `live.attach.group`), adds the rows and leaves the window's selection and "
     "keyboard focus where they were",
+    "split-focus-survives-relaunch": "Rust-only: a split's focused pane survives a relaunch (`splitFocused` in the "
+    "session snapshot), so a hidden split shows the same pane after it; upstream restores every split on its left pane",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",

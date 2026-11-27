@@ -294,8 +294,8 @@ fn copied_argv(command: Option<&String>, argv: Option<&Vec<String>>) -> Option<V
 
 /// Rebuilds one session, its companion link as persisted: the workspace's regrouping drops one naming no top-level
 /// session. A hidden split keeps its identity and restore state, so showing it reattaches the surviving
-/// daemon; focus is not persisted and returns to the primary pane. Missing pane identities (a legacy snapshot) are
-/// minted. Its pages open again in their slots under fresh ids, the entries that no longer check out dropped (a file
+/// daemon; its focused pane comes back from `splitFocused` (a legacy snapshot without it, on the primary). Missing pane
+/// identities (a legacy snapshot) are minted. Its pages open again in their slots under fresh ids, the entries that no longer check out dropped (a file
 /// page's grant checked against `home`). A page session comes back as one in every restore mode.
 #[must_use]
 pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool, home: &str) -> Session {

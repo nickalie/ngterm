@@ -43,7 +43,8 @@ use crate::windows::{ConfigHost, Windows};
 /// the next one is handed it, `kitty-clipboard`, a program's Kitty clipboard protocol, `agterm-peer`, attaching an
 /// upstream agterm Mac's sessions, and `shell-profiles`, the Rust-only shell profiles a pane runs in place of the login
 /// shell, `sidebar-search`, the sidebar's session search, `auto-follow-skips-ended`, auto-follow's skip of a blocked
-/// session that runs nothing, and `live-attach-no-select`, `live attach --no-select`. Linux alone claims `web-worker-faults`: its pages' engine runs in the `ngterm-web` worker, which a launch can
+/// session that runs nothing, `live-attach-no-select`, `live attach --no-select`, and
+/// `split-focus-survives-relaunch`, a split's focused pane kept across a relaunch. Linux alone claims `web-worker-faults`: its pages' engine runs in the `ngterm-web` worker, which a launch can
 /// make misbehave.
 #[cfg(not(any(windows, target_os = "macos")))]
 pub const CAPABILITIES: &[&str] = &[
@@ -61,6 +62,7 @@ pub const CAPABILITIES: &[&str] = &[
     "sidebar-search",
     "auto-follow-skips-ended",
     "live-attach-no-select",
+    "split-focus-survives-relaunch",
     "web-worker-faults",
 ];
 /// The capabilities of the Rust target profile this build implements on macOS (see Linux's above).
@@ -79,6 +81,7 @@ pub const CAPABILITIES: &[&str] = &[
     "sidebar-search",
     "auto-follow-skips-ended",
     "live-attach-no-select",
+    "split-focus-survives-relaunch",
 ];
 /// The capabilities of the Rust target profile this build implements on Windows (see Linux's above).
 #[cfg(windows)]
@@ -96,6 +99,7 @@ pub const CAPABILITIES: &[&str] = &[
     "sidebar-search",
     "auto-follow-skips-ended",
     "live-attach-no-select",
+    "split-focus-survives-relaunch",
 ];
 
 /// The capabilities this host claims: the profile's, and the `live` ones by host ([`session_host::claims`]).
