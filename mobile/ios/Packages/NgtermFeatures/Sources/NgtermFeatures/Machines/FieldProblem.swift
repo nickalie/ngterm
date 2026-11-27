@@ -1,3 +1,5 @@
+import NgtermPlatform
+
 /// What is wrong with a field of the machine form, in the words the form shows under it.
 public enum FieldProblem: CaseIterable, Hashable, Sendable {
     /// `host:port` in the host.
@@ -12,10 +14,15 @@ public enum FieldProblem: CaseIterable, Hashable, Sendable {
     case keyMissing
     /// A port that isn't 1 to 65535.
     case portInvalid
+    /// A connect timeout outside ``AppSettings/connectTimeouts``.
+    case timeoutInvalid
     /// A user with a space in it.
     case userHasSpace
     /// No user.
     case userMissing
+
+    private static let fewestSeconds = AppSettings.connectTimeouts.lowerBound
+    private static let mostSeconds = AppSettings.connectTimeouts.upperBound
 
     /// The field it is about.
     public var field: MachineField {
@@ -31,6 +38,9 @@ public enum FieldProblem: CaseIterable, Hashable, Sendable {
 
         case .keyMissing:
             .key
+
+        case .timeoutInvalid:
+            .timeout
         }
     }
 
@@ -60,6 +70,9 @@ public enum FieldProblem: CaseIterable, Hashable, Sendable {
 
         case .keyMissing:
             String(localized: "Choose the key to sign in with.")
+
+        case .timeoutInvalid:
+            String(localized: "Enter \(Self.fewestSeconds) to \(Self.mostSeconds) seconds, or leave it empty.")
         }
     }
 }

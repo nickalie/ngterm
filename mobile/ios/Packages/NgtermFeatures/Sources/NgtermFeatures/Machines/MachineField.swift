@@ -8,6 +8,8 @@ public enum MachineField: CaseIterable, Hashable, Sendable {
     case label
     /// Its ssh port.
     case port
+    /// Its own connect timeout.
+    case timeout
     /// The user it signs in as.
     case user
 }

@@ -99,6 +99,35 @@ internal struct MachineStoreTests {
         #expect(blank.title == "box.example")
     }
 
+    @Test("a machine's own connect timeout round-trips, is stored only when set, and reads as none out of range")
+    internal func connectTimeout() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let store = MachineStore(directory: directory.url)
+        var slow = Self.box
+        slow.connectTimeout = 45
+        try store.save(slow)
+        try store.save(Self.board)
+        #expect(MachineStore(directory: directory.url).machines == [slow, Self.board])
+        let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.file(MachineStore.fileName)))
+        let fields = try #require(stored as? [[String: Any]])
+        #expect(fields.map { $0["connectTimeout"] as? Int } == [45, nil])
+        #expect(fields[1].keys.contains("connectTimeout") == false)
+        let json = #"[{"id":"m1","host":"h","user":"u","keyId":"k1","connectTimeout":500}]"#
+        try Data(json.utf8).write(to: directory.file(MachineStore.fileName))
+        #expect(MachineStore(directory: directory.url).machines.first?.connectTimeout == nil)
+        let made = StoredMachine(id: "m1", label: "", host: "h", port: 22, user: "u", keyId: "k1", connectTimeout: 2)
+        #expect(made.connectTimeout == nil)
+    }
+
+    @Test("the core's record carries the machine's own connect timeout, or none for Settings'")
+    internal func coreRecordTimeout() {
+        var slow = Self.box
+        slow.connectTimeout = 45
+        #expect(slow.core.connectTimeoutSecs == 45)
+        #expect(Self.box.core.connectTimeoutSecs == nil)
+    }
+
     @Test("the core's record carries the title as its label")
     internal func coreRecord() {
         #expect(

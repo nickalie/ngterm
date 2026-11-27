@@ -40,6 +40,11 @@ public final class MachinesModel {
         graph.keys.keys
     }
 
+    /// The seconds a connect may take to reach a machine that sets none of its own: Settings'.
+    public var connectTimeout: Int {
+        graph.settings.settings.connectTimeout
+    }
+
     /// The question a connect waits on that the app asks first: a host key before a sign-in, the first machine first.
     public var prompt: ConnectPrompt? {
         let listed = items

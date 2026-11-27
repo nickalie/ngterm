@@ -6,6 +6,7 @@ import NgtermCore
 /// Its pinned host key is not here: ``KeychainHostKeys`` holds it, the one place the core reads it from.
 public struct StoredMachine: Codable, Hashable, Sendable, Identifiable {
     private enum CodingKeys: CodingKey {
+        case connectTimeout
         case host
         case id
         case keyId
@@ -29,6 +30,8 @@ public struct StoredMachine: Codable, Hashable, Sendable, Identifiable {
     public var user: String
     /// The key it signs in with.
     public var keyId: String
+    /// The seconds a connect may take to reach it, within ``AppSettings/connectTimeouts``; `nil` takes Settings'.
+    public var connectTimeout: Int?
 
     /// What the list shows for it: its name, or its host when it has none.
     public var title: String {
@@ -42,20 +45,39 @@ public struct StoredMachine: Codable, Hashable, Sendable, Identifiable {
 
     /// The record the core connects; it never carries the pin, since the core trusts only its host-key store.
     public var core: Machine {
-        Machine(id: id, label: title, host: host, port: port, user: user, keyId: keyId)
+        Machine(
+            id: id,
+            label: title,
+            host: host,
+            port: port,
+            user: user,
+            keyId: keyId,
+            connectTimeoutSecs: connectTimeout.map(UInt32.init)
+        )
     }
 
-    /// The machine `id`, reached as `user` at `host`, on `port`, with the key `keyId`.
-    public init(id: String, label: String, host: String, port: UInt16, user: String, keyId: String) {
+    /// The machine `id`, reached as `user` at `host`, on `port`, with the key `keyId`, given `connectTimeout` seconds
+    /// to connect (`nil`, or a value outside ``AppSettings/connectTimeouts``: Settings').
+    public init(
+        id: String,
+        label: String,
+        host: String,
+        port: UInt16,
+        user: String,
+        keyId: String,
+        connectTimeout: Int? = nil
+    ) {
         self.id = id
         self.label = label
         self.host = host
         self.port = port
         self.user = user
         self.keyId = keyId
+        self.connectTimeout = Self.ownTimeout(connectTimeout)
     }
 
-    /// A machine as stored: a missing label is none, and a missing port the ssh one.
+    /// A machine as stored: a missing label is none, a missing port the ssh one, and a missing connect timeout, or one
+    /// outside ``AppSettings/connectTimeouts``, Settings'.
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
@@ -64,5 +86,11 @@ public struct StoredMachine: Codable, Hashable, Sendable, Identifiable {
         port = try values.decodeIfPresent(UInt16.self, forKey: .port) ?? Self.sshPort
         user = try values.decode(String.self, forKey: .user)
         keyId = try values.decode(String.self, forKey: .keyId)
+        connectTimeout = Self.ownTimeout(try? values.decodeIfPresent(Int.self, forKey: .connectTimeout))
+    }
+
+    // a machine's own connect timeout, if it is one the app can set
+    private static func ownTimeout(_ seconds: Int?) -> Int? {
+        seconds.flatMap { AppSettings.connectTimeouts.contains($0) ? $0 : nil }
     }
 }

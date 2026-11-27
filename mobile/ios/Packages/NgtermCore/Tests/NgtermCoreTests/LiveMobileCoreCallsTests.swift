@@ -89,6 +89,7 @@ internal struct LiveMobileCoreCallsTests {
         try core.answerHostKey(machineId: "m1", fingerprint: "SHA256:abc", trust: true)
         try core.detachSession(machineId: "m1", sessionId: "s1")
         try core.networkChanged()
+        core.setConnectTimeoutSecs(30)
         try core.answerAsk(machineId: "m1", sessionId: "s1", askId: "a1", reply: Self.cancel)
         try core.answerPick(machineId: "m1", sessionId: "s1", pickId: "p1", reply: .cancelled)
         try core.hidePane(machineId: "m1", sessionId: "s1", paneId: Self.paneId)

@@ -3,7 +3,8 @@ import NgtermPlatform
 import SwiftUI
 
 /// Add machine, or Edit machine: the name, host, port and user, the key to sign in with (a choice only when the app
-/// has more than one) and the way to its public key, and for a machine already added its pinned host key.
+/// has more than one) and the way to its public key, its own connection timeout (empty takes Settings'), and for a
+/// machine already added its pinned host key.
 ///
 /// A field says what is wrong with it once it has been left or Save was tried; Save with problems only shows them.
 internal struct MachineFormView: View {
@@ -23,6 +24,7 @@ internal struct MachineFormView: View {
             Form {
                 addressSection
                 keySection
+                timeoutSection
                 if editing != nil {
                     pinSection
                 }
@@ -145,6 +147,33 @@ internal struct MachineFormView: View {
             if let problem = problem(.key) {
                 InlineProblem(problem.message)
             }
+        }
+    }
+
+    private var timeoutSection: some View {
+        let seconds = AppSettings.connectTimeouts
+        return Section {
+            FormField(
+                field: .timeout,
+                title: String(localized: "\(model.connectTimeout) s from Settings"),
+                text: $draft.timeout,
+                problem: problem(.timeout),
+                focus: $focus,
+                isMono: true
+            )
+            .keyboardType(.numberPad)
+        } header: {
+            FormHint(String(localized: "Connection timeout"), .header)
+        } footer: {
+            FormHint(
+                String(
+                    localized: """
+                        How many seconds, \(seconds.lowerBound) to \(seconds.upperBound), this machine may take to \
+                        answer a connect. Leave it empty to use Settings'.
+                        """
+                ),
+                .note
+            )
         }
     }
 

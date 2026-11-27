@@ -89,16 +89,16 @@ internal struct AppLifecycleTests {
         let life = lifecycle()
         try await attach()
         await life.refresh()
-        #expect(test.refreshCore.calls.count == 3, "not started: the refresh runs")
+        #expect(test.refreshCore.calls.count == 4, "not started: the refresh runs")
         test.graph.start()
         life.lifecycle.sceneEntered(window)
         await life.refresh()
-        #expect(test.refreshCore.calls.count == 3, "in the foreground the streams tell the statuses")
+        #expect(test.refreshCore.calls.count == 4, "in the foreground the streams tell the statuses")
         life.lifecycle.sceneLeft(window)
         grace.runOut()
         let asked = scheduler.schedules
         await life.refresh()
-        #expect(test.refreshCore.calls.count == 6, "suspended: the refresh runs")
+        #expect(test.refreshCore.calls.count == 8, "suspended: the refresh runs")
         #expect(scheduler.schedules == asked + 1)
     }
 }

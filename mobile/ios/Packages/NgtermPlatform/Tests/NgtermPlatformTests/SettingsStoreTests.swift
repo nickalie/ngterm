@@ -19,6 +19,7 @@ internal struct SettingsStoreTests {
         #expect(settings.extraKeys == .fit)
         #expect(!settings.keepScreenOn)
         #expect(settings.agentChat)
+        #expect(settings.connectTimeout == 10)
     }
 
     @Test("the settings round-trip through the file, each choice by its name")
@@ -32,7 +33,8 @@ internal struct SettingsStoreTests {
             theme: .dark,
             extraKeys: .twoLines,
             keepScreenOn: true,
-            agentChat: false
+            agentChat: false,
+            connectTimeout: 45
         )
         try SettingsStore(directory: directory.url).update { $0 = changed }
         #expect(SettingsStore(directory: directory.url).settings == changed)
@@ -44,6 +46,23 @@ internal struct SettingsStoreTests {
         #expect(fields["extraKeys"] as? String == "twoLines")
         #expect(fields["textSize"] as? Int == 17)
         #expect(fields["agentChat"] as? Bool == false)
+        #expect(fields["connectTimeout"] as? Int == 45)
+    }
+
+    @Test("the connect timeout stays within 3 to 60 seconds, whether set or stored")
+    internal func connectTimeoutClamped() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let store = SettingsStore(directory: directory.url)
+        try store.update { $0.connectTimeout = 90 }
+        #expect(store.settings.connectTimeout == 60)
+        try store.update { $0.connectTimeout = 1 }
+        #expect(store.settings.connectTimeout == 3)
+        #expect(AppSettings(connectTimeout: 0).connectTimeout == 3)
+        try Data(#"{"connectTimeout":400}"#.utf8).write(to: directory.file(SettingsStore.fileName))
+        #expect(SettingsStore(directory: directory.url).settings.connectTimeout == 60)
+        try Data(#"{"connectTimeout":"soon"}"#.utf8).write(to: directory.file(SettingsStore.fileName))
+        #expect(SettingsStore(directory: directory.url).settings.connectTimeout == 10)
     }
 
     @Test("the text size stays within its range, whether set or stored")

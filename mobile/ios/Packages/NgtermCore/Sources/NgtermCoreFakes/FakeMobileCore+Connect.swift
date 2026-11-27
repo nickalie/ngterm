@@ -73,15 +73,16 @@
             }
         }
 
-        /// Whether `machine` is connected as it is, up to its label.
+        /// Whether `machine` is connected as it is, up to its label and connect timeout (api.rs's `reached_as`).
         ///
-        /// Renamed only, it keeps its connection and takes the new label.
+        /// Renamed or given another timeout only, it keeps its connection and takes the new record.
         private func keepsConnection(_ machine: Machine) -> Bool {
             state.withLock { state in
                 guard state.connected.contains(machine.id), var kept = state.records[machine.id] else {
                     return false
                 }
                 kept.label = machine.label
+                kept.connectTimeoutSecs = machine.connectTimeoutSecs
                 guard kept == machine else {
                     return false
                 }

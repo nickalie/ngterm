@@ -45,7 +45,7 @@ public final class SettingsStore {
         }
     }
 
-    /// Changes the settings by `change`; the text size is held within ``AppSettings/textSizes``.
+    /// Changes the settings by `change`; the text size and the connect timeout are held within their ranges.
     public func update(_ change: (inout AppSettings) -> Void) throws(StoreError) {
         if !loaded {
             settings = try file.read() ?? AppSettings()
@@ -54,6 +54,7 @@ public final class SettingsStore {
         var next = settings
         change(&next)
         next.textSize = AppSettings.clamped(next.textSize)
+        next.connectTimeout = AppSettings.clampedTimeout(next.connectTimeout)
         try file.write(next)
         settings = next
     }

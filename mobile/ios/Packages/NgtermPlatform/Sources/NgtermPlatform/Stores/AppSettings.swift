@@ -4,6 +4,7 @@
 public struct AppSettings: Codable, Hashable, Sendable {
     private enum CodingKeys: CodingKey {
         case agentChat
+        case connectTimeout
         case extraKeys
         case font
         case keepScreenOn
@@ -16,6 +17,11 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public static let textSizes = 8...32
     /// The terminal's text size until the user picks another, in points.
     public static let defaultTextSize = 13
+    /// The seconds a connect may be given to reach a machine, app-wide or for one machine
+    /// (``StoredMachine/connectTimeout``).
+    public static let connectTimeouts = 3...60
+    /// The connect timeout until the user picks another, in seconds: the core's own default.
+    public static let defaultConnectTimeout = 10
 
     /// The terminal's text size, in points, within ``textSizes``.
     public var textSize: Int
@@ -32,8 +38,11 @@ public struct AppSettings: Codable, Hashable, Sendable {
     /// Whether a pane running Claude Code or Codex shows as a chat (Agent chat view); a session's More menu sets its
     /// own.
     public var agentChat: Bool
+    /// The seconds a connect may take to reach a machine that sets none of its own, within ``connectTimeouts``.
+    public var connectTimeout: Int
 
-    /// The settings given, each defaulting to its default; the text size is held within ``textSizes``.
+    /// The settings given, each defaulting to its default; the text size is held within ``textSizes``, and the connect
+    /// timeout within ``connectTimeouts``.
     public init(
         textSize: Int = Self.defaultTextSize,
         font: FontChoice = .jetBrainsMono,
@@ -41,7 +50,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         theme: ThemeChoice = .system,
         extraKeys: ExtraKeysChoice = .fit,
         keepScreenOn: Bool = false,
-        agentChat: Bool = true
+        agentChat: Bool = true,
+        connectTimeout: Int = Self.defaultConnectTimeout
     ) {
         self.textSize = Self.clamped(textSize)
         self.font = font
@@ -50,10 +60,11 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.extraKeys = extraKeys
         self.keepScreenOn = keepScreenOn
         self.agentChat = agentChat
+        self.connectTimeout = Self.clampedTimeout(connectTimeout)
     }
 
     /// The settings as stored: a value missing, or one this build doesn't know, reads as its default, and the text
-    /// size is held within ``textSizes``.
+    /// size and the connect timeout are held within their ranges.
     public init(from decoder: any Decoder) throws {
         let defaults = Self()
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -64,11 +75,19 @@ public struct AppSettings: Codable, Hashable, Sendable {
         extraKeys = .stored(try? values.decodeIfPresent(String.self, forKey: .extraKeys)) ?? defaults.extraKeys
         keepScreenOn = (try? values.decodeIfPresent(Bool.self, forKey: .keepScreenOn)) ?? defaults.keepScreenOn
         agentChat = (try? values.decodeIfPresent(Bool.self, forKey: .agentChat)) ?? defaults.agentChat
+        connectTimeout = Self.clampedTimeout(
+            (try? values.decodeIfPresent(Int.self, forKey: .connectTimeout)) ?? defaults.connectTimeout
+        )
     }
 
     /// `size` held within ``textSizes``.
     public static func clamped(_ size: Int) -> Int {
         min(max(size, textSizes.lowerBound), textSizes.upperBound)
+    }
+
+    /// `seconds` held within ``connectTimeouts``.
+    public static func clampedTimeout(_ seconds: Int) -> Int {
+        min(max(seconds, connectTimeouts.lowerBound), connectTimeouts.upperBound)
     }
 
     /// Writes the settings, each choice by its case's name.
@@ -81,5 +100,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         try values.encode(extraKeys.storedName, forKey: .extraKeys)
         try values.encode(keepScreenOn, forKey: .keepScreenOn)
         try values.encode(agentChat, forKey: .agentChat)
+        try values.encode(connectTimeout, forKey: .connectTimeout)
     }
 }

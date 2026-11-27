@@ -1,7 +1,8 @@
 import Foundation
 import NgtermPlatform
 
-/// The machine form's fields as typed: the port as text, so a half-typed one can be shown and corrected.
+/// The machine form's fields as typed: the port and the connect timeout as text, so a half-typed one can be shown and
+/// corrected; an empty timeout takes Settings'.
 public struct MachineDraft: Hashable, Sendable {
     private static let maxPort = Int(UInt16.max)
 
@@ -15,6 +16,8 @@ public struct MachineDraft: Hashable, Sendable {
     public var user: String
     /// The key it signs in with; empty for none chosen.
     public var keyId: String
+    /// Its own connect timeout in seconds, as typed; empty for Settings'.
+    public var timeout: String
 
     /// What is wrong with it, at most one problem per field.
     public var problems: [MachineField: FieldProblem] {
@@ -23,17 +26,26 @@ public struct MachineDraft: Hashable, Sendable {
             Self.portProblem(port.trimmingCharacters(in: .whitespacesAndNewlines)),
             Self.userProblem(user.trimmingCharacters(in: .whitespacesAndNewlines)),
             keyId.isEmpty ? FieldProblem.keyMissing : nil,
+            Self.timeoutProblem(timeout.trimmingCharacters(in: .whitespacesAndNewlines)),
         ]
         return Dictionary(uniqueKeysWithValues: found.compactMap(\.self).map { ($0.field, $0) })
     }
 
-    /// An empty draft on the ssh port.
-    public init(label: String = "", host: String = "", port: String? = nil, user: String = "", keyId: String = "") {
+    /// An empty draft on the ssh port, with Settings' connect timeout.
+    public init(
+        label: String = "",
+        host: String = "",
+        port: String? = nil,
+        user: String = "",
+        keyId: String = "",
+        timeout: String = ""
+    ) {
         self.label = label
         self.host = host
         self.port = port ?? String(StoredMachine.sshPort)
         self.user = user
         self.keyId = keyId
+        self.timeout = timeout
     }
 
     /// The draft that edits `machine`.
@@ -43,7 +55,8 @@ public struct MachineDraft: Hashable, Sendable {
             host: machine.host,
             port: String(machine.port),
             user: machine.user,
-            keyId: machine.keyId
+            keyId: machine.keyId,
+            timeout: machine.connectTimeout.map(String.init) ?? ""
         )
     }
 
@@ -75,6 +88,16 @@ public struct MachineDraft: Hashable, Sendable {
         return hasPort(host) ? .hostHasPort : nil
     }
 
+    private static func timeoutProblem(_ timeout: String) -> FieldProblem? {
+        guard !timeout.isEmpty else {
+            return nil
+        }
+        guard let seconds = Int(timeout), AppSettings.connectTimeouts.contains(seconds) else {
+            return .timeoutInvalid
+        }
+        return nil
+    }
+
     private static func userProblem(_ user: String) -> FieldProblem? {
         if user.isEmpty {
             return .userMissing
@@ -93,7 +116,8 @@ public struct MachineDraft: Hashable, Sendable {
             host: host.trimmingCharacters(in: .whitespacesAndNewlines),
             port: number,
             user: user.trimmingCharacters(in: .whitespacesAndNewlines),
-            keyId: keyId
+            keyId: keyId,
+            connectTimeout: Int(timeout.trimmingCharacters(in: .whitespacesAndNewlines))
         )
     }
 }

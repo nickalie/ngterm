@@ -69,6 +69,8 @@ public final class Connections {
     // stops being attached shows its listing's name again
     @ObservationIgnored private var listings: [String: [RemoteSession]] = [:]
     @ObservationIgnored private var consumer: Task<Void, Never>?
+    // the app-wide connect timeout last handed to the core
+    @ObservationIgnored private var connectTimeout: Int?
     // the app's other parts that take the core's events (the live sessions), and those that follow the attached set
     @ObservationIgnored private var listeners: [@MainActor (MobileEvent) -> Void] = []
     @ObservationIgnored private var attachedWatchers: [@MainActor ([String: Set<String>]) -> Void] = []
@@ -100,10 +102,12 @@ public final class Connections {
         }
     }
 
-    // a machine is reached alike when only its label differs: renaming it keeps its connection
+    // a machine is reached alike when only its label or connect timeout differs (api.rs's `reached_as`): such an edit
+    // keeps its connection
     private static func reachesAlike(_ before: Machine, _ after: Machine) -> Bool {
         var renamed = before
         renamed.label = after.label
+        renamed.connectTimeoutSecs = after.connectTimeoutSecs
         return renamed == after
     }
 
@@ -226,6 +230,16 @@ public final class Connections {
     public func useKey(machineId: String, keyId: String) {
         records[machineId]?.keyId = keyId
         guarded { try core.useKey(machineId: machineId, keyId: keyId) }
+    }
+
+    /// A connect may take `seconds` to reach a machine that sets no time of its own, from its next connect or
+    /// reconnect on; the core hears of each value once.
+    public func setConnectTimeout(seconds: Int) {
+        guard seconds != connectTimeout else {
+            return
+        }
+        connectTimeout = seconds
+        core.setConnectTimeoutSecs(UInt32(clamping: seconds))
     }
 
     /// The network came back or changed: a machine waiting to reconnect tries at once.

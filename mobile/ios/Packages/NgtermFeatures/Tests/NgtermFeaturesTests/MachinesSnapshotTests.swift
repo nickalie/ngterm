@@ -200,10 +200,11 @@ internal struct MachinesSnapshotTests {
         ScreenSnapshot.check(view, named: "machines-sidebar-tree", variant: variant)
     }
 
-    @Test("Add machine, Save tried with problems", arguments: ScreenVariant.allCases)
+    @Test("Add machine, Save tried with problems, the timeout naming Settings'", arguments: ScreenVariant.allCases)
     internal func addForm(variant: ScreenVariant) async throws {
         defer { test.remove() }
         _ = try await test.seedKey()
+        try test.graph.settings.update { $0.connectTimeout = 25 }
         let model = MachinesModel(graph: test.graph)
         ScreenSnapshot.check(
             MachineFormView(model: model, target: .add, showsProblems: true),
@@ -212,13 +213,24 @@ internal struct MachinesSnapshotTests {
         )
     }
 
-    @Test("Edit machine, with its pinned host key and two keys to choose from", arguments: ScreenVariant.allCases)
+    @Test(
+        "Edit machine, with its own connect timeout, its pinned host key and two keys to choose from",
+        arguments: ScreenVariant.allCases
+    )
     internal func editForm(variant: ScreenVariant) async throws {
         defer { test.remove() }
         let key = try await test.seedKey()
         _ = try await test.graph.keys.rotate()
         try test.seed(
-            StoredMachine(id: "m1", label: "build-01", host: "build-01.lan", port: 22, user: "nick", keyId: key.id)
+            StoredMachine(
+                id: "m1",
+                label: "build-01",
+                host: "build-01.lan",
+                port: 22,
+                user: "nick",
+                keyId: key.id,
+                connectTimeout: 45
+            )
         )
         test.pins.set(machineId: "m1", fingerprint: "SHA256:q0Gm4d1Xb7pKc2yT9wVZ5eRj8sHnLfA3uMiO6tYvB1E")
         let model = MachinesModel(graph: test.graph)

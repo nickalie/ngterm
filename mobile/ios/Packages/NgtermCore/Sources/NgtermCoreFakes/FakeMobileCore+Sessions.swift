@@ -211,6 +211,11 @@
         }
 
         /// Records the call.
+        public func setConnectTimeoutSecs(_ secs: UInt32) {
+            state.withLock { $0.recorded.append(FakeCall("setConnectTimeoutSecs", [secs])) }
+        }
+
+        /// Records the call.
         public func suspend() throws {
             try record("suspend", [])
         }

@@ -60,6 +60,9 @@ internal struct MachineDraftTests {
             (with { $0.user = " " }, .userMissing),
             (with { $0.user = "ni ck" }, .userHasSpace),
             (with { $0.keyId = "" }, .keyMissing),
+            (with { $0.timeout = "2" }, .timeoutInvalid),
+            (with { $0.timeout = "61" }, .timeoutInvalid),
+            (with { $0.timeout = "4s" }, .timeoutInvalid),
         ]
     )
     internal func problems(draft: MachineDraft, problem: FieldProblem) {
@@ -80,6 +83,20 @@ internal struct MachineDraftTests {
             id: "m1", label: "Build box", host: "build-01.lan", port: 2_222, user: "nick", keyId: "k1"
         )
         #expect(MachineDraft(editing: machine).machine(id: "m1") == machine)
+        var slow = machine
+        slow.connectTimeout = 45
+        #expect(MachineDraft(editing: slow).timeout == "45")
+        #expect(MachineDraft(editing: slow).machine(id: "m1") == slow)
+    }
+
+    @Test("an empty connect timeout takes Settings', and one from 3 to 60 seconds is the machine's own")
+    internal func connectTimeout() {
+        #expect(MachineDraft().timeout.isEmpty)
+        #expect(Self.good.machine(id: "m1")?.connectTimeout == nil)
+        #expect(Self.with { $0.timeout = " " }.machine(id: "m1")?.connectTimeout == nil)
+        #expect(Self.with { $0.timeout = "3" }.machine(id: "m1")?.connectTimeout == 3)
+        #expect(Self.with { $0.timeout = " 60\n" }.machine(id: "m1")?.connectTimeout == 60)
+        #expect(FieldProblem.timeoutInvalid.message == "Enter 3 to 60 seconds, or leave it empty.")
     }
 
     @Test("every problem has words, about its own field")
@@ -87,6 +104,6 @@ internal struct MachineDraftTests {
         for problem in FieldProblem.allCases {
             #expect(!problem.message.isEmpty)
         }
-        #expect(Set(FieldProblem.allCases.map(\.field)) == [.host, .port, .user, .key])
+        #expect(Set(FieldProblem.allCases.map(\.field)) == [.host, .port, .user, .key, .timeout])
     }
 }

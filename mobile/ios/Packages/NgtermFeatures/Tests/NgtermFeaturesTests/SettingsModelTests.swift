@@ -14,6 +14,11 @@ import Testing
 internal struct SettingsModelTests {
     private let test = TestGraph()
 
+    // the connect timeouts the graph's core was handed, oldest first
+    private static func timeouts(_ graph: TestGraph) -> [UInt32] {
+        graph.core.calls.filter { $0.method == "setConnectTimeoutSecs" }.compactMap { $0.args.first as? UInt32 }
+    }
+
     // a program on `machineId` reads the clipboard and the user allows it always
     private func trust(_ machineId: String) async {
         let pane = PaneRef(machineId: machineId, sessionId: "s1", paneId: "P1")
@@ -151,6 +156,26 @@ internal struct SettingsModelTests {
         #expect(SettingsChoices.name(of: .drafting, isDark: true) == "Drafting")
     }
 
+    @Test("the core has Settings' connect timeout from the start, and each new one as it is set")
+    internal func connectTimeoutReachesTheCore() async {
+        defer { test.remove() }
+        let sent = { Self.timeouts(test) }
+        #expect(sent() == [10])
+        let model = SettingsModel(graph: test.graph)
+        model.change { $0.connectTimeout = 30 }
+        await Wait.until { sent() == [10, 30] }
+        model.change { $0.keepScreenOn = true }
+        model.change { $0.connectTimeout = 60 }
+        await Wait.until { sent() == [10, 30, 60] }
+    }
+
+    @Test("a relaunch hands the core the connect timeout Settings kept")
+    internal func storedTimeoutReachesTheCore() throws {
+        defer { test.remove() }
+        try test.graph.settings.update { $0.connectTimeout = 40 }
+        #expect(Self.timeouts(TestGraph(directory: test.directory)) == [40])
+    }
+
     @Test("a control's binding shows the setting and stores each change as it is made")
     internal func bindings() {
         defer { test.remove() }
@@ -160,6 +185,10 @@ internal struct SettingsModelTests {
         size.wrappedValue = 18
         #expect(model.settings.textSize == 18)
         #expect(SettingsStore(directory: test.directory).settings.textSize == 18)
+        let timeout = model.binding(\.connectTimeout)
+        #expect(timeout.wrappedValue == 10)
+        timeout.wrappedValue = 30
+        #expect(SettingsStore(directory: test.directory).settings.connectTimeout == 30)
         let done = model.noticeBinding(.done)
         #expect(done.wrappedValue)
         done.wrappedValue = false

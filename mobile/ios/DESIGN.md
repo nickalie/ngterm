@@ -454,7 +454,9 @@ The first column: an inset grouped `List` of `MachineRow`s, its selection the ma
 
 **Add machine / Edit machine** is a sheet with a `Form`: name, host, port and user (the last three mono), the key (a
 choice only when the app has more than one, each with where it came from and its fingerprint) with **Show public
-key**, and, editing, the pinned host key. Cancel and Save are the toolbar's. A field says what is wrong with it once
+key**, its own **Connection timeout** (mono, the number pad, optional: the empty field's placeholder names Settings'
+value, "25 s from Settings", which it takes; 3 to 60 s, said in the section's note), and, editing, the pinned host
+key. Cancel and Save are the toolbar's. A field says what is wrong with it once
 it has been left or Save was tried, under it, in the words of the fix ("Put the port in Port, not in the host.").
 
 ### Connect prompts
@@ -788,6 +790,10 @@ that it still reads, and the app ends ("parentEnvironment != nil").
   session's More menu sets its own either way (Chat view, above).
 - **Extra keys:** Fit to the width, Always two lines, or Hidden (the soft keyboard alone, which on an iPhone has no
   key that closes it; the note says so). A session's bar follows a change at once.
+- **Connections** (after Extra keys, before Agents): **Connection timeout**, a slider of whole seconds from 3 to 60
+  (10 by default) drawn as Text size is, with its value in mono beside its name ("10 s"; VoiceOver: "10 seconds"):
+  how long a machine may take to answer a connect. A machine's own value in its form wins; the core takes it from the
+  next connect or reconnect.
 - **Notifications:** one switch per kind (Questions, Waiting for you, Finished, Agent notifications, Lost machines),
   each with what it tells. A kind turned off posts nothing and takes its notifications that are up down; with Questions
   off, an agent's question shows only as its sheet while its session is on screen. While the app may not notify, an

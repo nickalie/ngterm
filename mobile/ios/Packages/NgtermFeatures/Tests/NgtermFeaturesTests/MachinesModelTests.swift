@@ -1,4 +1,5 @@
 import Foundation
+import NgtermCore
 import NgtermCoreFakes
 import NgtermPlatform
 import Security
@@ -49,6 +50,31 @@ internal struct MachinesModelTests {
         #expect(model.save(draft, editing: machine.id))
         #expect(model.items.map(\.machine.port) == [2_222])
         await Wait.until { test.connects() == 2 }
+    }
+
+    @Test("a machine's own connect timeout reaches the core; changing only it keeps the connection")
+    internal func connectTimeout() async throws {
+        defer { test.remove() }
+        let key = try await test.seedKey()
+        let model = MachinesModel(graph: test.graph)
+        #expect(model.connectTimeout == 10)
+        try test.graph.settings.update { $0.connectTimeout = 25 }
+        #expect(model.connectTimeout == 25, "the form's hint follows Settings")
+        let draft = MachineDraft(host: "build-01.lan", user: "nick", keyId: key.id, timeout: "45")
+        #expect(model.save(draft, editing: nil))
+        await Wait.until { model.items.first?.link == .connected }
+        let connected = try #require(test.core.calls.last { $0.method == "connect" }?.args.first as? Machine)
+        #expect(connected.connectTimeoutSecs == 45)
+        let machine = try #require(model.items.first?.machine)
+        var cleared = MachineDraft(editing: machine)
+        cleared.timeout = ""
+        #expect(model.save(cleared, editing: machine.id))
+        await Wait.until { test.connects() == 2 }
+        await test.settled()
+        let edited = try #require(test.core.calls.last { $0.method == "connect" }?.args.first as? Machine)
+        #expect(edited.connectTimeoutSecs == nil)
+        #expect(!test.core.calls.contains { $0.method == "disconnect" }, "a timeout alone is no new address")
+        #expect(model.items.first?.link == .connected)
     }
 
     @Test("a machine the store can't save says why and stays out of the list")

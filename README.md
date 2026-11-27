@@ -128,7 +128,9 @@ Any computer running ngterm can share its Live sessions over ssh. On your deskto
 (one `destination [label]` per line, with key-based ssh set up), then choose **File ▸ Attach Remote…**.
 
 ngterm gives ssh 10 seconds to reach a machine. To change that, add a line to `remotes.conf`:
-`connect-timeout = 20` for every machine, or `connect-timeout HOST = 30` for one machine (1 to 300 seconds).
+`connect-timeout = 20` for every machine, or `connect-timeout HOST = 30` for one machine (1 to 300 seconds). On an
+iPhone or iPad, Settings ▸ Connections sets it for every machine (3 to 60 seconds), and a machine's own form can set a
+different one.
 
 On a phone, the app creates an ssh key on first launch and shows the line to add to `~/.ssh/authorized_keys` on each
 machine. Then add the machine by host, port and user. On Android, Settings ▸ Connections sets the connection

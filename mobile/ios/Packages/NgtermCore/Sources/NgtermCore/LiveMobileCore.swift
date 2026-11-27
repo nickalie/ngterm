@@ -86,6 +86,11 @@ public final class LiveMobileCore: MobileCoreClient {
         try core.networkChanged()
     }
 
+    /// Sets the app-wide connect timeout (api.rs's `set_connect_timeout_secs`).
+    public func setConnectTimeoutSecs(_ secs: UInt32) {
+        core.setConnectTimeoutSecs(secs: secs)
+    }
+
     /// Closes every connection quietly (api.rs's `suspend`).
     public func suspend() throws {
         try core.suspend()

@@ -2,6 +2,7 @@ import Foundation
 import NgtermCore
 import NgtermPlatform
 import NgtermTerminal
+import Observation
 
 /// What the app's screens work with, made once per process: the machines, the settings, the keys, the pinned host
 /// keys, the connections over the mobile core, the session create under way, the attached sessions' live state, their
@@ -148,14 +149,21 @@ public final class AppGraph {
             machines: machines,
             attached: stores.attached,
             baseline: seen,
-            alerts: posting,
-            makeCore: refreshCore ?? { throw MobileError.Stopped }
-        )
+            alerts: posting
+        ) {
+            guard let refreshCore else {
+                throw MobileError.Stopped
+            }
+            let refreshing = try refreshCore()
+            refreshing.setConnectTimeoutSecs(UInt32(clamping: settings.settings.connectTimeout))
+            return refreshing
+        }
         network = NetworkMonitor(source: pathSource ?? SystemPathSource()) {
             made.networkChanged()
         } onOnline: { isOnline in
             lines.info(.app, isOnline ? "network online" : "network offline")
         }
+        followConnectTimeout()
     }
 
     /// Reads again every file of the user's that the process couldn't read as it started.
@@ -207,6 +215,18 @@ public final class AppGraph {
         asks.resume()
         picks.resume()
         connections.resume()
+    }
+
+    // hands the core Settings' connect timeout now and after each change of the settings
+    private func followConnectTimeout() {
+        let seconds = withObservationTracking {
+            settings.settings.connectTimeout
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.followConnectTimeout()
+            }
+        }
+        connections.setConnectTimeout(seconds: seconds)
     }
 
     deinit {

@@ -45,7 +45,10 @@ internal struct StatusRefreshTests {
         ]
         await test.graph.refresh.run()
         #expect(test.core.calls == before, "the app's core keeps what its suspend set aside")
-        #expect(test.refreshCore.calls.map(\.method) == ["connect", "listSessions", "disconnect"])
+        #expect(
+            test.refreshCore.calls.map(\.method)
+                == ["setConnectTimeoutSecs", "connect", "listSessions", "disconnect"]
+        )
         let waiting = Alert.statusId(SessionKey(machineId: "m1", sessionId: "s1"))
         let done = Alert.statusId(SessionKey(machineId: "m1", sessionId: "s2"))
         #expect(test.notices.upIds == [waiting, done])
@@ -66,8 +69,19 @@ internal struct StatusRefreshTests {
         // the machine offers a host key no one pinned: its question would wait for an answer
         test.refreshCore.hostKeys = ["build-01.lan": "SHA256:fAkEnEwKeY"]
         await test.graph.refresh.run()
-        #expect(test.refreshCore.calls.map(\.method) == ["connect", "disconnect", "disconnect"])
+        #expect(
+            test.refreshCore.calls.map(\.method) == ["setConnectTimeoutSecs", "connect", "disconnect", "disconnect"]
+        )
         #expect(test.notices.posted.isEmpty)
+    }
+
+    @Test("a refresh's core is given Settings' connect timeout before it connects")
+    internal func connectTimeout() async throws {
+        defer { test.remove() }
+        try await attachThenSuspend()
+        try test.graph.settings.update { $0.connectTimeout = 25 }
+        await test.graph.refresh.run()
+        #expect(test.refreshCore.calls.first == FakeCall("setConnectTimeoutSecs", [UInt32(25)]))
     }
 
     @Test("nothing attached is nothing to refresh: no core is made")

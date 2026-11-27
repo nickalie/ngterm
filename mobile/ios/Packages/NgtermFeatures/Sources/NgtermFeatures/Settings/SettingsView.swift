@@ -2,8 +2,9 @@ import NgtermDesign
 import SwiftUI
 
 /// Settings (mobile/android's `SettingsRoute`), a sheet with a `Form`: the terminal (a live sample over its text size,
-/// font and colors, and keeping the screen on), the appearance, the extra keys, the agents' chat view, the
-/// notifications, the machines trusted with the clipboard, the keys, and the loaded core's version; Done closes it.
+/// font and colors, and keeping the screen on), the appearance, the extra keys, the connection timeout, the agents'
+/// chat view, the notifications, the machines trusted with the clipboard, the keys, and the loaded core's version;
+/// Done closes it.
 ///
 /// It pushes a key's public half (with Use for every machine under it), the import, and, once the device's owner has
 /// unlocked it, a key's export, which locks again however its screen is left. A key just made or brought
@@ -30,17 +31,11 @@ public struct SettingsView: View {
             Form {
                 TerminalSection(model: model)
                 ChoiceSections(model: model)
+                ConnectionsSection(model: model)
                 AgentsSection(model: model)
                 NotificationsSection(model: model, facts: facts)
                 ClipboardSection(model: model, facts: facts)
-                KeysSection(model: model, facts: facts) { keyId in
-                    navigation.path.append(.publicKey(keyId))
-                } onExport: { keyId in
-                    startExport(keyId)
-                } onImport: {
-                    model.startImport()
-                    navigation.path.append(.importKey)
-                }
+                keysSection(facts)
                 if model.hasLog {
                     DiagnosticsSection()
                 }
@@ -148,6 +143,18 @@ public struct SettingsView: View {
         self.coreVersion = coreVersion
         _model = State(initialValue: model)
         _navigation = State(initialValue: SettingsNavigation(diagnostics: model.diagnostics))
+    }
+
+    // the keys, each pushing its public half or its export, and the import
+    private func keysSection(_ facts: FormFacts) -> some View {
+        KeysSection(model: model, facts: facts) { keyId in
+            navigation.path.append(.publicKey(keyId))
+        } onExport: { keyId in
+            startExport(keyId)
+        } onImport: {
+            model.startImport()
+            navigation.path.append(.importKey)
+        }
     }
 
     // opens a key just made or brought in place of what showed; an export it replaces locks again

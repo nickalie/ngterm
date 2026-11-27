@@ -1,4 +1,3 @@
-import NgtermDesign
 import NgtermPlatform
 import SwiftUI
 
@@ -34,42 +33,20 @@ internal struct TerminalSection: View {
 
     // the text size: its value in points, a slider of whole points over the terminal's sizes, and what it sets
     private func textSize(_ size: Int) -> some View {
-        let label = String(localized: "Text size")
-        let range = AppSettings.textSizes
-        return VStack(alignment: .leading, spacing: Spacing.small) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(label)
-                Spacer()
-                Text("\(size) pt")
-                    .font(Typography.address)
-                    .foregroundStyle(Palette.secondaryText.color)
-            }
-            .accessibilityElement(children: .combine)
-            Slider(
-                value: Binding {
-                    Double(size)
-                } set: { picked in
-                    let whole = Int(picked.rounded())
-                    if whole != model.settings.textSize {
-                        model.change { $0.textSize = whole }
-                    }
-                },
-                in: Double(range.lowerBound)...Double(range.upperBound),
-                step: 1
-            ) {
-                Text(label)
-            }
-            .accessibilityValue(Text("\(size) points"))
-            .accessibilityIdentifier("text-size")
-            FormHint(
-                String(
-                    localized: """
-                        Every pane starts at this size. A pinch or ⌘+ changes one pane until you set it here again.
-                        """
-                ),
-                .note
-            )
+        NumberSlider(
+            label: String(localized: "Text size"),
+            value: size,
+            range: AppSettings.textSizes,
+            shown: String(localized: "\(size) pt"),
+            spoken: String(localized: "\(size) points"),
+            note: String(
+                localized: """
+                    Every pane starts at this size. A pinch or ⌘+ changes one pane until you set it here again.
+                    """
+            ),
+            identifier: "text-size"
+        ) { whole in
+            model.change { $0.textSize = whole }
         }
-        .padding(.vertical, Spacing.xSmall)
     }
 }

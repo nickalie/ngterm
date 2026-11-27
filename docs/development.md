@@ -1295,6 +1295,11 @@ as before, with no error. A Windows origin can't be reached at all yet, as above
   Android's foreground service. Leaving the foreground, it disconnects after a short grace, and its open asks go back
   to the machine; coming back, it reconnects. Asks show as sheets, or as notifications with answer actions until the
   grace ends.
+- Settings ▸ Connections sets the core's app-wide connect timeout (3 to 60 s, 10 by default, kept in
+  `settings.json`; `AppGraph` hands it to the core at start and after each change, and to a background refresh's own
+  core), and a machine's form sets its own (`StoredMachine.connectTimeout`, empty takes Settings'). An edit of a
+  machine's timeout alone keeps its connection, and the core keeps the record it connected with (its reconnects
+  included), so the machine's new value applies once it connects anew (a Disconnect and Connect, or the next launch).
 - Background App Refresh lists each machine's sessions and notifies the agents that turned waiting or done, without
   attaching.
 - On an iPad each session opens in a window of its own.

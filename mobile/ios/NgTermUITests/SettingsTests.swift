@@ -1,8 +1,8 @@
 import XCTest
 
-/// Settings on the fake core, with the machine `split` signing in with the app's key: a setting changed sticks, every
-/// notification switch turns off and stays off, a rotated key's public half offers to switch the machine to it, and
-/// Settings and that page are audited.
+/// Settings on the fake core, with the machine `split` signing in with the app's key: a setting changed sticks, the
+/// connection timeout sticks and a new machine's form names it, every notification switch turns off and stays off, a
+/// rotated key's public half offers to switch the machine to it, and Settings and that page are audited.
 internal final class SettingsTests: XCTestCase {
     // how many swipes a row far down the form may take to come into view
     private static let swipes = 12
@@ -72,6 +72,27 @@ internal final class SettingsTests: XCTestCase {
         app.buttons["settings"].tap()
         FakeApp.expect(keepOn, "Keep the screen on, again")
         XCTAssertEqual(keepOn.value as? String, "1")
+    }
+
+    @MainActor
+    internal func testTheConnectionTimeoutSticksAndIsWhatANewMachineTakes() {
+        let app = openSettings()
+        let timeout = app.sliders["connect-timeout"]
+        scroll(to: timeout, in: app)
+        XCTAssertEqual(timeout.value as? String, "10 seconds")
+        timeout.adjust(toNormalizedSliderPosition: 1)
+        XCTAssertEqual(timeout.value as? String, "60 seconds")
+
+        app.buttons["settings-done"].tap()
+        app.buttons["settings"].tap()
+        scroll(to: timeout, in: app)
+        XCTAssertEqual(timeout.value as? String, "60 seconds", "the timeout, again")
+        app.buttons["settings-done"].tap()
+
+        app.buttons["add-machine"].tap()
+        let own = app.textFields["machine-timeout"]
+        FormScroll.scroll(to: own, in: app.collectionViews["machine-form"], swipes: Self.swipes)
+        XCTAssertEqual(own.placeholderValue, "60 s from Settings")
     }
 
     @MainActor

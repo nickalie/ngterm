@@ -52,6 +52,10 @@ public protocol MobileCoreClient: AnyObject, Sendable {
     /// The device's network changed: every machine waiting to reconnect is retried at once.
     func networkChanged() throws
 
+    /// How long a connect may take to reach a machine that sets no time of its own, in seconds, from the next connect
+    /// or reconnect on; a value outside 1 to 300 sets 10.
+    func setConnectTimeoutSecs(_ secs: UInt32)
+
     /// The app has nothing to keep connected: every connection closes quietly until ``resume()``.
     func suspend() throws
 
