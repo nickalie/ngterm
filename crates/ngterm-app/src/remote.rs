@@ -14,6 +14,7 @@
 //! the link keeps open, so the pid it names is never another process's.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +24,7 @@ use std::time::{Duration, Instant};
 use ngterm_core::remote::frames::{MAX_FRAME_BYTES, MAX_PENDING_FRAMES};
 use ngterm_core::remote::{LinkKey, PresentationLink, PresentationTransport};
 use ngterm_host::MainLoop;
+use uuid::Uuid;
 
 /// The main-loop state a presentation bridge reports to: a line it read, and its end with the reason.
 pub trait PresentationViewer: 'static {
@@ -66,20 +68,30 @@ impl InboundGate {
 /// Runs each bridge so a user's own `ssh` earlier on `PATH` wins: through `/usr/bin/env` on Unix, by name on Windows.
 pub struct ProcessTransport<S> {
     poster: Poster<S>,
+    stderr_runs: BridgeRuns,
 }
 
 impl<S> ProcessTransport<S> {
     #[must_use]
     pub fn new(poster: Poster<S>) -> Self {
-        Self { poster }
+        Self {
+            poster,
+            stderr_runs: BridgeRuns::default(),
+        }
     }
 }
 
 impl<S: PresentationViewer> PresentationTransport for ProcessTransport<S> {
     fn open(&self, argv: &[String], key: LinkKey) -> Box<dyn PresentationLink> {
-        Box::new(ProcessLink::spawn(argv, key, &self.poster))
+        Box::new(ProcessLink::spawn(argv, key, &self.poster, &self.stderr_runs))
     }
 }
+
+/// The stderr run of each row's bridge, kept across its launches: a bridge that cannot connect writes one line and
+/// exits, and each retry is a new process.
+type BridgeRuns = Arc<Mutex<HashMap<Uuid, Repeats>>>;
+
+const BRIDGE_SOURCE: &str = "presentation bridge";
 
 /// One child and its pipes.
 struct ProcessLink {
@@ -92,7 +104,12 @@ struct ProcessLink {
 }
 
 impl ProcessLink {
-    fn spawn<S: PresentationViewer>(argv: &[String], key: LinkKey, poster: &Poster<S>) -> Self {
+    fn spawn<S: PresentationViewer>(
+        argv: &[String],
+        key: LinkKey,
+        poster: &Poster<S>,
+        stderr_runs: &BridgeRuns,
+    ) -> Self {
         let spawned = platform::command(argv).and_then(|mut command| {
             command
                 .stdin(Stdio::piped())
@@ -119,9 +136,10 @@ impl ProcessLink {
         };
         let stdin = platform::Input::new(child.stdin.take());
         if let Some(stderr) = child.stderr.take() {
+            let runs = Arc::clone(stderr_runs);
             let spawned = std::thread::Builder::new()
                 .name("ngterm.presentation-stderr".to_owned())
-                .spawn(move || log_lines(stderr, "presentation bridge"));
+                .spawn(move || log_bridge_lines_at(stderr, &runs, key.session, Instant::now));
             if spawned.is_err() {
                 tracing::warn!("presentation bridge stderr is not read");
             }
@@ -389,9 +407,23 @@ pub(crate) fn log_lines(stderr: impl Read, source: &str) {
 }
 
 fn log_lines_at(stderr: impl Read, source: &str, mut now: impl FnMut() -> Instant) {
+    let mut repeats = Repeats::default();
+    read_stderr(stderr, |line| repeats.line(line, now(), source));
+    repeats.flush(source);
+}
+
+/// [`log_lines`] for a row's bridge, on the row's run in `runs`. The end of the stream does not log the count, as the
+/// next launch can continue the run.
+fn log_bridge_lines_at(stderr: impl Read, runs: &BridgeRuns, row: Uuid, mut now: impl FnMut() -> Instant) {
+    read_stderr(stderr, |line| {
+        let mut runs = runs.lock().unwrap_or_else(PoisonError::into_inner);
+        runs.entry(row).or_default().line(line, now(), BRIDGE_SOURCE);
+    });
+}
+
+fn read_stderr(stderr: impl Read, mut each: impl FnMut(&str)) {
     let mut reader = BufReader::new(stderr);
     let mut line = Vec::new();
-    let mut repeats = Repeats::default();
     let limit = u64::try_from(MAX_FRAME_BYTES + 1).unwrap_or(u64::MAX);
     loop {
         line.clear();
@@ -405,16 +437,16 @@ fn log_lines_at(stderr: impl Read, source: &str, mut now: impl FnMut() -> Instan
                 line.pop();
             }
         }
-        repeats.line(&String::from_utf8_lossy(&line), now(), source);
+        each(&String::from_utf8_lossy(&line));
     }
-    repeats.flush(source);
 }
 
 /// How often a run of identical stderr lines logs its count while it goes on.
 const REPEAT_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The run of identical stderr lines that [`log_lines`] reads: the line, how many copies followed it since the last
-/// log event, and when that event was.
+/// log event, and when that event was. The count is logged with a different line, or with the first copy a minute or
+/// more after the last log event.
 #[derive(Default)]
 struct Repeats {
     last: Option<String>,
@@ -443,7 +475,8 @@ impl Repeats {
 
     fn flush(&mut self, source: &str) {
         if self.count > 0 {
-            tracing::info!("{source}: the last line repeated {} times", self.count);
+            let last = self.last.as_deref().unwrap_or_default();
+            tracing::info!(line = %last, repeats = self.count, "{source}: the last line repeated");
             self.count = 0;
         }
     }
@@ -551,6 +584,11 @@ mod tests {
 
     /// What [`log_lines`] logs for `stderr` when `now` is its clock.
     fn stderr_log_at(stderr: &[u8], now: impl FnMut() -> Instant) -> String {
+        logged(|| log_lines_at(stderr, "test child", now))
+    }
+
+    /// What `log_events` logs on this thread.
+    fn logged(log_events: impl FnOnce()) -> String {
         let log = tempfile::NamedTempFile::new().unwrap();
         let subscriber = tracing_subscriber::fmt()
             .without_time()
@@ -558,8 +596,30 @@ mod tests {
             .with_target(false)
             .with_writer(Mutex::new(log.reopen().unwrap()))
             .finish();
-        tracing::subscriber::with_default(subscriber, || log_lines_at(stderr, "test child", now));
+        tracing::subscriber::with_default(subscriber, log_events);
         std::fs::read_to_string(log.path()).unwrap()
+    }
+
+    #[test]
+    fn a_run_of_identical_bridge_stderr_lines_goes_on_across_launches_of_the_row() {
+        let runs = BridgeRuns::default();
+        let (row, other_row) = (Uuid::nil(), Uuid::max());
+        let text = logged(|| {
+            for _ in 0..3 {
+                log_bridge_lines_at(&b"refused\n"[..], &runs, row, Instant::now);
+            }
+            log_bridge_lines_at(&b"refused\n"[..], &runs, other_row, Instant::now);
+            log_bridge_lines_at(&b"connected\n"[..], &runs, row, Instant::now);
+        });
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                " INFO presentation bridge line=refused",
+                " INFO presentation bridge line=refused",
+                " INFO presentation bridge: the last line repeated line=refused repeats=2",
+                " INFO presentation bridge line=connected",
+            ]
+        );
     }
 
     #[test]
@@ -588,7 +648,7 @@ mod tests {
             text.lines().collect::<Vec<_>>(),
             [
                 " INFO test child line=channel 2: open failed",
-                " INFO test child: the last line repeated 999 times",
+                " INFO test child: the last line repeated line=channel 2: open failed repeats=999",
                 " INFO test child line=other",
             ]
         );
@@ -601,7 +661,7 @@ mod tests {
             text.lines().collect::<Vec<_>>(),
             [
                 " INFO test child line=refused",
-                " INFO test child: the last line repeated 2 times"
+                " INFO test child: the last line repeated line=refused repeats=2"
             ]
         );
     }
@@ -613,9 +673,9 @@ mod tests {
             text.lines().collect::<Vec<_>>(),
             [
                 " INFO test child line=refused",
-                " INFO test child: the last line repeated 60 times",
-                " INFO test child: the last line repeated 60 times",
-                " INFO test child: the last line repeated 29 times",
+                " INFO test child: the last line repeated line=refused repeats=60",
+                " INFO test child: the last line repeated line=refused repeats=60",
+                " INFO test child: the last line repeated line=refused repeats=29",
             ]
         );
     }
@@ -757,7 +817,7 @@ mod tests {
         let gone: Poster<Viewer> = Weak::<FakeMainLoop<Viewer>>::new();
         let argv = crate::test_shell::script_argv("while :; do echo x || exit 4; done", "");
         for poster in [closed, gone] {
-            let link = ProcessLink::spawn(&argv, KEY, &poster);
+            let link = ProcessLink::spawn(&argv, KEY, &poster, &BridgeRuns::default());
             let deadline = std::time::Instant::now() + crate::test_shell::CHILD_DEADLINE;
             while !link.reaped.load(Ordering::SeqCst) {
                 assert!(std::time::Instant::now() < deadline, "the bridge was never reaped");
