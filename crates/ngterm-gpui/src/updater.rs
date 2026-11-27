@@ -9,8 +9,8 @@ use std::sync::{
 use std::time::Duration;
 
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Entity, Global, ParentElement as _, Styled as _, Task, WeakEntity, Window,
-    px,
+    AnyWindowHandle, App, AppContext as _, Entity, Global, ParentElement as _, StatefulInteractiveElement as _,
+    Styled as _, Task, WeakEntity, Window, px,
 };
 use ngterm_core::chrome::ChromeColors;
 use ngterm_core::paths::{self, ProcessEnv};
@@ -537,6 +537,7 @@ pub fn button(colors: ChromeColors, cx: &App) -> Option<impl gpui_kit::IntoEleme
             .px(px(8.))
             .h(px(24.))
             .text_size(px(12.))
+            .aria_label(label)
             .on_click(|_, window, cx| press_button(window, cx))
             .child(label),
     )
@@ -1134,6 +1135,33 @@ mod tests {
         let alert = front(cx).expect("a click shows the status");
         assert_eq!(alert.body, "Downloading and verifying ngterm 0.2.0…");
         press(cx, "OK");
+    }
+
+    /// A screen reader names the titlebar's update button by the label it shows, as the other titlebar buttons.
+    #[gpui_kit::test]
+    fn the_titlebar_button_is_named_by_its_label(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| Titlebar);
+        let state = cx.update(|_, cx| app_state(cx));
+        cx.update(|_, cx| cx.set_global(source_build(&state, Status::Idle, dir.path())));
+        cx.activate_a11y();
+        for (status, name) in [
+            (Status::Downloading("0.2.0".into()), "Downloading update…"),
+            (Status::Ready("0.2.0".into()), "Install Update"),
+            (Status::Installing("0.2.0".into()), "Installing update…"),
+            (Status::Failed("offline".into()), "Update needs attention"),
+        ] {
+            cx.update(|_, cx| cx.global_mut::<Updater>().status = status.clone());
+            assert!(button_shown(cx), "{status:?}");
+            let tree = cx.a11y_tree_update().expect("the titlebar's accessibility tree");
+            let label = tree
+                .nodes
+                .iter()
+                .find(|(_, node)| node.author_id() == Some("update-status"))
+                .and_then(|(_, node)| node.label().map(str::to_owned));
+            assert_eq!(label.as_deref(), Some(name), "{status:?}");
+        }
     }
 
     #[gpui_kit::test]

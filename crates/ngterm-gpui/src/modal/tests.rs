@@ -274,3 +274,41 @@ fn welcome_checks_publish_their_toggled_state(cx: &mut TestAppContext) {
         });
     }
 }
+
+/// The text a screen reader reads for the node published under `id`, with its role.
+fn published(cx: &mut VisualTestContext, id: &str) -> Option<(gpui_kit::Role, String)> {
+    let tree = cx.a11y_tree_update().expect("the alert's accessibility tree");
+    tree.nodes
+        .iter()
+        .find(|(_, node)| node.author_id() == Some(id))
+        .map(|(_, node)| (node.role(), node.label().unwrap_or_default().to_owned()))
+}
+
+/// A screen reader reads an alert's heading and body, as `VoiceOver` reads an `NSAlert`'s, not only its buttons.
+#[gpui_kit::test]
+fn an_alert_publishes_its_heading_and_body_to_assistive_technology(cx: &mut TestAppContext) {
+    use gpui_kit::Role;
+    let cx = host(cx);
+    cx.activate_a11y();
+    open(
+        cx,
+        AlertSpec::info("Update needs attention", "Retry in 30 seconds."),
+        &Answers::default(),
+    );
+    assert_eq!(
+        published(cx, "alert-heading"),
+        Some((Role::Heading, "Update needs attention".to_owned()))
+    );
+    assert_eq!(
+        published(cx, "alert-body"),
+        Some((Role::Label, "Retry in 30 seconds.".to_owned()))
+    );
+    assert!(cx.update(|window, cx| answer_front_alert(window, "OK", cx)));
+    cx.run_until_parked();
+    open(cx, AlertSpec::info("Nothing more to say", ""), &Answers::default());
+    assert_eq!(
+        published(cx, "alert-heading"),
+        Some((Role::Heading, "Nothing more to say".to_owned()))
+    );
+    assert_eq!(published(cx, "alert-body"), None, "an empty body publishes nothing");
+}
