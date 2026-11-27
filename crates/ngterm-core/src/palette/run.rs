@@ -22,7 +22,7 @@ impl Core {
     /// Whether `action`, a row of the palette window `window` draws, can run now. The static rows read the menu's
     /// predicate; an attention row asks its own window's modal gate (upstream's `canSelectAttention`); a Tint Session
     /// row needs that gate and a selected session (the `isEnabled` of upstream's `tintItems`); a Move Session row needs
-    /// that gate and a selected session it can move to its workspace (upstream's `moveItems`); a membership editor's row
+    /// that gate, a window that is not a remote window and a selected session it can move to its workspace (upstream's `moveItems`); a membership editor's row
     /// needs the gate and its session or workspace still in the window, so a gone row goes inert; the rest are gated
     /// when they run.
     #[must_use]
@@ -32,6 +32,7 @@ impl Core {
             PaletteAction::Attention { window, session } => self.can_select_attention(*window, *session),
             PaletteAction::MoveSession { workspace } => {
                 self.ui_actions_enabled(window)
+                    && !self.library().is_remote_window(window)
                     && self
                         .library()
                         .store(window)

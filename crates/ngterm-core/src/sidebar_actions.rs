@@ -184,7 +184,8 @@ impl SidebarAction {
 
 impl Core {
     /// Performs `action` in window `window`'s sidebar. False when it did nothing: the window is gone or not open, its
-    /// modal slot is held (except for a committed rename), or the action changed nothing it could. Commit afterwards.
+    /// modal slot is held (except for a committed rename), the window is a remote window and the action makes or
+    /// changes a row ([`SidebarAction::changes_rows`]), or the action changed nothing it could. Commit afterwards.
     pub fn sidebar_action(&mut self, window: Uuid, action: SidebarAction) -> bool {
         // a picker or ask arriving mid-rename takes the field's keyboard, and that focus loss is what commits it: the
         // rename still lands, as upstream's `controlTextDidEndEditing` renames without the modal gate

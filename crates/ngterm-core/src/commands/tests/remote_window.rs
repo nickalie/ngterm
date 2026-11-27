@@ -7,16 +7,23 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ngterm_proto::command::{LiveCmd, RecentCmd, SessionCmd, WindowCmd, WorkspaceCmd};
-use ngterm_proto::{Args, Command, Response};
+use ngterm_proto::{Args, Command, Request, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::viewer::{Link, Transport};
 use super::{Fixture, answered_id, args, wire};
+use crate::Dispatched;
+use crate::app_actions::ActionOrigin;
 use crate::catalog::fixture::{self as catalog, pane, session, session_with, snapshot, workspace};
 use crate::catalog::frames::{self, CatalogChange, CatalogFrame, CatalogScratch, CatalogSnapshot, Lifecycle};
+use crate::keymap::BuiltinAction;
 use crate::model::{AppStore, Session};
+use crate::palette::{PaletteAction, PaletteMode};
+use crate::palette_catalog::PaletteCommand;
+use crate::persist::LibraryPersistence;
 use crate::remote::catalog::CatalogState;
+use crate::remote::catalog::{RemoteWindowViewState, SessionView};
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
 use crate::remote::viewer_run::readable;
 use crate::sidebar_actions::SidebarAction;
@@ -989,4 +996,140 @@ fn the_sidebar_makes_and_renames_no_row_in_a_remote_window() {
             selection: vec![a.id()],
         }
     ));
+}
+
+#[test]
+fn an_open_that_settles_after_the_duplicate_window_went_names_the_first_window() {
+    let mut remote = Remote::opened(&server_version());
+    remote.snapshot(snapshot(vec![workspace(Uuid::new_v4(), "w", vec![session("a")])]));
+    let first = remote.window;
+    let request = Request {
+        cmd: Command::Window(WindowCmd::RemoteOpen),
+        target: None,
+        args: Some(args(|a| a.host = Some("alias".to_owned()))),
+    };
+    let Dispatched::Pending { resume, .. } = remote.fixture.core.begin(&request) else {
+        panic!("the open waits for its connection");
+    };
+    remote.window = remote.fixture.core.library().active_window_id().unwrap();
+    assert_ne!(remote.window, first);
+    remote.settle();
+    remote.snapshot(snapshot(vec![workspace(Uuid::new_v4(), "w", vec![session("a")])]));
+    let response = resume(&mut remote.fixture.core).finish_now(&mut remote.fixture.core);
+    assert_eq!(answered_id(&response), Some(first));
+    assert_eq!(remote.fixture.core.library().active_window_id(), Some(first));
+}
+
+#[test]
+fn a_late_close_of_a_replaced_stream_announces_no_tree_change() {
+    let mut remote = Remote::opened(&server_version());
+    let first = remote.link();
+    remote.line_on(&first, b"{not json");
+    remote.snapshot(snapshot(vec![workspace(Uuid::new_v4(), "w", vec![session("a")])]));
+    let _ = remote.fixture.core.commit();
+    let key = first.0.borrow().key.unwrap();
+    remote.fixture.core.viewer_closed(key, "signal 15");
+    assert!(remote.fixture.core.commit().tree_changed.is_empty());
+}
+
+#[test]
+fn a_saved_view_comes_back_on_the_rows_of_a_reopened_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut remote = Remote::new(&server_version());
+    remote.fixture.core.persistence = Some(LibraryPersistence::new(dir.path()));
+    remote.window = answered_id(&remote.open("box")).unwrap();
+    remote.settle();
+    remote.fixture.core.close_window(remote.window);
+    let _ = remote.fixture.core.commit();
+    let (a, b) = (session("a"), session("b"));
+    let mut view = RemoteWindowViewState {
+        selected_session_id: Some(b.id()),
+        ..RemoteWindowViewState::default()
+    };
+    view.sessions.insert(
+        a.id(),
+        SessionView {
+            font_size: Some(17.0),
+            ..SessionView::default()
+        },
+    );
+    let path = remote
+        .fixture
+        .core
+        .persistence
+        .as_ref()
+        .unwrap()
+        .remote_view_path(remote.window);
+    view.save(&path).unwrap();
+    assert_eq!(answered_id(&remote.open("box")), Some(remote.window));
+    remote.settle();
+    remote.snapshot(snapshot(vec![workspace(
+        Uuid::new_v4(),
+        "w",
+        vec![a.clone(), b.clone()],
+    )]));
+    assert_eq!(remote.row(a.id()).font_size, Some(17.0));
+    assert_eq!(remote.store().selected_session_id(), Some(b.id()));
+}
+
+#[test]
+fn a_closed_local_item_reopens_in_a_local_window_while_a_remote_one_is_frontmost() {
+    let mut remote = Remote::opened(&server_version());
+    remote.snapshot(snapshot(vec![workspace(Uuid::new_v4(), "w", vec![session("a")])]));
+    let local = remote.fixture.window;
+    let (gone, sessions) = remote.fixture.add_workspace("gone", 1);
+    let store = remote.fixture.core.library_mut().store_mut(local).unwrap();
+    assert!(store.remove_workspace(gone).is_some());
+    let _ = remote.fixture.core.commit();
+    assert_eq!(remote.fixture.core.library().active_window_id(), Some(remote.window));
+    let rows = remote.rows();
+    remote.fixture.core.perform_builtin(
+        ActionOrigin {
+            window: remote.window,
+            quick: false,
+        },
+        BuiltinAction::ReopenRecent,
+    );
+    assert_eq!(remote.rows(), rows);
+    assert_eq!(remote.store().workspaces().len(), 1);
+    let restored = remote.fixture.core.library().store(local).unwrap().session(sessions[0]);
+    assert!(restored.is_some(), "the local window takes it back");
+}
+
+#[test]
+fn the_menu_and_palette_change_no_mirrored_row() {
+    let mut remote = Remote::opened(&server_version());
+    let (a, other) = (session_with(Uuid::new_v4(), "a", vec![pane(), pane()]), Uuid::new_v4());
+    remote.snapshot(snapshot(vec![
+        workspace(Uuid::new_v4(), "w", vec![a.clone()]),
+        workspace(other, "x", vec![]),
+    ]));
+    let window = remote.window;
+    remote
+        .fixture
+        .core
+        .library_mut()
+        .store_mut(window)
+        .unwrap()
+        .select_session(Some(a.id()));
+    let (primary, split) = {
+        let row = remote.row(a.id());
+        assert!(row.split.exists);
+        (row.pane_identity, row.split_pane_identity)
+    };
+    for command in [PaletteCommand::SwapPanes, PaletteCommand::CloseSplit] {
+        remote.fixture.core.perform_menu_command(window, command);
+        let row = remote.row(a.id());
+        assert!(row.split.exists, "{command:?}");
+        assert_eq!(
+            (row.pane_identity, row.split_pane_identity),
+            (primary, split),
+            "{command:?}"
+        );
+    }
+    remote.fixture.core.toggle_palette(window, PaletteMode::Actions);
+    let row = PaletteAction::MoveSession { workspace: other };
+    assert!(!remote.fixture.core.palette_entry_enabled(window, &row));
+    let store = remote.store();
+    assert_eq!(store.workspace(other).map(|w| w.sessions.len()), Some(0));
 }

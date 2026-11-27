@@ -10,13 +10,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::model::{AppStore, Session};
+use crate::persist::upper;
 
 /// One row's view (upstream's `SessionView`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionView {
     /// The pane identity that had the focus, the split's or the primary's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "upper::option")]
     pub focused_pane: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f64>,
@@ -56,11 +57,16 @@ impl SessionView {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteWindowViewState {
-    #[serde(default, rename = "selectedSessionID", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "selectedSessionID",
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "upper::option"
+    )]
     pub selected_session_id: Option<Uuid>,
-    #[serde(default)]
+    #[serde(default, serialize_with = "upper::slice")]
     pub collapsed_workspaces: Vec<Uuid>,
-    #[serde(default)]
+    #[serde(default, serialize_with = "upper::keys")]
     pub sessions: BTreeMap<Uuid, SessionView>,
 }
 

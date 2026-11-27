@@ -212,6 +212,10 @@ impl Core {
             );
             return;
         }
+        let changes_rows = matches!(command, PaletteCommand::SwapPanes | PaletteCommand::CloseSplit);
+        if changes_rows && self.library().is_remote_window(window) {
+            return;
+        }
         let Some(store) = self.library_mut().store_mut(window) else {
             return;
         };

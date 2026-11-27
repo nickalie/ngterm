@@ -399,8 +399,11 @@ impl Core {
         else {
             return false;
         };
+        let before = run.stream.state().clone();
         run.closed(key.launch, reason, now);
-        self.catalog_state_changed(key.session);
+        if *run.stream.state() != before {
+            self.catalog_state_changed(key.session);
+        }
         true
     }
 

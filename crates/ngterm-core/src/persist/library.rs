@@ -497,6 +497,8 @@ impl LibraryPersistence {
             let saved = RemoteWindowViewState::capture(store).save(&self.remote_view_path(id));
             if let Err(error) = &saved {
                 tracing::warn!(%error, window = %id, "saving a remote window's view state failed");
+            } else if self.index_unsaved {
+                self.save_index(library);
             }
             return Some(saved.is_ok());
         }
@@ -715,5 +717,21 @@ mod tests {
         fs::create_dir_all(file.join("occupied")).unwrap();
         persistence.write_launch_saves(&mut library);
         assert!(persistence.snapshot_unsaved(window));
+    }
+
+    #[test]
+    fn a_remote_windows_save_retries_a_failed_index_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut persistence = LibraryPersistence::new(dir.path());
+        let mut library = WindowLibrary::new("/home/user");
+        let (window, _) = library.new_remote_window("box");
+        library.store_mut(window).unwrap().catalog_mirrored = true;
+        let index = persistence.index_path();
+        fs::create_dir_all(index.join("occupied")).unwrap();
+        assert!(!persistence.save_index(&library));
+        fs::remove_dir_all(&index).unwrap();
+        assert!(persistence.save_window(&library, window));
+        assert!(!persistence.index_unsaved());
+        assert!(index.is_file());
     }
 }

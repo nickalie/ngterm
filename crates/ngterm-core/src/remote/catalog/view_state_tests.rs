@@ -65,3 +65,24 @@ fn the_capture_leaves_out_default_rows_and_round_trips_through_its_file() {
         RemoteWindowViewState::default()
     );
 }
+
+#[test]
+fn the_file_names_every_id_in_upper_case() {
+    let (mut store, id) = split_store();
+    let workspace = store.workspaces()[0].id();
+    store.session_mut(id).unwrap().split.focused = true;
+    store.set_font_size(id, 15.0);
+    store.set_workspace_expanded(workspace, false);
+    let state = RemoteWindowViewState::capture(&store);
+    let focused = state.sessions[&id].focused_pane.unwrap();
+    let text = serde_json::to_string(&state).unwrap();
+    for uuid in [id, workspace, focused] {
+        let upper = uuid.to_string().to_uppercase();
+        assert!(text.contains(&upper), "{uuid} in {text}");
+        assert!(!text.contains(&uuid.to_string()), "{uuid} in {text}");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("w.view.json");
+    state.save(&path).unwrap();
+    assert_eq!(RemoteWindowViewState::load(&path), state);
+}

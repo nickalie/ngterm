@@ -523,7 +523,6 @@ impl WindowLibrary {
         self.push_library_event(id, ModelEvent::bare(ngterm_proto::EventKind::TreeChanged));
         self.windows.remove(index);
         self.remote_sources.remove(&id);
-        self.remote_duplicates.remove(&id);
         if self.frontmost_window_id == Some(id) {
             self.frontmost_window_id = None;
         }
@@ -851,8 +850,9 @@ impl WindowLibrary {
     }
 
     /// Which window restores `item`: the one holding the session itself, then for a lone companion the one holding
-    /// its parent, then the one holding its workspace, then the requested one. Session first, since an old snapshot
-    /// can leave one session in two windows, where the stale workspace would rebuild the copy just closed.
+    /// its parent, then the one holding its workspace, then the requested one (the first local one in place of a
+    /// remote one). Session first, since an old snapshot can leave one session in two windows, where the stale
+    /// workspace would rebuild the copy just closed.
     fn restore_destination(&self, item: &RecentClosedItem, requested: Option<Uuid>) -> Option<Uuid> {
         if item.kind == RecentClosedKind::Session
             && let Some(owner) = item
@@ -865,9 +865,17 @@ impl WindowLibrary {
         if let Some(parent) = companion_parent(item) {
             return self.window_with_session_in_tree(parent);
         }
-        self.window_holding_workspace(item)
-            .or_else(|| requested.filter(|id| self.is_open(*id)))
-            .or_else(|| self.active_window_id())
+        if let Some(owner) = self.window_holding_workspace(item) {
+            return Some(owner);
+        }
+        // a closed item is always this machine's own, and a remote window holds only its server's rows
+        let fallback = requested
+            .filter(|id| self.is_open(*id))
+            .or_else(|| self.active_window_id())?;
+        if !self.is_remote_window(fallback) {
+            return Some(fallback);
+        }
+        self.open_ids().into_iter().find(|id| !self.is_remote_window(*id))
     }
 
     /// The open window holding `item`'s workspace (a workspace entry's own, a session entry's parent), in its tree or

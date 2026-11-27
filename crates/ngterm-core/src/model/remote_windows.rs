@@ -29,8 +29,9 @@ pub enum CatalogBinding {
 }
 
 impl WindowLibrary {
-    /// Opens a window for `host`, or answers the one already showing it, opened when it was closed (upstream's
-    /// `newRemoteWindow`): `(id, created)`. A new one is empty and frontmost; its rows come with its first snapshot.
+    /// Opens a window for `host`, or answers the one already showing it, which the caller opens when it was closed
+    /// (upstream's `newRemoteWindow`): `(id, created)`. A new one is empty and frontmost; its rows come with its first
+    /// snapshot.
     pub fn new_remote_window(&mut self, host: &str) -> (Uuid, bool) {
         if let Some((&id, _)) = self.remote_sources.iter().find(|(_, source)| source.host == host) {
             return (id, false);
