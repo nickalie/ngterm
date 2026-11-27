@@ -133,13 +133,24 @@ mod host {
             String::from_utf8_lossy(&self.output.stderr).into_owned()
         }
 
-        /// The `xcrun` calls that change something: all but the `list` ones.
+        /// The `xcrun` calls that change something: all but the `list` ones. The services are quieted side by side, so
+        /// their `launchctl` calls are sorted where they came.
         pub(super) fn changes(&self) -> Vec<String> {
-            self.log
+            let mut changes: Vec<String> = self
+                .log
                 .lines()
                 .filter(|line| !line.starts_with("simctl list ") && !line.starts_with("simctl runtime list"))
                 .map(str::to_owned)
-                .collect()
+                .collect();
+            let places: Vec<usize> = (0..changes.len())
+                .filter(|&index| is_launchctl(&changes[index]))
+                .collect();
+            let mut quieting: Vec<String> = places.iter().map(|&index| changes[index].clone()).collect();
+            quieting.sort();
+            for (index, line) in places.into_iter().zip(quieting) {
+                changes[index] = line;
+            }
+            changes
         }
     }
 
@@ -267,8 +278,12 @@ exit 0
         run_script(world, "ios-sim-runner.sh", &all, env)
     }
 
-    /// The services that `--simulator` disables and stops in simulator `udid`, as the stub xcrun logs it: those whose
-    /// processes took a CI Mac's free memory to 25% mid-run (nightly run 45820517849).
+    pub(super) fn is_launchctl(call: &str) -> bool {
+        call.starts_with("simctl spawn ") && call.contains(" launchctl ")
+    }
+
+    /// The services that `--simulator` disables and stops in simulator `udid`, as the stub xcrun logs it (sorted):
+    /// those whose processes took a CI Mac's free memory to 25% mid-run (nightly run 45820517849).
     pub(super) fn quieting(udid: &str) -> Vec<String> {
         [
             "com.apple.chronod",
@@ -284,6 +299,8 @@ exit 0
         .flat_map(|label| {
             ["disable", "bootout"].map(|verb| format!("simctl spawn {udid} launchctl {verb} system/{label}"))
         })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect()
     }
 
@@ -306,7 +323,9 @@ exit 0
 
 use std::process::Command;
 
-use host::{NEW_UDID, UDID, World, images, pin, quieting, repo_root, runner, runtime_id, runtime_line, simulator};
+use host::{
+    NEW_UDID, UDID, World, images, is_launchctl, pin, quieting, repo_root, runner, runtime_id, runtime_line, simulator,
+};
 
 #[test]
 fn it_runs_the_executable_on_the_pinned_phone_and_forwards_only_rusts_test_variables() {
@@ -492,6 +511,25 @@ fn simulator_says_which_services_it_disabled() {
         )),
         "{stderr}"
     );
+}
+
+#[test]
+fn simulator_disables_each_service_before_it_stops_it() {
+    let run = simulator(&World::ready(), &pin("IOS_SIM_PHONE_NAME"));
+    assert!(run.output.status.success(), "{}", run.stderr());
+    let calls: Vec<&str> = run.log.lines().collect();
+    let place = |call: &str| calls.iter().position(|line| *line == call);
+    for bootout in quieting(UDID).iter().filter(|call| call.contains(" bootout ")) {
+        let disable = bootout.replace(" bootout ", " disable ");
+        assert!(
+            place(&disable).unwrap() < place(bootout).unwrap(),
+            "a stopped service would start again: {}",
+            run.log
+        );
+    }
+    let boot = place(&format!("simctl bootstatus {UDID} -b")).unwrap();
+    let first = calls.iter().position(|line| is_launchctl(line)).unwrap();
+    assert!(boot < first, "the services are quieted after the boot: {}", run.log);
 }
 
 #[test]
