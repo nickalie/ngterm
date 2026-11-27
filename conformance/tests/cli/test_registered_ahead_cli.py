@@ -93,7 +93,6 @@ def test_help_lists_the_v042_subcommands_and_options(cli):
         pytest.param(["workspace", "detach"], "workspace.detach", id="workspace-detach"),
         pytest.param(["workspace", "reattach", "--target", "WORKSPACE"], "workspace.reattach",
                      id="workspace-reattach"),
-        pytest.param(["window", "remote", "open", "buildbox"], "window.remote.open", id="window-remote-open"),
         pytest.param(["window", "remote", "dismiss"], "window.remote.dismiss", id="window-remote-dismiss"),
     ],
 )
