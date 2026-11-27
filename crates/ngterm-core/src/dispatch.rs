@@ -774,7 +774,9 @@ impl Core {
 
     /// Answers one request, or starts a command that waits on the frontend and hands back its next step.
     pub fn begin(&mut self, request: &Request) -> Dispatched {
-        if let Some(refusal) = commands::headless::window_refusal(self, request) {
+        if let Some(refusal) = commands::headless::window_refusal(self, request)
+            .or_else(|| commands::remote_window::refusal(self, request))
+        {
             return Dispatched::Done(refusal.into());
         }
         if let Some(op_id) = request.args.as_ref().and_then(|args| args.op_id.clone()) {

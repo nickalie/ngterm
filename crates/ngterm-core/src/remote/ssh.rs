@@ -594,7 +594,7 @@ pub fn catalog_tail(shell: OriginShell) -> String {
 /// A host ssh may not take.
 pub fn catalog_command(host: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
-    let mut argv = ssh_arguments(host, 5, false);
+    let mut argv = ssh_arguments(host, false);
     argv.push(catalog_tail(origin::shell_of(host)));
     Ok(argv)
 }

@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ngterm_proto::command::WindowCmd;
+use ngterm_proto::command::{LiveCmd, RecentCmd, SessionCmd, WindowCmd, WorkspaceCmd};
 use ngterm_proto::{Args, Command, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -19,6 +19,7 @@ use crate::model::{AppStore, Session};
 use crate::remote::catalog::CatalogState;
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
 use crate::remote::viewer_run::readable;
+use crate::sidebar_actions::SidebarAction;
 
 /// Answers `version` with `version` and records every run.
 struct Runner {
@@ -876,4 +877,116 @@ fn a_pane_ngterm_cannot_address_says_so_and_starts_no_shell() {
         command.contains("ngterm: box listed a pane ngterm cannot address"),
         "{command}"
     );
+}
+
+// MARK: - row commands, until the window sends them to its server
+
+#[test]
+fn a_command_that_makes_a_row_in_a_remote_window_is_refused_and_adds_none() {
+    let mut remote = Remote::opened(&server_version());
+    let w = Uuid::new_v4();
+    remote.snapshot(snapshot(vec![workspace(w, "w", vec![session("a")])]));
+    let before = remote.rows();
+    let window = wire(remote.window);
+    for (cmd, name) in [
+        (Command::Session(SessionCmd::New), "session.new"),
+        (Command::Workspace(WorkspaceCmd::New), "workspace.new"),
+        (Command::Live(LiveCmd::Attach), "live.attach"),
+        (Command::Recent(RecentCmd::Open), "recent.open"),
+    ] {
+        for scope in [None, Some(window.clone())] {
+            let response = remote.fixture.send(cmd, None, args(|a| a.window.clone_from(&scope)));
+            assert_eq!(
+                response.error,
+                Some(format!("{name} is not available in a remote window")),
+                "{scope:?}"
+            );
+        }
+    }
+    assert_eq!(remote.rows(), before);
+    assert_eq!(remote.store().workspaces().len(), 1);
+}
+
+#[test]
+fn a_command_on_a_mirrored_row_is_refused_and_the_row_holds() {
+    let mut remote = Remote::opened(&server_version());
+    let (a, w) = (session("a"), Uuid::new_v4());
+    remote.snapshot(snapshot(vec![workspace(w, "w", vec![a.clone()])]));
+    let name = remote.row(a.id()).display_name();
+    let row = wire(a.id());
+    let rename = remote.fixture.send(
+        Command::Session(SessionCmd::Rename),
+        Some(&row),
+        args(|a| a.name = Some("renamed".to_owned())),
+    );
+    assert_eq!(
+        rename.error.as_deref(),
+        Some("session.rename is not available in a remote window")
+    );
+    let close = remote.fixture.send(
+        Command::Session(SessionCmd::Close),
+        None,
+        args(|a| a.targets = Some(vec![row.clone()])),
+    );
+    assert_eq!(
+        close.error.as_deref(),
+        Some("session.close is not available in a remote window")
+    );
+    let delete = remote.fixture.send(
+        Command::Workspace(WorkspaceCmd::Delete),
+        Some(&wire(w)),
+        Args::default(),
+    );
+    assert_eq!(
+        delete.error.as_deref(),
+        Some("workspace.delete is not available in a remote window")
+    );
+    assert_eq!(remote.rows(), vec![a.id()]);
+    assert_eq!(remote.row(a.id()).display_name(), name);
+}
+
+#[test]
+fn a_row_command_in_a_local_window_still_runs_while_a_remote_one_is_open() {
+    let mut remote = Remote::opened(&server_version());
+    let local = wire(remote.fixture.window);
+    let response = remote.fixture.send(
+        Command::Session(SessionCmd::New),
+        None,
+        args(|a| a.window = Some(local)),
+    );
+    assert!(response.ok, "{response:?}");
+}
+
+#[test]
+fn the_sidebar_makes_and_renames_no_row_in_a_remote_window() {
+    let mut remote = Remote::opened(&server_version());
+    let (a, w) = (session("a"), Uuid::new_v4());
+    remote.snapshot(snapshot(vec![workspace(w, "w", vec![a.clone()])]));
+    let window = remote.window;
+    let name = remote.row(a.id()).display_name();
+    for action in [
+        SidebarAction::NewSessionInCurrent,
+        SidebarAction::NewWorkspace,
+        SidebarAction::Duplicate(a.id()),
+        SidebarAction::RenameSession {
+            session: a.id(),
+            name: "renamed".to_owned(),
+        },
+        SidebarAction::CloseSessions(vec![a.id()]),
+    ] {
+        assert!(
+            !remote.fixture.core.sidebar_action(window, action.clone()),
+            "{action:?}"
+        );
+    }
+    assert_eq!(remote.rows(), vec![a.id()]);
+    assert_eq!(remote.row(a.id()).display_name(), name);
+    assert_eq!(remote.store().workspaces().len(), 1);
+    assert!(remote.fixture.core.sidebar_action(
+        window,
+        SidebarAction::SelectSessions {
+            active: a.id(),
+            selection: vec![a.id()],
+        }
+    ));
 }

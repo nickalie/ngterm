@@ -153,6 +153,35 @@ pub enum SidebarAction {
     },
 }
 
+impl SidebarAction {
+    /// Whether the action makes, changes or ends a row or a workspace, which a remote window takes only from its
+    /// server's catalog (upstream's `RemoteCatalogActions`).
+    #[must_use]
+    pub fn changes_rows(&self) -> bool {
+        matches!(
+            self,
+            Self::RenameSession { .. }
+                | Self::RenameWorkspace { .. }
+                | Self::Duplicate(_)
+                | Self::NewCompanion(_)
+                | Self::DuplicateAsCompanion(_)
+                | Self::ConvertToCompanion(_)
+                | Self::NewRemoteSession(_)
+                | Self::EndRemoteSession(_)
+                | Self::MoveSessions { .. }
+                | Self::CloseSessions(_)
+                | Self::NewSession { .. }
+                | Self::OpenDirectories { .. }
+                | Self::DeleteWorkspace(_)
+                | Self::DropSessions { .. }
+                | Self::DropWorkspace { .. }
+                | Self::NewWorkspace
+                | Self::NewSessionInCurrent
+                | Self::NewSessionWithProfile(_)
+        )
+    }
+}
+
 impl Core {
     /// Performs `action` in window `window`'s sidebar. False when it did nothing: the window is gone or not open, its
     /// modal slot is held (except for a committed rename), or the action changed nothing it could. Commit afterwards.
@@ -164,6 +193,9 @@ impl Core {
             SidebarAction::RenameSession { .. } | SidebarAction::RenameWorkspace { .. }
         );
         if (!rename && self.modal_pending(window)) || !self.library().is_open(window) {
+            return false;
+        }
+        if self.library().is_remote_window(window) && action.changes_rows() {
             return false;
         }
         match action {

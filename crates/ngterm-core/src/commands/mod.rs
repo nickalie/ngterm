@@ -31,6 +31,7 @@ pub(crate) mod process;
 pub(crate) mod quick;
 pub(crate) mod recent;
 pub(crate) mod relaunch;
+pub(crate) mod remote_window;
 pub(crate) mod restart;
 pub(crate) mod restart_live;
 pub(crate) mod restore;
