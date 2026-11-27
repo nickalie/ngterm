@@ -355,10 +355,7 @@ fn a_companion_the_hook_attached_outside_the_group_is_refused() {
 
     assert_eq!(
         error(&response),
-        format!(
-            "created companion {CREATED} on buildbox but could not attach it: shown here in a row outside this group; \
-             `ngtermctl live attach buildbox {CREATED}` attaches it"
-        )
+        format!("created companion {CREATED} on buildbox; a row outside this group already shows it")
     );
     assert!(remote.companions().is_empty());
     assert_eq!(remote.fixture.store().session(hooked).unwrap().tint, None);

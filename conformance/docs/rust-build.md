@@ -345,7 +345,9 @@ This build's `--no-select` (`noSelect` on `live.attach` and `live.attach.group`)
 they were. `live-attach-one-row`: upstream's `live attach` adds a second row for an origin session a row already shows,
 and each row then runs its own presentation stream and posts each origin notification again. This build answers with
 the row that shows a terminal session, in the window that holds it, and selects that row unless `--no-select` is
-given; `--companions` and New Companion do the same for the parent and each terminal companion. A page session still
+given. `--companions` and New Companion do the same for the parent, and for a terminal companion only when that row
+is under the parent: a row outside the group makes `--companions` report the companion as not attached and New
+Companion refuse it, and that row gets no tint. A page session still
 gets the second view upstream gives it. Their tests are in
 `tests/behaviors/test_auto_follow.py` and `tests/cli/test_live_attach_select.py`. The build claims all three on every
 OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and the three Linux legs run with

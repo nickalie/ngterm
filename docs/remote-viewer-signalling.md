@@ -47,8 +47,9 @@ Details that are easy to break:
   previous row again afterwards makes the window show the new row for a moment (a visible blink).
 - New Companion on a remote row attaches by itself and the origin announces it too. `attach.sh` waits three seconds, then
   leaves alone anything that already has a `live present` process or a row showing its daemon. A slow attach can pass
-  that check in either order: `live attach` and New Companion's own attach of a terminal session a row already shows
-  answer with that row and add no second one.
+  that check in either order: `live attach` of a terminal session a row already shows answers with that row and adds
+  no second one. New Companion's own attach does the same when that row is under the parent; a row outside the group
+  makes it refuse, and that row gets no tint.
 - `announce.sh` skips page companions and parents with no viewers, since on a desktop origin the notify would otherwise
   only add a banner there.
 - `attach.sh` detaches after matching, because a hook line runs one process at a time.

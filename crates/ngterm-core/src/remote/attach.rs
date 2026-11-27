@@ -31,7 +31,7 @@ use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::live::lead::LeadAttachment;
 use crate::modal::{MAX_PICK_ITEMS, PendingPick};
-use crate::model::{AppStore, NewSession, RemoteBinding, RemoteOrigin, Session, SplitAxis, WindowLibrary};
+use crate::model::{AppStore, NewSession, RemoteBinding, RemoteOrigin, SplitAxis, WindowLibrary};
 use crate::pane_env::uuid_string;
 use crate::resolve::{Resolver, trimmed};
 
@@ -235,11 +235,7 @@ impl Core {
     /// second presentation stream and post every origin notification twice.
     fn reuse_attached_row(&mut self, row: Uuid, select: bool) -> ControlResult {
         let window = self.library().window_holding_session(row);
-        let parent = self
-            .library()
-            .store_for_session(row)
-            .and_then(|store| store.session(row))
-            .and_then(Session::parent_id);
+        let parent = self.library().parent_of_session(row);
         if select && let Some(window) = window {
             if self.library().active_window_id() != Some(window) {
                 self.request_window(crate::WindowRequest::Raise(window));
@@ -265,15 +261,10 @@ impl Core {
         host: &str,
         placement: Placement,
     ) -> Outcome {
-        if let Some(&row) = self.rows_attached_from(host, &remote_tree.endpoint).get(&remote.id) {
-            let parent = self
-                .library()
-                .store_for_session(row)
-                .and_then(|store| store.session(row))
-                .and_then(Session::parent_id);
-            if parent != placement.parent {
-                return Err(ControlError::rejected(SHOWN_OUTSIDE_GROUP));
-            }
+        if let Some(&row) = self.rows_attached_from(host, &remote_tree.endpoint).get(&remote.id)
+            && self.library().parent_of_session(row) != placement.parent
+        {
+            return Err(ControlError::rejected(SHOWN_OUTSIDE_GROUP));
         }
         self.attach_remote_session(remote, remote_tree, host, placement)
     }

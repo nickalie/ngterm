@@ -40,12 +40,7 @@ pub(crate) fn duplicate(core: &mut Core, request: &Request) -> Outcome {
     let (_, id) = session_store(core, request.target.as_deref(), args.window.as_deref())?;
     let copy = core.duplicate_companion(id, select).map_err(ControlError::rejected)?;
     let mut result = with_id(copy);
-    result.parent = core
-        .library()
-        .store_for_session(copy)
-        .and_then(|store| store.session(copy))
-        .and_then(Session::parent_id)
-        .map(uuid_string);
+    result.parent = core.library().parent_of_session(copy).map(uuid_string);
     Ok(result)
 }
 

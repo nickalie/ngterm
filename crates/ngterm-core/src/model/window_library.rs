@@ -343,6 +343,14 @@ impl WindowLibrary {
         self.window_id_for_session(session).and_then(|id| self.store(id))
     }
 
+    /// The parent of `session`, a companion row in any open window.
+    #[must_use]
+    pub fn parent_of_session(&self, session: Uuid) -> Option<Uuid> {
+        self.store_for_session(session)
+            .and_then(|store| store.session(session))
+            .and_then(Session::parent_id)
+    }
+
     pub fn store_for_session_mut(&mut self, session: Uuid) -> Option<&mut AppStore> {
         let id = self.window_id_for_session(session)?;
         self.store_mut(id)
