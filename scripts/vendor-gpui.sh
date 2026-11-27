@@ -79,7 +79,7 @@ case "${1:-}" in
   "") ;;
   --check) mode=check ;;
   --diff) mode='diff' ;;
-  -h | --help) sed -n '2,53s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h | --help) sed -n '2,/^[^#]/s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 

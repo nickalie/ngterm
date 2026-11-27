@@ -729,7 +729,8 @@ fn shm_uploads_its_damage(_: &Gpu) -> Outcome {
 fn clipped_and_drawn_under_overlays(_: &Gpu) -> Outcome {
     let mut fixture = Fixture::new(Layout::Clipped, black())?;
     let whole = rect(0, 0, 64, 32);
-    let red = solid(whole, [0, 0, 255, 255]);
+    let row = [[0, 0, 255, 255].repeat(32), [255, 0, 0, 255].repeat(32)].concat();
+    let red_then_blue = row.repeat(32);
     let (done, outcome) = listener();
     fixture.texture(|texture| {
         texture.push_shm(
@@ -737,7 +738,7 @@ fn clipped_and_drawn_under_overlays(_: &Gpu) -> Outcome {
             32,
             [ShmRegion {
                 rect: whole,
-                pixels: &red,
+                pixels: &red_then_blue,
             }],
             done,
         );
@@ -746,6 +747,7 @@ fn clipped_and_drawn_under_overlays(_: &Gpu) -> Outcome {
     presented(&outcome, "the frame")?;
     shot.expect(8, 8, GREEN, "the overlay drawn after the texture")?;
     shot.expect(40, 40, RED, "the texture inside its box")?;
+    shot.expect(60, 40, RED, "the left half at the right edge of the box")?;
     shot.expect(100, 40, BLACK, "the texture clipped by its box")?;
     Ok(Verdict::Passed)
 }
