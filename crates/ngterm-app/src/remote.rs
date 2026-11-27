@@ -87,6 +87,15 @@ impl<S: PresentationViewer> PresentationTransport for ProcessTransport<S> {
     }
 }
 
+impl<S> Drop for ProcessTransport<S> {
+    fn drop(&mut self) {
+        let mut runs = self.stderr_runs.lock().unwrap_or_else(PoisonError::into_inner);
+        for (_, mut run) in runs.drain() {
+            run.flush(BRIDGE_SOURCE);
+        }
+    }
+}
+
 /// The stderr run of each row's bridge, kept across its launches: a bridge that cannot connect writes one line and
 /// exits, and each retry is a new process.
 type BridgeRuns = Arc<Mutex<HashMap<Uuid, Repeats>>>;
@@ -145,13 +154,13 @@ impl ProcessLink {
             }
         }
         let process = platform::Process::of(&child);
-        let (posting, done) = (poster.clone(), Arc::clone(&reaped));
+        let (posting, done, runs) = (poster.clone(), Arc::clone(&reaped), Arc::clone(stderr_runs));
         let stdout = child.stdout.take();
         let spawned = std::thread::Builder::new()
             .name("ngterm.presentation-read".to_owned())
             .spawn(move || {
                 if let Some(stdout) = stdout {
-                    read_lines(stdout, key, &posting);
+                    read_lines(stdout, key, &posting, || end_bridge_run(&runs, key.session));
                 }
                 let reason = match child.wait() {
                     Ok(status) => exit_reason(status),
@@ -368,7 +377,8 @@ mod platform {
 /// Reads stdout one line at a time until its end, handing each to the main loop; a line over the frame limit ends the
 /// read, which the child sees as a closed pipe. The reader stops reading while [`MAX_PENDING_FRAMES`] lines wait for
 /// the loop, so a busy loop backs the child up into its own pipe.
-fn read_lines<S: PresentationViewer>(stdout: impl Read, key: LinkKey, poster: &Poster<S>) {
+fn read_lines<S: PresentationViewer>(stdout: impl Read, key: LinkKey, poster: &Poster<S>, first_line: impl FnOnce()) {
+    let mut first_line = Some(first_line);
     let gate = InboundGate::new(MAX_PENDING_FRAMES);
     let mut reader = BufReader::new(stdout);
     loop {
@@ -383,6 +393,9 @@ fn read_lines<S: PresentationViewer>(stdout: impl Read, key: LinkKey, poster: &P
             return;
         }
         line.pop();
+        if let Some(first_line) = first_line.take() {
+            first_line();
+        }
         gate.acquire();
         let released = gate.clone();
         let task = move |state: &mut S| {
@@ -421,6 +434,14 @@ fn log_bridge_lines_at(stderr: impl Read, runs: &BridgeRuns, row: Uuid, mut now:
     });
 }
 
+/// Logs and forgets the row's run: its bridge answered, so the run cannot go on.
+fn end_bridge_run(runs: &BridgeRuns, row: Uuid) {
+    let run = runs.lock().unwrap_or_else(PoisonError::into_inner).remove(&row);
+    if let Some(mut run) = run {
+        run.flush(BRIDGE_SOURCE);
+    }
+}
+
 fn read_stderr(stderr: impl Read, mut each: impl FnMut(&str)) {
     let mut reader = BufReader::new(stderr);
     let mut line = Vec::new();
@@ -441,17 +462,30 @@ fn read_stderr(stderr: impl Read, mut each: impl FnMut(&str)) {
     }
 }
 
-/// How often a run of identical stderr lines logs its count while it goes on.
+/// The first wait before a run of identical stderr lines logs its count while it goes on; the wait doubles after
+/// each count, up to [`MAX_REPEAT_REPORT_INTERVAL`], so a bridge retried every five minutes logs about once an hour.
 const REPEAT_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+const MAX_REPEAT_REPORT_INTERVAL: Duration = Duration::from_hours(1);
 
 /// The run of identical stderr lines that [`log_lines`] reads: the line, how many copies followed it since the last
-/// log event, and when that event was. The count is logged with a different line, or with the first copy a minute or
-/// more after the last log event.
-#[derive(Default)]
+/// log event, and when that event was. The count is logged with a different line, or with the first copy that comes
+/// `interval` or more after the last log event.
 struct Repeats {
     last: Option<String>,
     count: u64,
     since: Option<Instant>,
+    interval: Duration,
+}
+
+impl Default for Repeats {
+    fn default() -> Self {
+        Self {
+            last: None,
+            count: 0,
+            since: None,
+            interval: REPEAT_REPORT_INTERVAL,
+        }
+    }
 }
 
 impl Repeats {
@@ -461,15 +495,17 @@ impl Repeats {
             tracing::info!(line = %text, "{source}");
             self.last = Some(text.to_owned());
             self.since = Some(now);
+            self.interval = REPEAT_REPORT_INTERVAL;
             return;
         }
         self.count += 1;
         if self
             .since
-            .is_some_and(|since| now.duration_since(since) >= REPEAT_REPORT_INTERVAL)
+            .is_some_and(|since| now.duration_since(since) >= self.interval)
         {
             self.flush(source);
             self.since = Some(now);
+            self.interval = (self.interval * 2).min(MAX_REPEAT_REPORT_INTERVAL);
         }
     }
 
@@ -667,17 +703,132 @@ mod tests {
     }
 
     #[test]
-    fn a_long_run_of_identical_stderr_lines_logs_its_count_once_a_minute() {
-        let text = stderr_log_at(&b"refused\n".repeat(150), ticking(Duration::from_secs(1)));
+    fn a_long_run_of_identical_stderr_lines_logs_its_count_after_a_minute_then_at_doubling_waits() {
+        let text = stderr_log_at(&b"refused\n".repeat(400), ticking(Duration::from_secs(1)));
         assert_eq!(
             text.lines().collect::<Vec<_>>(),
             [
                 " INFO test child line=refused",
                 " INFO test child: the last line repeated line=refused repeats=60",
-                " INFO test child: the last line repeated line=refused repeats=60",
-                " INFO test child: the last line repeated line=refused repeats=29",
+                " INFO test child: the last line repeated line=refused repeats=120",
+                " INFO test child: the last line repeated line=refused repeats=219",
             ]
         );
+    }
+
+    #[test]
+    fn a_bridge_retried_every_five_minutes_logs_its_count_less_and_less_often() {
+        let runs = BridgeRuns::default();
+        let mut clock = ticking(Duration::from_secs(300));
+        let text = logged(|| {
+            for _ in 0..24 {
+                log_bridge_lines_at(&b"refused\n"[..], &runs, Uuid::nil(), &mut clock);
+            }
+        });
+        let counts: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.split_once("repeats=").map(|(_, count)| count))
+            .collect();
+        assert_eq!(counts, ["1", "1", "1", "2", "4", "7"]);
+        assert_eq!(text.lines().count(), 7, "{text}");
+    }
+
+    #[test]
+    fn a_new_line_starts_its_run_with_the_first_wait_again() {
+        let mut stderr = b"refused\n".repeat(200);
+        stderr.extend_from_slice(&b"timeout\n".repeat(62));
+        let text = stderr_log_at(&stderr, ticking(Duration::from_secs(1)));
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                " INFO test child line=refused",
+                " INFO test child: the last line repeated line=refused repeats=60",
+                " INFO test child: the last line repeated line=refused repeats=120",
+                " INFO test child: the last line repeated line=refused repeats=19",
+                " INFO test child line=timeout",
+                " INFO test child: the last line repeated line=timeout repeats=60",
+                " INFO test child: the last line repeated line=timeout repeats=1",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_row_whose_bridge_answers_logs_its_count_and_forgets_its_run() {
+        let runs = BridgeRuns::default();
+        let text = logged(|| {
+            for _ in 0..3 {
+                log_bridge_lines_at(&b"refused\n"[..], &runs, Uuid::nil(), Instant::now);
+            }
+            end_bridge_run(&runs, Uuid::nil());
+            log_bridge_lines_at(&b"refused\n"[..], &runs, Uuid::nil(), Instant::now);
+        });
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                " INFO presentation bridge line=refused",
+                " INFO presentation bridge: the last line repeated line=refused repeats=2",
+                " INFO presentation bridge line=refused",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dropped_transport_logs_the_count_of_each_row() {
+        let transport = ProcessTransport::new(Weak::<FakeMainLoop<Viewer>>::new() as Poster<Viewer>);
+        let text = logged(|| {
+            for row in [Uuid::nil(), Uuid::max()] {
+                for _ in 0..2 {
+                    log_bridge_lines_at(&b"refused\n"[..], &transport.stderr_runs, row, Instant::now);
+                }
+            }
+            drop(transport);
+        });
+        assert_eq!(
+            text.lines().filter(|line| line.ends_with("repeats=1")).count(),
+            2,
+            "{text}"
+        );
+    }
+
+    /// Waits until the run of `KEY`'s row in `transport` holds `count` copies, or `None` for no run.
+    fn wait_for_run<S>(transport: &ProcessTransport<S>, count: Option<u64>) {
+        let deadline = std::time::Instant::now() + crate::test_shell::CHILD_DEADLINE;
+        loop {
+            let now = transport
+                .stderr_runs
+                .lock()
+                .unwrap()
+                .get(&KEY.session)
+                .map(|run| run.count);
+            if now == count {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the run holds {now:?}, not {count:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn the_launches_of_a_row_share_its_run_until_its_bridge_answers() {
+        let (sender, receiver) = mpsc::channel();
+        let main_loop = Arc::new(FakeMainLoop::spawn(Viewer(sender)).unwrap());
+        let poster: Poster<Viewer> = Arc::downgrade(&main_loop) as Poster<Viewer>;
+        let transport = ProcessTransport::new(poster);
+        let refused = crate::test_shell::script_argv("echo refused >&2", "[Console]::Error.WriteLine('refused')");
+        let answers = crate::test_shell::script_argv("echo up", "[Console]::Out.WriteLine('up')");
+        for (launch, argv, run) in [(1, &refused, Some(0)), (2, &refused, Some(1)), (3, &answers, None)] {
+            let link = transport.open(argv, LinkKey { launch, ..KEY });
+            while !matches!(
+                receiver.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap(),
+                Report::Closed(_)
+            ) {}
+            drop(link);
+            wait_for_run(&transport, run);
+        }
+        main_loop.close();
     }
 
     #[test]
