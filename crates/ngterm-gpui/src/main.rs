@@ -55,6 +55,8 @@ fn main() -> ExitCode {
     // SAFETY: first thing in main, while the process has one thread.
     unsafe { std::env::remove_var(instance::STARTUP_ID_ENV) };
     ngterm_app::logging::init(&ProcessEnv);
+    let identity = app::identity();
+    ngterm_app::logging::log_build(&identity.version, identity.commit.as_deref(), Some(app::GPUI_VERSION));
     let app_id = instance::app_id(&ProcessEnv);
     let (requests, received) = async_channel::unbounded();
     // kept for the whole run: dropping it gives the name up

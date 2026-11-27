@@ -1,5 +1,6 @@
 //! Points the terminal's embedded fonts (`terminal::font`) at the vendored fonts prefix: `NGTERM_GPUI_FONTS` is its
-//! `share/fonts`, which `include_bytes!` reads; on Windows, links ngterm.exe's icon resource (`windows_resources`).
+//! `share/fonts`, which `include_bytes!` reads; on Windows, links ngterm.exe's icon resource (`windows_resources`);
+//! records the GPUI version the build links as `NGTERM_GPUI_VERSION` (`gpui_version`).
 //!
 //! The prefix path comes from `scripts/fetch-fonts.sh --print-prefix`, the one place that knows how it is keyed; this
 //! script never fetches. A missing or incomplete prefix fails the build with a pointer to the script. The script runs
@@ -26,7 +27,10 @@ const FONT_FILES: [&str; 5] = [
 ];
 
 fn main() -> ExitCode {
-    if let Err(error) = macos_services().and_then(|()| windows_resources()) {
+    if let Err(error) = macos_services()
+        .and_then(|()| windows_resources())
+        .and_then(|()| gpui_version())
+    {
         println!("cargo::error={error}");
         return ExitCode::FAILURE;
     }
@@ -62,6 +66,25 @@ fn fonts() -> Result<PathBuf, String> {
             fonts.display()
         ))
     }
+}
+
+/// The version of `gpui-pre`, the GPUI that gpui-kit links, as the workspace's `Cargo.lock` pins it.
+fn gpui_version() -> Result<(), String> {
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR").ok_or("CARGO_MANIFEST_DIR is not set")?;
+    let lock = Path::new(&manifest).join("../../Cargo.lock");
+    println!("cargo::rerun-if-changed={}", lock.display());
+    let text = std::fs::read_to_string(&lock).map_err(|error| format!("cannot read {}: {error}", lock.display()))?;
+    let version = locked_version(&text, "gpui-pre").ok_or_else(|| format!("no gpui-pre in {}", lock.display()))?;
+    println!("cargo::rustc-env=NGTERM_GPUI_VERSION={version}");
+    Ok(())
+}
+
+/// The version of package `name` in the text of a `Cargo.lock`.
+fn locked_version<'a>(lock: &'a str, name: &str) -> Option<&'a str> {
+    let wanted = format!("name = \"{name}\"");
+    let mut lines = lock.lines();
+    lines.find(|line| *line == wanted)?;
+    lines.next()?.strip_prefix("version = \"")?.strip_suffix('"')
 }
 
 /// On Windows, `windows/ngterm.rc` (the app icon, `resources/icons/ngterm.ico`) compiled and linked into the `ngterm`

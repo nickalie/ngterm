@@ -261,6 +261,8 @@ fn main() -> ExitCode {
         };
     }
     ngterm_app::logging::init(&ProcessEnv);
+    let identity = ngterm_headless::identity();
+    ngterm_app::logging::log_build(&identity.version, identity.commit.as_deref(), None);
     let state_dir = paths::state_dir(&ProcessEnv);
     // held for the whole process; the kernel releases it at exit
     let _lock = match claim(&state_dir, cli.relaunched) {

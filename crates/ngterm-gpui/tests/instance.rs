@@ -98,6 +98,12 @@ fn sigterm_quits_a_headless_primary_with_status_0_within_10_s() -> TestResult {
         log.contains("SIGTERM: quitting") && log.contains("quit: the state is saved"),
         "{log}"
     );
+    let build = format!(r#"build version="{}" commit="#, env!("CARGO_PKG_VERSION"));
+    let gpui = format!(r#"gpui="{}""#, ngterm_gpui::app::GPUI_VERSION);
+    assert!(
+        log.contains(&build) && log.contains(&gpui),
+        "the start names its build: {log}"
+    );
     assert!(!sandbox.path("state/ngterm.sock").exists(), "the socket is removed");
     assert!(
         sandbox.path("state/windows.json").is_file(),

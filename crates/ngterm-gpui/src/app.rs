@@ -118,6 +118,9 @@ pub fn identity() -> AppIdentity {
     AppIdentity::from_recorded(env!("CARGO_PKG_VERSION"), option_env!("NGTERM_BUILD_COMMIT"))
 }
 
+/// The version of the GPUI this build links (`build.rs`).
+pub const GPUI_VERSION: &str = env!("NGTERM_GPUI_VERSION");
+
 /// The argument that makes `ngterm` print the identity this build records ([`build_identity_text`]) and end before
 /// anything of the app starts: `scripts/stage.sh` writes the staged identity file from it.
 pub const BUILD_IDENTITY_FLAG: &str = "--build-identity";

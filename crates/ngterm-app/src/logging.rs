@@ -59,6 +59,15 @@ pub fn init(env: &dyn Env) {
     }
 }
 
+/// The commit a start line names for a build that recorded none.
+pub const NO_COMMIT: &str = "none recorded";
+
+/// Logs the build that writes this log, once at start, so a log sent with a bug report names its build. `gpui` is
+/// the GPUI version of a frontend that links it.
+pub fn log_build(version: &str, commit: Option<&str>, gpui: Option<&str>) {
+    tracing::info!(version, commit = commit.unwrap_or(NO_COMMIT), gpui, "build");
+}
+
 /// The filter from `env`'s [`LOG_ENV`], or [`DEFAULT_FILTER`].
 fn filter(env: &dyn Env) -> EnvFilter {
     env.var(LOG_ENV)
@@ -303,6 +312,31 @@ mod tests {
         assert!(written.contains("hello from the log test"), "{written}");
         assert!(!written.contains("below the default level"), "{written}");
         assert!(!written.contains('\x1b'), "the file has no ANSI colors: {written:?}");
+    }
+
+    fn logged_build(version: &str, commit: Option<&str>, gpui: Option<&str>) -> String {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = open_log_file(tmp.path(), ROTATE_BYTES).unwrap();
+        tracing::subscriber::with_default(subscriber(filter(&MapEnv::new()), Some(file)), || {
+            log_build(version, commit, gpui);
+        });
+        fs::read_to_string(tmp.path().join(LOG_FILE_NAME)).unwrap()
+    }
+
+    #[test]
+    fn the_build_line_names_the_version_the_commit_and_gpui() {
+        let written = logged_build("1.2.3", Some("abc1234"), Some("0.3.14"));
+        assert!(written.contains(" build "), "{written}");
+        assert!(written.contains(r#"version="1.2.3""#), "{written}");
+        assert!(written.contains(r#"commit="abc1234""#), "{written}");
+        assert!(written.contains(r#"gpui="0.3.14""#), "{written}");
+    }
+
+    #[test]
+    fn a_build_without_a_commit_says_so() {
+        let written = logged_build("1.2.3", None, None);
+        assert!(written.contains(r#"commit="none recorded""#), "{written}");
+        assert!(!written.contains("gpui="), "{written}");
     }
 
     #[test]

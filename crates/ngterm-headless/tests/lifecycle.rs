@@ -389,6 +389,9 @@ fn a_server_answers_its_private_socket_and_saves_on_termination() {
     let mut stream = ready(&fixture, &mut child).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     stream.write_all(b"{\"cmd\":\"version\"}\n").unwrap();
+    let log = fixture.log();
+    let build = format!(r#"build version="{}" commit="#, env!("CARGO_PKG_VERSION"));
+    assert!(log.contains(&build), "the start names its build: {log}");
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line).unwrap();
     let response: serde_json::Value = serde_json::from_str(&line).unwrap();
