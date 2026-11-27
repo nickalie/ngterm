@@ -68,6 +68,11 @@ impl std::fmt::Debug for CatalogRun {
 }
 
 impl CatalogRun {
+    /// The stream client this run was opened with; a run opened again for the same window has another.
+    pub(crate) const fn client(&self) -> u64 {
+        self.client
+    }
+
     fn new(window: Uuid, client: u64, host: &str, view: RemoteWindowViewState, now: Instant) -> Self {
         Self {
             window,

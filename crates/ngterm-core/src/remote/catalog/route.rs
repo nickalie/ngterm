@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use super::actions::{Asker, Finished, lost_reply};
 use super::operation::{RemoteOperation, RemoteOperationTarget};
+use super::run::CatalogRun;
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
@@ -44,7 +45,10 @@ impl Core {
     ) -> Dispatched {
         let lost = lost_reply(&self.remote_host(window), operation.label());
         match self.send_remote(window, operation, Asker::Control, select) {
-            Ok(op_id) => await_reply(window, op_id, lost),
+            Ok(op_id) => {
+                let client = self.remote.viewer.catalogs.get(&window).map(CatalogRun::client);
+                await_reply(window, client, op_id, lost)
+            }
             Err(error) => Dispatched::done(Err(ControlError::rejected(error))),
         }
     }
@@ -186,9 +190,9 @@ impl Core {
             .get_mut(&window)
             .filter(|_| self.library.is_remote_window(window))
         else {
-            return Err(ControlError::rejected(
-                "window.remote.dismiss acts only on a remote window",
-            ));
+            return Err(ControlError::rejected(super::actions::remote_window_only(
+                "window.remote.dismiss",
+            )));
         };
         let dismissed = run.actions.dismiss_unknown();
         self.remote_actions_changed(window);
@@ -196,18 +200,25 @@ impl Core {
     }
 }
 
-/// Waits for the reply of `op_id`; `lost` answers when the window closed first and its reply can no longer come.
-fn await_reply(window: Uuid, op_id: String, lost: String) -> Dispatched {
+/// Waits for the reply of `op_id` from the run of `client`; `lost` answers when that run ended first (the window
+/// closed, or closed and opened again) and its reply can no longer come.
+fn await_reply(window: Uuid, client: Option<u64>, op_id: String, lost: String) -> Dispatched {
     Dispatched::Pending {
         after: REPLY_POLL,
         resume: Box::new(move |core: &mut Core| {
             core.poll_remote_actions(window);
-            let Some(run) = core.remote.viewer.catalogs.get_mut(&window) else {
+            let Some(run) = core
+                .remote
+                .viewer
+                .catalogs
+                .get_mut(&window)
+                .filter(|run| Some(run.client()) == client)
+            else {
                 return Dispatched::Done(Response::failure(lost));
             };
             match run.actions.take_reply(&op_id) {
                 Some(reply) => Dispatched::Done(reply),
-                None => await_reply(window, op_id, lost),
+                None => await_reply(window, client, op_id, lost),
             }
         }),
     }

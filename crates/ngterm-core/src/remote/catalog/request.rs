@@ -65,22 +65,8 @@ fn parse_session(cmd: SessionCmd, target: Option<&str>, args: &Args, store: &App
     match cmd {
         SessionCmd::New => new_session(args, store, shell, select),
         SessionCmd::Duplicate => {
-            // the server makes a fresh shell after the row, in the directory this window shows for it
             let id = session(target, store)?;
-            let workspace = workspace_of(store, id)?;
-            let shell = RemoteShellOptions {
-                cwd: store.session(id).map(|row| row.focused_cwd().to_owned()),
-                ..RemoteShellOptions::default()
-            };
-            let anchor = Some(RemoteSessionPlacement::After(id));
-            Ok((
-                RemoteOperation::NewSession {
-                    workspace,
-                    anchor,
-                    shell,
-                },
-                true,
-            ))
+            Ok((super::gestures::duplicate(store, id).ok_or("no such session")?, true))
         }
         SessionCmd::CompanionNew => {
             if args.workspace.is_some() || args.after.is_some() || args.before.is_some() {

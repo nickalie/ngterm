@@ -19,7 +19,7 @@ use crate::app_actions::ActionOrigin;
 use crate::catalog::fixture::{self as catalog, pane, session, session_with, snapshot, workspace};
 use crate::catalog::frames::{self, CatalogChange, CatalogFrame, CatalogScratch, CatalogSnapshot, Lifecycle};
 use crate::keymap::BuiltinAction;
-use crate::model::{AgentIndicator, AgentStatus, AppStore, Session};
+use crate::model::{AgentIndicator, AgentStatus, AppStore, Session, SplitAxis};
 use crate::palette::{PaletteAction, PaletteMode};
 use crate::palette_catalog::PaletteCommand;
 use crate::pane_env::StatusPane;
@@ -31,13 +31,15 @@ use crate::remote::viewer_run::readable;
 use crate::sidebar_actions::SidebarAction;
 
 /// Answers `version` with `version`, an operation sent with an id with an applied receipt at the next revision (the
-/// created row's id for a new session), and records every run. With `lose` set, operations and lookups get no answer.
+/// created row's id for a new session), and records every run. With `lose` set, operations and lookups get no answer;
+/// with `refuse` set, an operation gets a refused receipt with that error.
 struct Runner {
     version: Mutex<RemoteCommandResult>,
     runs: Mutex<Vec<Vec<String>>>,
     rev: Mutex<i64>,
     created: Mutex<Option<Uuid>>,
     lose: AtomicBool,
+    refuse: Mutex<Option<String>>,
 }
 
 impl Runner {
@@ -86,6 +88,11 @@ impl RemoteCommandRunner for Runner {
         let op_id: String = line[at..].chars().take(36).collect();
         let mut rev = self.rev.lock().unwrap();
         *rev += 1;
+        if let Some(error) = self.refuse.lock().unwrap().clone() {
+            return answer(&json!({"ok": false, "error": error, "result": {
+                "receipt": {"opID": op_id, "epoch": "e1", "outcome": "refused", "rev": *rev, "error": error}
+            }}));
+        }
         let created = line
             .contains("session new")
             .then(|| *self.created.lock().unwrap())
@@ -138,6 +145,7 @@ impl Remote {
             rev: Mutex::new(0),
             created: Mutex::new(None),
             lose: AtomicBool::new(false),
+            refuse: Mutex::new(None),
         });
         fixture.core.set_remote_runner(runner.clone());
         let transport = Rc::new(Transport::default());

@@ -17,11 +17,12 @@ use crate::Core;
 use crate::commands::remote_window::Route;
 use crate::html::HtmlPageKind;
 use crate::keymap::BuiltinAction;
-use crate::model::{AgentIndicator, AppStore, Session, SessionNavigation, SidebarMode};
+use crate::model::{AgentIndicator, AppStore, Session, SessionNavigation, SidebarMode, SplitAxis};
 use crate::palette::PaletteMode;
 use crate::palette_catalog::{PaletteCommand, PaletteContext, PaletteFacts};
 use crate::pane_env::uuid_string;
 use crate::persist::settings::FlaggedViewLayout;
+use crate::remote::catalog::operation::RemoteOperation;
 use crate::sidebar_actions::SidebarAction;
 
 /// Where a chord fired: the window it fired in, and whether the quick terminal held the keyboard.
@@ -610,7 +611,8 @@ impl Core {
     }
 
     /// Toggle Split (upstream's `toggleSplit(axis:)`): inert under a shown full overlay; a shown scratch is dismissed
-    /// instead, so the panes come into view first (refused in a remote window, whose scratch is the server's).
+    /// instead, so the panes come into view first. A remote window sends the change to its server: the same shown
+    /// axis hides, another axis or a hidden split shows in this axis.
     fn toggle_split_action(&mut self, window: Uuid, session: Uuid, horizontal: bool) {
         let Some(state) = self.library().store(window).and_then(|store| store.session(session)) else {
             return;
@@ -622,8 +624,22 @@ impl Core {
             self.hide_scratch(window, session);
             return;
         }
+        let axis = if horizontal {
+            SplitAxis::TopBottom
+        } else {
+            SplitAxis::LeftRight
+        };
+        if self.library().is_remote_window(window) {
+            let operation = RemoteOperation::SetSplit {
+                session,
+                shown: !(state.split.shown && state.split.axis == axis),
+                axis: Some(axis.wire_name().to_owned()),
+            };
+            self.perform_remote(window, operation, false);
+            return;
+        }
         let args = Args {
-            axis: Some((if horizontal { "horizontal" } else { "vertical" }).to_owned()),
+            axis: Some(axis.wire_name().to_owned()),
             ..Args::default()
         };
         self.run_request(
@@ -817,8 +833,8 @@ impl Core {
         }
     }
 
-    /// Hides session `session`'s shown scratch (upstream's `setScratchShown(false)`): a remote window's goes through
-    /// `session.scratch`, which a remote window refuses, so the server's scratch is never hidden only here.
+    /// Hides session `session`'s shown scratch (upstream's `setScratchShown(false)`): a remote window sends
+    /// `session.scratch off` to its server, and the scratch hides here only when the catalog says so.
     fn hide_scratch(&mut self, window: Uuid, session: Uuid) {
         if self.library().is_remote_window(window) {
             let args = Args {
@@ -849,7 +865,7 @@ impl Core {
     }
 
     /// [`Self::run_request`], answering whether the command succeeded. A command on a remote window's rows goes to its
-    /// server without waiting for the reply, whose refusal shows over the row.
+    /// server without waiting for the reply: true when the window took it (sent, or its refusal shows over the row).
     fn try_request(&mut self, cmd: Command, target: Option<String>, args: Args) -> bool {
         let request = Request {
             cmd,

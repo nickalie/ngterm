@@ -631,7 +631,7 @@ fn a_request_the_window_cannot_send_is_refused_with_its_reason() {
 }
 
 #[test]
-fn a_gesture_the_server_refuses_shows_its_reason_and_a_created_row_already_shown_is_selected() {
+fn a_gesture_whose_reply_is_lost_shows_it_and_a_created_row_already_shown_is_selected() {
     let (a, b, w) = (session("a"), session("b"), Uuid::new_v4());
     let mut remote = Remote::showing(w, vec![a.clone(), b.clone()]);
     let dir = tempfile::tempdir().unwrap();
@@ -660,6 +660,80 @@ fn a_gesture_the_server_refuses_shows_its_reason_and_a_created_row_already_shown
     assert_eq!(
         spec.message,
         "Rename Session: box did not answer Rename Session; its outcome is unknown until box can be asked"
+    );
+}
+
+#[test]
+fn a_gesture_the_server_refuses_shows_the_servers_error_over_its_row() {
+    let (a, w) = (session("a"), Uuid::new_v4());
+    let mut remote = Remote::showing(w, vec![a.clone()]);
+    let dir = tempfile::tempdir().unwrap();
+    remote.fixture.core.set_hud_body_dir(dir.path().join("bodies"));
+    let window = remote.window;
+    *remote.runner.refuse.lock().unwrap() = Some("the name is taken on box".to_owned());
+    remote.fixture.core.sidebar_action(
+        window,
+        SidebarAction::RenameSession {
+            session: a.id(),
+            name: "x".to_owned(),
+        },
+    );
+    remote.settle_actions();
+    let spec = remote.row(a.id()).overlay.effective_hud_spec().expect("an error panel");
+    assert_eq!(spec.message, "Rename Session: the name is taken on box");
+}
+
+#[test]
+fn toggle_split_in_a_remote_window_hides_the_same_axis_and_transposes_another() {
+    let a = session_with(Uuid::new_v4(), "a", vec![pane(), pane()]);
+    let mut remote = Remote::showing(Uuid::new_v4(), vec![a.clone()]);
+    let window = remote.window;
+    remote.store_mut().select_session(Some(a.id()));
+    assert!(remote.row(a.id()).split.shown);
+    assert_eq!(remote.row(a.id()).split.axis, SplitAxis::LeftRight);
+    let origin = ActionOrigin { window, quick: false };
+    for action in [BuiltinAction::ToggleHorizontalSplit, BuiltinAction::ToggleSplit] {
+        remote.fixture.core.perform_builtin(origin, action);
+        remote.settle_actions();
+    }
+    let lines = remote.runner.operations();
+    let row = wire(a.id());
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines[0].contains(&format!("session split visibility on --target {row} --axis horizontal")),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains(&format!("session split visibility off --target {row} --axis vertical")),
+        "{}",
+        lines[1]
+    );
+    assert!(remote.row(a.id()).split.shown, "shown until the catalog says otherwise");
+}
+
+#[test]
+fn a_request_whose_window_closed_and_opened_again_before_the_reply_answers_its_outcome_unknown() {
+    let (a, w) = (session("a"), Uuid::new_v4());
+    let mut remote = Remote::showing(w, vec![a.clone()]);
+    remote.runner.lose.store(true, Ordering::SeqCst);
+    let request = Request {
+        cmd: session_cmd(SessionCmd::Rename),
+        target: Some(wire(a.id())),
+        args: Some(args(|a| a.name = Some("renamed".to_owned()))),
+    };
+    let Dispatched::Pending { resume, .. } = remote.fixture.core.begin(&request) else {
+        panic!("the rename waits for the server's reply");
+    };
+    remote.fixture.core.close_window(remote.window);
+    let _ = remote.fixture.core.commit();
+    assert_eq!(answered_id(&remote.open("box")), Some(remote.window));
+    let Dispatched::Done(response) = resume(&mut remote.fixture.core) else {
+        panic!("the reply of the closed run can no longer come");
+    };
+    assert_eq!(
+        response.error.as_deref(),
+        Some("box did not answer Rename Session; its outcome is unknown until box can be asked")
     );
 }
 

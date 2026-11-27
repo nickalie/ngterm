@@ -13,8 +13,9 @@ use crate::resolve::trimmed;
 use crate::sidebar_actions::SidebarAction;
 
 impl Core {
-    /// Performs `action`, one that changes rows ([`SidebarAction::changes_rows`]), in remote window `window`; false
-    /// when it sent nothing.
+    /// Performs `action`, one that changes rows ([`SidebarAction::changes_rows`]), in remote window `window`. True when
+    /// the window took it: it sent an operation or shows the refusal over the row. False when the gesture makes no
+    /// operation or the window is gone.
     pub(crate) fn remote_sidebar_action(&mut self, window: Uuid, action: SidebarAction) -> bool {
         let Some(store) = self.library.store(window) else {
             return false;
@@ -70,11 +71,11 @@ impl Core {
             // a shell or a row on this machine, which a remote window shows only from its server
             _ => Vec::new(),
         };
-        let mut sent = false;
+        let mut taken = false;
         for operation in operations {
-            sent |= self.perform_remote(window, operation, false);
+            taken |= self.perform_remote(window, operation, false);
         }
-        sent
+        taken
     }
 
     /// Whether window `window` can make, change or end rows now: a local window always, a remote one while its
@@ -145,7 +146,7 @@ impl Core {
 }
 
 /// Duplicate Session in a remote window: a fresh shell on the server after the row, in its directory.
-fn duplicate(store: &AppStore, id: Uuid) -> Option<RemoteOperation> {
+pub(super) fn duplicate(store: &AppStore, id: Uuid) -> Option<RemoteOperation> {
     let workspace = store.session_location(id)?.workspace;
     let cwd = store.session(id).map(|session| session.focused_cwd().to_owned());
     Some(RemoteOperation::NewSession {

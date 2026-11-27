@@ -174,6 +174,11 @@ pub(crate) fn lost_reply(host: &str, label: &str) -> String {
     format!("{host} did not answer {label}; its outcome is unknown until {host} can be asked")
 }
 
+/// The refusal of `command` on a window that is not remote (upstream's `remoteWindowOnly`).
+pub(crate) fn remote_window_only(command: &str) -> String {
+    format!("{command} acts only on a remote window")
+}
+
 /// The refusal while the window's stream is down.
 pub(crate) fn not_connected(host: &str) -> String {
     format!("{host} is not connected")

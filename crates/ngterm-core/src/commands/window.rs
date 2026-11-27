@@ -18,6 +18,7 @@ use crate::error::ControlError;
 use crate::model::WorkspaceNavigation;
 use crate::model::naming::trimmed_or_none;
 use crate::pane_env::uuid_string;
+use crate::remote::catalog::actions::remote_window_only;
 use crate::resolve::Resolver;
 use crate::windows::{MIN_WINDOW_SIZE, WindowRequest, WindowSize, clamp_size};
 
@@ -56,9 +57,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: WindowCmd, request: &Request) -> Ou
 fn remote_dismiss(core: &mut Core, target: Option<&str>) -> Outcome {
     let window = Resolver::new(core.library()).placement_window(target)?;
     let Some(window) = window else {
-        return Err(ControlError::rejected(
-            "window.remote.dismiss acts only on a remote window",
-        ));
+        return Err(ControlError::rejected(remote_window_only("window.remote.dismiss")));
     };
     core.dismiss_remote_unknown(window)
 }
