@@ -93,6 +93,9 @@ pub trait PresentationLink {
 /// end under `key`, through [`crate::Core::viewer_line`] and [`crate::Core::viewer_closed`].
 pub trait PresentationTransport {
     fn open(&self, argv: &[String], key: LinkKey) -> Box<dyn PresentationLink>;
+
+    /// The quit path ended every stream: write what is still pending, as the process can exit without a drop.
+    fn shutdown(&self) {}
 }
 
 /// What the owner does with what arrives (upstream's `RemotePresentationEffects`).

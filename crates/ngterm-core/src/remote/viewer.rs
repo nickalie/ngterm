@@ -318,6 +318,9 @@ impl Core {
             client.stop();
         }
         self.remote.viewer.clients.clear();
+        if let Some(transport) = &self.remote.viewer.transport {
+            transport.shutdown();
+        }
     }
 
     /// Whether the pane carrying `token` waits to be attached again: a key press on it retries rather than reaching

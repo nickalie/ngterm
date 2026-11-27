@@ -3,7 +3,7 @@
 //! connection (upstream's `ControlServer+RemotePresentation`, `ControlServer+RemoteReconnect`,
 //! `RemotePresentationStateTests` and `RemoteLayoutCloseTests`), over a fake ssh runner and a fake bridge.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -73,7 +73,7 @@ impl PresentationLink for Link {
 }
 
 #[derive(Default)]
-pub(super) struct Transport(pub(super) RefCell<Vec<Link>>);
+pub(super) struct Transport(pub(super) RefCell<Vec<Link>>, Cell<bool>);
 
 impl PresentationTransport for Transport {
     fn open(&self, argv: &[String], key: LinkKey) -> Box<dyn PresentationLink> {
@@ -82,6 +82,10 @@ impl PresentationTransport for Transport {
         link.0.borrow_mut().key = Some(key);
         self.0.borrow_mut().push(link.clone());
         Box::new(link)
+    }
+
+    fn shutdown(&self) {
+        self.1.set(true);
     }
 }
 
@@ -659,6 +663,16 @@ fn the_snapshot_and_deltas_land_on_the_row_and_losing_the_stream_withdraws_them(
     // the backoff relaunches the bridge
     viewer.fixture.core.remote_tick(Instant::now() + Duration::from_secs(2));
     assert_eq!(viewer.transport.0.borrow().len(), 2);
+}
+
+#[test]
+fn the_quit_stops_each_stream_and_then_shuts_the_transport_down() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    assert!(!viewer.transport.1.get());
+    viewer.fixture.core.shutdown_remote_presentations();
+    assert!(viewer.link().0.borrow().stopped);
+    assert!(viewer.transport.1.get());
 }
 
 #[test]

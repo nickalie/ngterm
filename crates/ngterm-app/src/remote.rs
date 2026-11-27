@@ -85,14 +85,22 @@ impl<S: PresentationViewer> PresentationTransport for ProcessTransport<S> {
     fn open(&self, argv: &[String], key: LinkKey) -> Box<dyn PresentationLink> {
         Box::new(ProcessLink::spawn(argv, key, &self.poster, &self.stderr_runs))
     }
+
+    fn shutdown(&self) {
+        flush_bridge_runs(&self.stderr_runs);
+    }
 }
 
 impl<S> Drop for ProcessTransport<S> {
     fn drop(&mut self) {
-        let mut runs = self.stderr_runs.lock().unwrap_or_else(PoisonError::into_inner);
-        for (_, mut run) in runs.drain() {
-            run.flush(BRIDGE_SOURCE);
-        }
+        flush_bridge_runs(&self.stderr_runs);
+    }
+}
+
+fn flush_bridge_runs(runs: &BridgeRuns) {
+    let mut runs = runs.lock().unwrap_or_else(PoisonError::into_inner);
+    for (_, mut run) in runs.drain() {
+        run.flush(BRIDGE_SOURCE);
     }
 }
 
@@ -717,11 +725,11 @@ mod tests {
     }
 
     #[test]
-    fn a_bridge_retried_every_five_minutes_logs_its_count_less_and_less_often() {
+    fn a_bridge_retried_every_five_minutes_logs_its_count_less_and_less_often_then_each_hour() {
         let runs = BridgeRuns::default();
         let mut clock = ticking(Duration::from_secs(300));
         let text = logged(|| {
-            for _ in 0..24 {
+            for _ in 0..53 {
                 log_bridge_lines_at(&b"refused\n"[..], &runs, Uuid::nil(), &mut clock);
             }
         });
@@ -729,8 +737,8 @@ mod tests {
             .lines()
             .filter_map(|line| line.split_once("repeats=").map(|(_, count)| count))
             .collect();
-        assert_eq!(counts, ["1", "1", "1", "2", "4", "7"]);
-        assert_eq!(text.lines().count(), 7, "{text}");
+        assert_eq!(counts, ["1", "1", "1", "2", "4", "7", "12", "12", "12"]);
+        assert_eq!(text.lines().count(), 10, "{text}");
     }
 
     #[test]
@@ -769,6 +777,25 @@ mod tests {
                 " INFO presentation bridge: the last line repeated line=refused repeats=2",
                 " INFO presentation bridge line=refused",
             ]
+        );
+    }
+
+    #[test]
+    fn a_shut_down_transport_logs_the_count_of_each_row_and_forgets_its_runs() {
+        let transport = ProcessTransport::new(Weak::<FakeMainLoop<Viewer>>::new() as Poster<Viewer>);
+        let text = logged(|| {
+            for row in [Uuid::nil(), Uuid::max()] {
+                for _ in 0..2 {
+                    log_bridge_lines_at(&b"refused\n"[..], &transport.stderr_runs, row, Instant::now);
+                }
+            }
+            transport.shutdown();
+            drop(transport);
+        });
+        assert_eq!(
+            text.lines().filter(|line| line.ends_with("repeats=1")).count(),
+            2,
+            "{text}"
         );
     }
 
