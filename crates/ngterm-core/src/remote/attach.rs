@@ -261,12 +261,23 @@ impl Core {
         host: &str,
         placement: Placement,
     ) -> Outcome {
-        if let Some(&row) = self.rows_attached_from(host, &remote_tree.endpoint).get(&remote.id)
-            && self.library().parent_of_session(row) != placement.parent
-        {
+        if self.shown_outside_group(remote, remote_tree, host, placement.parent) {
             return Err(ControlError::rejected(SHOWN_OUTSIDE_GROUP));
         }
         self.attach_remote_session(remote, remote_tree, host, placement)
+    }
+
+    /// Whether a row here already shows `remote` and that row is not under `parent`.
+    pub(crate) fn shown_outside_group(
+        &self,
+        remote: &ControlRemoteSession,
+        remote_tree: &ControlRemoteTree,
+        host: &str,
+        parent: Option<Uuid>,
+    ) -> bool {
+        self.rows_attached_from(host, &remote_tree.endpoint)
+            .get(&remote.id)
+            .is_some_and(|&row| self.library().parent_of_session(row) != parent)
     }
 
     /// Creates the local row for `remote`, one session of `remote_tree`, where `placement` says, and binds its panes

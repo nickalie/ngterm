@@ -25,7 +25,7 @@ use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Command, ControlRemoteSession, ControlRemoteTree, ControlResult};
 use uuid::Uuid;
 
-use super::attach::{ActionPanel, AttachRequest, ERROR_SECONDS, PROGRESS_SECONDS, Placement, SHOWN_OUTSIDE_GROUP};
+use super::attach::{ActionPanel, AttachRequest, ERROR_SECONDS, PROGRESS_SECONDS, Placement};
 use super::frames::{self, PresentationCompanion, PresentationPage, PresentationPageSource};
 use super::origin_replies::{
     COMPANION_DEADLINE, NOT_ATTACHABLE, PAUSE, READY_BUDGET, origin_created, read_peer_tree, reply_of, unattached,
@@ -114,17 +114,25 @@ impl RemoteCompanionRequest {
     }
 }
 
-/// A page companion's line: a file path is the origin's own, as the page is that machine's and is served from there.
+/// Why a created companion is not attached here.
+enum NotAttached {
+    /// A row outside the parent's group already shows it.
+    ShownOutsideGroup,
+    Failed(String),
+}
+
 /// The failure of a companion `created` on `host` but not attached here; a row outside the group that shows it gets no
 /// `live attach` hint, as that attach answers with the same row.
-fn created_not_attached(created: &str, host: &str, reason: &str) -> String {
-    if reason == SHOWN_OUTSIDE_GROUP {
-        format!("created {COMPANION_NOUN} {created} on {host}; a row outside this group already shows it")
-    } else {
-        unattached(COMPANION_NOUN, created, host, reason)
+fn created_not_attached(created: &str, host: &str, reason: NotAttached) -> String {
+    match reason {
+        NotAttached::ShownOutsideGroup => {
+            format!("created {COMPANION_NOUN} {created} on {host}; a row outside this group already shows it")
+        }
+        NotAttached::Failed(reason) => unattached(COMPANION_NOUN, created, host, &reason),
     }
 }
 
+/// A page companion's line: a file path is the origin's own, as the page is that machine's and is served from there.
 fn page_arguments(page: &RemotePage, origin: &str) -> Vec<String> {
     let mut arguments: Vec<String> = ["session", "overlay", "open", "--companion", "--target", origin]
         .map(str::to_owned)
@@ -592,7 +600,7 @@ impl Core {
         };
         Step::done(
             self.attach_created(&flow, remote, tree)
-                .map_err(|reason| created_not_attached(&created, &host, &reason)),
+                .map_err(|reason| created_not_attached(&created, &host, reason)),
         )
     }
 
@@ -601,11 +609,15 @@ impl Core {
         flow: &CompanionFlow,
         remote: &ControlRemoteSession,
         tree: &ControlRemoteTree,
-    ) -> Result<ControlResult, String> {
-        let placement = Placement::under(self.library(), flow.parent, flow.select).ok_or(PARENT_CLOSED)?;
+    ) -> Result<ControlResult, NotAttached> {
+        let placement = Placement::under(self.library(), flow.parent, flow.select)
+            .ok_or_else(|| NotAttached::Failed(PARENT_CLOSED.to_owned()))?;
+        if self.shown_outside_group(remote, tree, &flow.host, placement.parent) {
+            return Err(NotAttached::ShownOutsideGroup);
+        }
         let attached = self
-            .attach_remote_companion(remote, tree, &flow.host, placement)
-            .map_err(|error| error.to_string())?;
+            .attach_remote_session(remote, tree, &flow.host, placement)
+            .map_err(|error| NotAttached::Failed(error.to_string()))?;
         if let Some(tint) = flow.request.tint()
             && let Some(id) = attached.id.as_deref().and_then(frames::parse_uuid)
             && let Some(store) = self.library_mut().store_for_session_mut(id)
