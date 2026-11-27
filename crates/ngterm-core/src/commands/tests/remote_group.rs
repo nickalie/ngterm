@@ -1,6 +1,7 @@
 //! Remote group attach receipts and lifecycle (upstream's `ControlServerRemoteGroupTests.swift`).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -14,7 +15,7 @@ use super::{Fixture, args, wire};
 use crate::dispatch::Dispatched;
 use crate::html::{HtmlHost, HtmlNavigation};
 use crate::live::daemon_name;
-use crate::model::Session;
+use crate::model::{NewSession, RemoteBinding, Session};
 use crate::remote::page_channel::{ChannelLink, Permits};
 use crate::remote::replica_page::{HelperKey, PageHelperLauncher};
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
@@ -581,18 +582,23 @@ fn individual_terminal_companion_joins_only_one_matching_parent_in_its_window() 
         (1, "buildbox", false, true),
     ] {
         let mut group = Group::new(vec![]);
-        for index in 0..parents {
-            group.runner.answer(index, tree(&[parent(Some(&[]))]));
+        if parents > 0 {
+            group.runner.answer(0, tree(&[parent(Some(&[]))]));
             let reply = group.request(LiveCmd::Attach, "P", args(|a| a.host = Some(host.to_owned())));
             assert!(reply.ok, "{reply:?}");
+            if parents == 2 {
+                let first = Uuid::parse_str(receipt(&reply).id.as_deref().unwrap()).unwrap();
+                show_twice(&mut group, first, host);
+            }
         }
+        let listing_call = usize::from(parents > 0);
         let mut listing = tree(&[terminal("c1", Some("P"))]);
         if other_endpoint {
             let mut value: Value = serde_json::from_str(&listing.stdout).unwrap();
             value["result"]["remote"]["endpoint"]["socketDirectory"] = json!("/different");
             listing.stdout = value.to_string();
         }
-        group.runner.answer(parents, listing);
+        group.runner.answer(listing_call, listing);
         let window = other_window.then(|| group.fixture.core.library_mut().new_window(None));
         let reply = group.request(
             LiveCmd::Attach,
@@ -617,6 +623,26 @@ fn individual_terminal_companion_joins_only_one_matching_parent_in_its_window() 
             parents == 1 && host == "buildbox" && !other_endpoint && !other_window
         );
     }
+}
+
+/// A second row bound to `row`'s origin session: `live attach` never adds one, so it stands for a row an older build
+/// left behind.
+fn show_twice(group: &mut Group, row: Uuid, host: &str) {
+    let workspace = group.fixture.workspace;
+    let store = group.fixture.store_mut().unwrap();
+    let binding = &store.session(row).unwrap().remote_presentation().unwrap().binding;
+    let twin_binding = RemoteBinding::new(
+        binding.remote_session_id.clone(),
+        HashMap::new(),
+        None,
+        binding.origin.clone(),
+    );
+    let spec = NewSession {
+        remote_host: Some(host.to_owned()),
+        ..NewSession::at_cwd("/home/u")
+    };
+    let twin = store.add_session(workspace, spec).unwrap();
+    store.bind_remote(twin_binding, twin);
 }
 
 #[test]

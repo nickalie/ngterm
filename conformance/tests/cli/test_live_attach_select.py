@@ -133,3 +133,40 @@ def test_attach_with_companions_and_no_select_keeps_the_selection(adapter, remot
         _kept(viewer, cursor, kept, rows)
     finally:
         _close(viewer, origin, rows, [parent])
+
+
+@pytest.mark.requires("live-attach-one-row", reason="upstream's live attach adds a second row for a shown session")
+@pytest.mark.covers("cli:live attach", "event:session.selected", "field:tree.session.active")
+def test_a_second_attach_of_a_shown_session_answers_with_its_row(adapter, remote_origin, remote_viewer):
+    """A second row would run a second presentation stream and post each of the origin's notifications twice."""
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    kept = session_ids(viewer.tree())[0]
+    sid = assert_ok(origin.request("session.new", name="attach-one-row"))["id"]
+    cli = _cli(adapter, viewer)
+    rows: list[str] = []
+    try:
+        origin.wait_mounted(sid, "left")
+        _listed(origin, sid)
+        assert_ok(viewer.request("session.select", kept))
+        viewer.wait_tree(lambda tree: find_session(tree, kept)["active"])
+        first = cli(*cli.vocabulary.cli("live", "attach", remote_origin.host, sid, "--no-select"))
+        assert first.returncode == 0, first
+        row = _row(viewer, sid)["id"]
+        rows.append(row)
+        viewer.wait_mounted(row, "left")
+        cursor = viewer.events_baseline()
+
+        quiet = cli(*cli.vocabulary.cli("live", "attach", remote_origin.host, sid, "--no-select"))
+        assert quiet.returncode == 0, quiet
+        assert quiet.stdout.strip() == row, quiet
+        _kept(viewer, cursor, kept, rows)
+        plain = cli(*cli.vocabulary.cli("live", "attach", remote_origin.host, sid))
+        assert plain.returncode == 0, plain
+        assert plain.stdout.strip() == row, plain
+
+        viewer.wait_event(cursor, "session.selected", {"session": row})
+        tree = viewer.tree()
+        assert [node["id"] for node in sessions(tree) if node.get("remoteSessionID") == sid] == [row]
+        assert find_session(tree, row)["active"] is True
+    finally:
+        _close(viewer, origin, rows, [sid])

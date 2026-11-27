@@ -46,7 +46,8 @@ Details that are easy to break:
 - `attach.sh` passes `--no-select`: without it `live attach` selects the new row, and a script that selects the
   previous row again afterwards makes the window show the new row for a moment (a visible blink).
 - New Companion on a remote row attaches by itself and the origin announces it too. `attach.sh` waits three seconds, then
-  leaves alone anything that already has a `live present` process or a row showing its daemon.
+  leaves alone anything that already has a `live present` process or a row showing its daemon. A slow attach can pass
+  that check: `live attach` of a session a row already shows answers with that row and adds no second one.
 - `announce.sh` skips page companions and parents with no viewers, since on a desktop origin the notify would otherwise
   only add a banner there.
 - `attach.sh` detaches after matching, because a hook line runs one process at a time.

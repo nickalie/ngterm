@@ -31,7 +31,7 @@ use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::live::lead::LeadAttachment;
 use crate::modal::{MAX_PICK_ITEMS, PendingPick};
-use crate::model::{AppStore, NewSession, RemoteBinding, RemoteOrigin, SplitAxis, WindowLibrary};
+use crate::model::{AppStore, NewSession, RemoteBinding, RemoteOrigin, Session, SplitAxis, WindowLibrary};
 use crate::pane_env::uuid_string;
 use crate::resolve::{Resolver, trimmed};
 
@@ -212,6 +212,9 @@ impl Core {
             .find(|candidate| candidate.id == request.session)
             .ok_or_else(|| ControlError::rejected(format!("no attachable session {} on {host}", request.session)))?;
         let window = Resolver::new(self.library()).open_placement_window(request.window.as_deref())?;
+        if let Some(&row) = self.rows_attached_from(host, &remote_tree.endpoint).get(&remote.id) {
+            return Ok(self.reuse_attached_row(row, request.select));
+        }
         let rows = super::companions::matching_parent_rows(
             self,
             window,
@@ -227,6 +230,24 @@ impl Core {
             .or_else(|| self.workspace_placement(window, request.select))
             .ok_or_else(|| ControlError::rejected("no window to attach into"))?;
         self.attach_remote_session(remote, remote_tree, host, placement)
+    }
+
+    /// The row here that already shows the origin session: a second row would run a second presentation stream and
+    /// post every origin notification twice.
+    fn reuse_attached_row(&mut self, row: Uuid, select: bool) -> ControlResult {
+        let store = self.library_mut().store_for_session_mut(row);
+        let parent = store
+            .as_ref()
+            .and_then(|store| store.session(row))
+            .and_then(Session::parent_id);
+        if select && let Some(store) = store {
+            store.select_session(Some(row));
+            self.request_pane_focus(row);
+        }
+        ControlResult {
+            parent: parent.map(uuid_string),
+            ..ControlResult::id(uuid_string(row))
+        }
     }
 
     /// Creates the local row for `remote`, one session of `remote_tree`, where `placement` says, and binds its panes

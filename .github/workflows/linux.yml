@@ -530,8 +530,9 @@ jobs:
   #   shell), `--must-pass web-worker-faults` (the page worker's faults a launch asks for, Rust-only),
   #   `--must-pass sidebar-search` (the Rust-only sidebar session search), `--must-pass auto-follow-skips-ended`
   #   (auto-follow's Rust-only skip of a blocked session that runs nothing), `--must-pass live-attach-no-select`
-  #   (the Rust-only `live attach --no-select`) and `--must-pass split-focus-survives-relaunch` (the Rust-only
-  #   split focus kept across a relaunch).
+  #   (the Rust-only `live attach --no-select`), `--must-pass split-focus-survives-relaunch` (the Rust-only
+  #   split focus kept across a relaunch) and `--must-pass live-attach-one-row` (a second `live attach` of a
+  #   shown session answers with its row, Rust-only).
   # - coverage (the `-cov` jobs): the zsh entry again on the instrumented stage (run-linux.sh --coverage: the
   #   toolchain's llvm-tools read
   #   each shard's profiles against the staged programs), every layer. The report job joins the shards' lcov into the
@@ -705,7 +706,7 @@ jobs:
               --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard --must-pass agterm-peer
               --must-pass shell-profiles --must-pass web-worker-faults --must-pass sidebar-search
               --must-pass auto-follow-skips-ended --must-pass live-attach-no-select
-              --must-pass split-focus-survives-relaunch
+              --must-pass split-focus-survives-relaunch --must-pass live-attach-one-row
           - shell: zsh
             out: rust-linux-zsh
             stage: conformance-stage
@@ -715,7 +716,7 @@ jobs:
               --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
               --must-pass web-worker-faults --must-pass sidebar-search
               --must-pass auto-follow-skips-ended --must-pass live-attach-no-select
-              --must-pass split-focus-survives-relaunch
+              --must-pass split-focus-survives-relaunch --must-pass live-attach-one-row
           - shell: fish
             out: rust-linux-fish
             stage: conformance-stage
@@ -725,7 +726,7 @@ jobs:
               --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
               --must-pass web-worker-faults --must-pass sidebar-search
               --must-pass auto-follow-skips-ended --must-pass live-attach-no-select
-              --must-pass split-focus-survives-relaunch
+              --must-pass split-focus-survives-relaunch --must-pass live-attach-one-row
     container: *conformance-container
     env: *conformance-env
     steps: &conformance-steps

@@ -365,42 +365,105 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
     assert_eq!(viewer.sent("hello").len(), 1);
 }
 
-/// `live attach --no-select` (a viewer hook attaching an origin's new companion) leaves the window's selection, and
-/// the keyboard, where they were; a plain attach selects its row.
-#[test]
-fn attach_with_no_select_keeps_the_selection_and_a_plain_attach_takes_it() {
-    let mut viewer = viewer_with(false);
-    let attached = viewer.session;
-    assert_eq!(
-        viewer.fixture.selected(),
-        Some(attached),
-        "a plain attach selects its row"
-    );
-    let local = viewer.fixture.sessions[0];
-    viewer.fixture.store_mut().unwrap().select_session(Some(local));
-    viewer.fixture.core.clear_pane_focus_requests();
-    viewer.fixture.store_mut().unwrap().take_outbox();
-
-    let response = viewer.fixture.core.dispatch(&ngterm_proto::Request {
+fn attach_without_selecting(core: &mut Core) -> Response {
+    core.dispatch(&ngterm_proto::Request {
         cmd: Command::Live(LiveCmd::Attach),
         target: Some(ORIGIN_SESSION.to_owned()),
         args: Some(args(|a| {
             a.host = Some("origin".to_owned());
             a.no_select = Some(true);
         })),
+    })
+}
+
+/// `live attach --no-select` (a viewer hook attaching an origin's new companion) leaves the window's selection, and
+/// the keyboard, where they were; a plain attach selects its row.
+#[test]
+fn attach_with_no_select_keeps_the_selection_and_a_plain_attach_takes_it() {
+    let mut fixture = Fixture::new(0);
+    let local = fixture.sessions[0];
+    let runner = Arc::new(Runner {
+        tree: Mutex::new(RemoteCommandResult {
+            status: 0,
+            stdout: tree_answer((Uuid::new_v4(), Uuid::new_v4()), false),
+            stderr: String::new(),
+        }),
+        list: Mutex::new(inventory(&[ORIGIN_SESSION])),
+        probe_status: Mutex::new(255),
+        runs: Mutex::new(Vec::new()),
     });
+    fixture.core.set_remote_runner(runner);
+    fixture.core.set_presentation_transport(Rc::new(Transport::default()));
+    fixture.store_mut().unwrap().take_outbox();
+
+    let response = attach_without_selecting(&mut fixture.core);
 
     let row = super::answered_id(&response).unwrap_or_else(|| panic!("{response:?}"));
-    assert_ne!(row, attached);
-    assert_eq!(viewer.fixture.selected(), Some(local));
-    assert!(!viewer.fixture.core.pane_focus_requested(row));
-    let events = viewer.fixture.store_mut().unwrap().take_outbox().events;
+    assert_eq!(fixture.selected(), Some(local));
+    assert!(!fixture.core.pane_focus_requested(row));
+    let events = fixture.store_mut().unwrap().take_outbox().events;
     assert!(
         !events
             .iter()
             .any(|event| event.kind == ngterm_proto::EventKind::SessionSelected),
         "not even for a moment"
     );
+    let plain = attach(&mut fixture.core, Some("origin"), Some(ORIGIN_SESSION));
+    assert_eq!(super::answered_id(&plain), Some(row));
+    assert_eq!(fixture.selected(), Some(row), "a plain attach selects its row");
+    assert!(fixture.core.pane_focus_requested(row));
+}
+
+/// One origin session shows in one row here: a second `live attach` of it (the viewer hook racing New Companion, a
+/// script run twice) answers with that row rather than opening a second presentation stream beside it.
+#[test]
+fn attaching_a_shown_session_again_answers_with_its_row() {
+    let mut viewer = viewer_with(true);
+    let row = viewer.session;
+    let local = viewer.fixture.sessions[0];
+    viewer.fixture.store_mut().unwrap().select_session(Some(local));
+    viewer.fixture.core.clear_pane_focus_requests();
+    let rows = viewer.fixture.store().sessions().count();
+    let links = viewer.transport.0.borrow().len();
+
+    let quiet = attach_without_selecting(&mut viewer.fixture.core);
+    let plain = attach(&mut viewer.fixture.core, Some("origin"), Some(ORIGIN_SESSION));
+
+    assert_eq!(super::answered_id(&quiet), Some(row));
+    assert_eq!(super::answered_id(&plain), Some(row));
+    assert_eq!(viewer.fixture.store().sessions().count(), rows, "no second row");
+    let remote_rows = viewer
+        .fixture
+        .store()
+        .sessions()
+        .filter(|session| session.remote_host() == Some("origin"))
+        .count();
+    assert_eq!(remote_rows, 1);
+    assert_eq!(
+        viewer.transport.0.borrow().len(),
+        links,
+        "no second presentation stream"
+    );
+    assert_eq!(viewer.fixture.selected(), Some(row), "the plain attach selects the row");
+    assert!(viewer.fixture.core.pane_focus_requested(row));
+}
+
+/// The same session id on another machine, or from another app on the same machine, is another session: it gets a
+/// row of its own.
+#[test]
+fn the_same_session_id_from_another_host_or_endpoint_attaches_its_own_row() {
+    let mut viewer = viewer_with(false);
+    let other_host = attach(&mut viewer.fixture.core, Some("studio"), Some(ORIGIN_SESSION));
+    let mut value: Value = serde_json::from_str(&tree_answer(viewer.origin, false)).unwrap();
+    value["result"]["remote"]["endpoint"]["socketDirectory"] = json!("/tmp/ngterm-live-other");
+    viewer.runner.tree.lock().unwrap().stdout = value.to_string();
+    let other_endpoint = attach(&mut viewer.fixture.core, Some("origin"), Some(ORIGIN_SESSION));
+
+    let rows = [&other_host, &other_endpoint].map(super::answered_id);
+    assert!(rows.iter().all(Option::is_some), "{other_host:?} {other_endpoint:?}");
+    assert_ne!(rows[0], Some(viewer.session));
+    assert_ne!(rows[1], Some(viewer.session));
+    assert_ne!(rows[0], rows[1]);
 }
 
 /// A blocked row whose session ended on its origin holds its exit until its close here: auto-follow leaves it alone,

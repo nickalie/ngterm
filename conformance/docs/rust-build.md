@@ -125,6 +125,7 @@ share is asserted directly, with no capability.
 | `auto-follow-skips-ended` |  | Rust-only: auto-follow never selects a blocked session that runs nothing: one whose live session was lost, or an attached row every pane of which holds its exit, since the build closes such a terminal companion row and the selection would come back at once |
 | `live-attach-no-select` |  | Rust-only: `live attach HOST SESSION --no-select`, also with `--companions` (`noSelect` on `live.attach` and `live.attach.group`), adds the rows and leaves the window's selection and keyboard focus where they were |
 | `split-focus-survives-relaunch` |  | Rust-only: a split's focused pane survives a relaunch (`splitFocused` in the session snapshot), so a hidden split shows the same pane after it; upstream restores every split on its left pane |
+| `live-attach-one-row` |  | Rust-only: a `live attach HOST SESSION` of an origin session a row of the viewer already shows (same host, endpoint and session id) answers with that row instead of adding a second one, and selects it unless `--no-select` is given |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -175,7 +176,8 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
   extension (below);
 - `live-attach-no-select`: on every OS, `live attach --no-select`, a Rust-only extension (below);
 - `split-focus-survives-relaunch`: on every OS, a split's focused pane kept across a relaunch, a Rust-only extension
-  (below).
+  (below);
+- `live-attach-one-row`: on every OS, one row per attached origin session, a Rust-only extension (below).
 
 It does not claim:
 
@@ -220,9 +222,9 @@ ghostty config sets `copy-on-select = false`.
 A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as
 `unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
 instead, with `--must-pass` on the capability in every job whose host can claim it.
-Today there are eleven: `live-any-shell`, `agent-chat`, `pages-survive`, `kitty-clipboard`, `agterm-peer`,
-`shell-profiles`, `web-worker-faults`, `sidebar-search`, `auto-follow-skips-ended`, `live-attach-no-select` and
-`split-focus-survives-relaunch`. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
+Today there are twelve: `live-any-shell`, `agent-chat`, `pages-survive`, `kitty-clipboard`, `agterm-peer`,
+`shell-profiles`, `web-worker-faults`, `sidebar-search`, `auto-follow-skips-ended`, `live-attach-no-select`,
+`split-focus-survives-relaunch` and `live-attach-one-row`. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
 shell, or the one ghostty `command` names in its place), zsh and fish as upstream, bash and PowerShell as well, each
 started with its shell integration the way libghostty starts a shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in
 POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's root merged in front of the pane's own value as
@@ -340,11 +342,14 @@ Windows' `windows` job runs the test under the ratchet alone until it is green t
 row whose session ended on its origin, so a jump to an ended row would move the selection back at once. Auto-follow
 skips a blocked session that runs nothing. `live-attach-no-select`: upstream's `live attach` always selects the new row.
 This build's `--no-select` (`noSelect` on `live.attach` and `live.attach.group`) leaves the selection and the focus as
-they were. Their tests are in `tests/behaviors/test_auto_follow.py` and `tests/cli/test_live_attach_select.py`. The
-build claims both on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and the three Linux legs run with
-`--must-pass auto-follow-skips-ended --must-pass live-attach-no-select`. The remote tests need the private sshd, so
-Windows skips them (no `posix-command-line`), and no CI job runs this build's suite on macOS: the Linux legs are the
-only check of the two capabilities. No event shows the keyboard focus of a new row, so the core's unit tests check
+they were. `live-attach-one-row`: upstream's `live attach` adds a second row for an origin session a row already shows,
+and each row then runs its own presentation stream and posts each origin notification again. This build answers with
+the row that shows it, and selects that row unless `--no-select` is given. Their tests are in
+`tests/behaviors/test_auto_follow.py` and `tests/cli/test_live_attach_select.py`. The build claims all three on every
+OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and the three Linux legs run with
+`--must-pass auto-follow-skips-ended --must-pass live-attach-no-select --must-pass live-attach-one-row`. The remote
+tests need the private sshd, so Windows skips them (no `posix-command-line`), and no CI job runs this build's suite on
+macOS: the Linux legs are the only check of the three capabilities. No event shows the keyboard focus of a new row, so the core's unit tests check
 that `--no-select` keeps it.
 
 `split-focus-survives-relaunch`: upstream's session snapshot has no split focus, so a relaunch restores every split
