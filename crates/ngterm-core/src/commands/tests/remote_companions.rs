@@ -940,7 +940,7 @@ fn a_held_companion_still_there_keeps_its_row_after_a_few_reads() {
     remote.script(vec![listed(), listed(), listed()]);
 
     remote.hold_primary(companion);
-    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_rows.is_empty());
     remote.ticks(3);
 
     assert_eq!(remote.companions(), [companion]);
@@ -964,7 +964,7 @@ fn a_held_companion_whose_origin_does_not_answer_keeps_its_row() {
     remote.script(vec![result(255, "", "ssh: connect to host buildbox: timed out")]);
 
     remote.hold_primary(companion);
-    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_rows.is_empty());
 
     assert_eq!(remote.companions(), [companion]);
     assert_eq!(remote.runner.calls().len(), 4);
@@ -1027,7 +1027,7 @@ fn a_companion_being_restarted_on_its_origin_keeps_its_row() {
     remote.script(vec![restarting(), restarting(), restarting()]);
 
     remote.hold_primary(companion);
-    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_rows.is_empty());
 
     assert_eq!(remote.companions(), [companion]);
 }
@@ -1038,7 +1038,7 @@ fn an_incomplete_inventory_without_the_session_proves_nothing() {
     remote.script(vec![inventory_of(&[ORIGIN], false, "running")]);
 
     remote.hold_primary(companion);
-    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_rows.is_empty());
 
     assert_eq!(remote.companions(), [companion]);
 }
@@ -1050,7 +1050,7 @@ fn a_refused_inventory_proves_nothing() {
     remote.script(vec![result(1, &refused, "")]);
 
     remote.hold_primary(companion);
-    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_rows.is_empty());
 
     assert_eq!(remote.companions(), [companion]);
 }

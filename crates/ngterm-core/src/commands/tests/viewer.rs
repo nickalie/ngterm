@@ -26,9 +26,10 @@ const ORIGIN_SESSION: &str = "0A0B0C0D-0000-0000-0000-00000000000A";
 
 // MARK: - fakes
 
-/// Answers `live tree` with `tree` and a probe with `probe_status`.
+/// Answers `live tree` with `tree`, `live list` with `list` and a probe with `probe_status`.
 struct Runner {
     tree: Mutex<RemoteCommandResult>,
+    list: Mutex<RemoteCommandResult>,
     probe_status: Mutex<i32>,
     runs: Mutex<Vec<Vec<String>>>,
 }
@@ -42,6 +43,9 @@ impl RemoteCommandRunner for Runner {
                 stdout: String::new(),
                 stderr: "ssh: connect to host origin port 22: Connection refused\n".to_owned(),
             };
+        }
+        if argv.last().is_some_and(|last| is_listing(last)) {
+            return self.list.lock().unwrap().clone();
         }
         self.tree.lock().unwrap().clone()
     }
@@ -162,6 +166,7 @@ fn viewer_answered(host: &str, split: bool, setup: impl FnOnce(&mut Fixture), an
             stdout: answer(origin, split),
             stderr: String::new(),
         }),
+        list: Mutex::new(inventory(&[ORIGIN_SESSION])),
         probe_status: Mutex::new(255),
         runs: Mutex::new(Vec::new()),
     });
@@ -278,6 +283,7 @@ fn attach_refuses_before_creating_anything() {
             stdout: tree_answer(origin, false),
             stderr: String::new(),
         }),
+        list: Mutex::new(inventory(&[ORIGIN_SESSION])),
         probe_status: Mutex::new(0),
         runs: Mutex::new(Vec::new()),
     });
@@ -1314,6 +1320,7 @@ fn attach_remote_lists_the_machines_sessions_in_the_picker_and_attaches_the_chos
             stdout: tree_answer(origin, false),
             stderr: String::new(),
         }),
+        list: Mutex::new(inventory(&[ORIGIN_SESSION])),
         probe_status: Mutex::new(0),
         runs: Mutex::new(Vec::new()),
     }));
@@ -1706,4 +1713,211 @@ fn a_dropped_remote_replacement_puts_the_panes_lead_back() {
     viewer.fixture.core.pane_replaced(&replacements[0]);
     assert!(!viewer.fixture.core.replacement_dropped(&replacements[0]));
     assert_eq!(viewer.fixture.core.live.leads.nonce(pane), Some(rotated.as_str()));
+}
+
+// MARK: - a row whose session ended on its origin
+
+/// Whether a remote command line runs the origin's `live list`, each word quoted.
+fn is_listing(line: &str) -> bool {
+    line.contains("live") && line.contains("list") && !line.contains("tree")
+}
+
+/// The origin's complete `live list`, one running pane for each session of `sessions`.
+fn inventory(sessions: &[&str]) -> RemoteCommandResult {
+    let entries: Vec<Value> = sessions
+        .iter()
+        .map(|id| {
+            json!({"daemon": daemon_name(Uuid::new_v4()), "state": "claimed", "observation": "running",
+            "sessionID": id})
+        })
+        .collect();
+    let restore =
+        json!({"configured": "live", "requestedAtLaunch": "live", "active": "live", "restartRequired": false});
+    let live = json!({"restore": restore, "inventoryComplete": true, "entries": entries});
+    RemoteCommandResult {
+        status: 0,
+        stdout: json!({"ok": true, "result": {"live": live}}).to_string(),
+        stderr: String::new(),
+    }
+}
+
+impl Viewer {
+    fn launches(&self) -> usize {
+        self.transport.0.borrow().len()
+    }
+
+    fn lists(&self) -> usize {
+        self.runner
+            .runs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|argv| argv.last().is_some_and(|last| is_listing(last)))
+            .count()
+    }
+
+    /// The current bridge ends with `reason`.
+    fn bridge_ends(&mut self, reason: &str) {
+        let key = self.link().0.borrow().key.unwrap();
+        self.fixture.core.viewer_closed(key, reason);
+        self.fixture.core.commit();
+    }
+
+    /// The row's primary pane holds its exit on the gone guard's line, as its attach printed it. The origin's listing,
+    /// not this line, decides whether the session is gone.
+    fn primary_ends_gone(&mut self) {
+        let pane = self.session().pane_identity;
+        let store = self.fixture.store_mut().unwrap();
+        let surface = FakeSurface::new(wire(pane));
+        surface.probe().set_lines([
+            crate::remote::ssh::SESSION_GONE.to_owned(),
+            "ngterm: build (left) on origin disconnected, exit 1".to_owned(),
+            String::new(),
+            "Process exited. Press any key to close the terminal.".to_owned(),
+        ]);
+        store
+            .session_mut(self.session)
+            .unwrap()
+            .pane_slot_mut(StatusPane::Left)
+            .replace(Box::new(surface));
+        self.fixture.core.pane_held(self.session, &wire(pane));
+        self.fixture.core.commit();
+    }
+
+    /// Runs the remote tick from `now` until no ended-row check is left, letting each `live list` read finish and the
+    /// pause after a read pass; the clock the last tick ran at.
+    fn settle_checks(&mut self, now: Instant) -> Instant {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut at = now;
+        while !self.fixture.core.remote.viewer.ended_rows.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the origin's listing was never read to the end"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+            at += Duration::from_millis(100);
+            self.fixture.core.remote_tick(at);
+            self.fixture.core.commit();
+        }
+        at
+    }
+}
+
+/// The session ended on its origin: the stream ended clean, its next launch found no such session, and the row's
+/// pane held on the gone guard's line. The origin no longer lists the session, so the row stops calling it.
+#[test]
+fn a_row_whose_session_is_gone_from_its_origin_stops_calling_it() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    viewer.bridge_ends("exit 0");
+    let now = Instant::now() + Duration::from_secs(2);
+    viewer.fixture.core.remote_tick(now);
+    assert_eq!(viewer.launches(), 2, "the backoff relaunches the bridge");
+    *viewer.runner.list.lock().unwrap() = inventory(&[]);
+    viewer.bridge_ends("exit 1");
+
+    viewer.primary_ends_gone();
+    let now = viewer.settle_checks(now);
+    let launched = viewer.launches();
+    viewer.fixture.core.remote_tick(now + Duration::from_secs(600));
+    viewer
+        .fixture
+        .core
+        .retry_remote_links_now(now + Duration::from_secs(600));
+
+    assert_eq!(
+        viewer.launches(),
+        launched,
+        "no bridge launches for a session the origin no longer has"
+    );
+    assert!(
+        viewer.fixture.store().session(viewer.session).is_some(),
+        "the row keeps its exit line"
+    );
+}
+
+/// Every pane held first and the stream ending later: the stream's end reads the origin again.
+#[test]
+fn a_stream_that_ends_after_every_pane_held_reads_the_origin_again() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    viewer.primary_ends_gone();
+    let now = viewer.settle_checks(Instant::now());
+    let reads = viewer.lists();
+    assert!(reads >= 1, "a held row reads its origin");
+    *viewer.runner.list.lock().unwrap() = inventory(&[]);
+
+    viewer.bridge_ends("exit 0");
+    let now = viewer.settle_checks(now);
+    let launched = viewer.launches();
+    viewer.fixture.core.remote_tick(now + Duration::from_secs(600));
+
+    assert_eq!(viewer.lists(), reads + 1);
+    assert_eq!(viewer.launches(), launched, "the stream stopped");
+}
+
+/// "no such session" alone proves nothing: an origin whose app restarts lists the same sessions again, so a row
+/// whose origin still lists the session, or does not answer, keeps retrying.
+#[test]
+fn a_row_whose_origin_still_lists_the_session_or_does_not_answer_keeps_retrying() {
+    for list in [
+        inventory(&[ORIGIN_SESSION]),
+        RemoteCommandResult {
+            status: 255,
+            stdout: String::new(),
+            stderr: "ssh: connect to host origin port 22: Connection refused\n".to_owned(),
+        },
+    ] {
+        let mut viewer = viewer_with(false);
+        *viewer.runner.list.lock().unwrap() = list;
+        viewer.bridge_ends("exit 1");
+        viewer.primary_ends_gone();
+        let now = viewer.settle_checks(Instant::now());
+        assert!(viewer.lists() >= 1);
+
+        viewer.fixture.core.remote_tick(now + Duration::from_secs(600));
+
+        assert_eq!(viewer.launches(), 2, "the stream still backs off and retries");
+        assert!(viewer.fixture.core.remote.viewer.streams(viewer.session));
+    }
+}
+
+/// A row whose pane still runs is not read, and its stream keeps retrying.
+#[test]
+fn a_row_with_a_pane_still_running_is_not_read() {
+    let mut viewer = viewer_with(true);
+    *viewer.runner.list.lock().unwrap() = inventory(&[]);
+    viewer.primary_ends_gone();
+    viewer.bridge_ends("exit 1");
+    let now = Instant::now();
+    viewer.fixture.core.remote_tick(now);
+
+    assert!(viewer.fixture.core.remote.viewer.ended_rows.is_empty());
+    assert_eq!(viewer.lists(), 0);
+    viewer.fixture.core.remote_tick(now + Duration::from_secs(600));
+    assert_eq!(viewer.launches(), 2, "the stream still retries");
+}
+
+/// A stopped stream starts again when the row's pane attaches again: by a key on its exit line, a reconnect or the
+/// origin's respawn.
+#[test]
+fn a_reattach_starts_a_stopped_stream_again() {
+    let mut viewer = viewer_with(false);
+    *viewer.runner.list.lock().unwrap() = inventory(&[]);
+    viewer.bridge_ends("exit 1");
+    viewer.primary_ends_gone();
+    viewer.settle_checks(Instant::now());
+    let launched = viewer.launches();
+
+    let pane = viewer.session().pane_identity;
+    assert!(viewer.fixture.core.reattach_remote_pane(
+        viewer.session,
+        pane,
+        crate::live::lead::LeadAttachment::new(false),
+        true
+    ));
+
+    assert_eq!(viewer.launches(), launched + 1, "the stream opened again");
+    assert_eq!(viewer.sent("hello").len(), 1);
+    assert_eq!(viewer.node()["presentation"]["state"], "connecting");
 }

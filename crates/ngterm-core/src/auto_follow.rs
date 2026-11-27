@@ -378,7 +378,7 @@ pub fn auto_follow_target(current: Option<&Session>, blocked: &[&Session], stay_
 
 /// Whether `session`'s row runs nothing now (its live session was lost, or every pane of a row attached from another
 /// machine holds its exit) and the pane that set its status holds no local work (scratch, overlay). A jump to it would
-/// only show an exit: such a companion row can close soon (`remote::ended_companions`) and move the selection back,
+/// only show an exit: such a companion row can close soon (`remote::ended_rows`) and move the selection back,
 /// and local work in another pane is not where the status came from.
 fn status_source_ended(session: &Session) -> bool {
     (session.ended || session.every_remote_pane_held()) && !session.status_pane_holds_local_work()

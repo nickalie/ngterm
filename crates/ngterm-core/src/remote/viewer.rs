@@ -142,8 +142,8 @@ pub(crate) struct ViewerRuntime {
     pub(crate) handed_companions: Vec<super::companions::PageAttach>,
     /// Page companions whose page ended on their origin, waiting for its outcome before their rows close.
     pub(crate) page_endings: Vec<super::companions::PageEnding>,
-    /// Companion rows with every pane held, waiting for their origin's listing ([`super::ended_companions`]).
-    pub(crate) ended_companions: Vec<super::ended_companions::EndedCheck>,
+    /// Remote rows with every pane held, waiting for their origin's listing ([`super::ended_rows`]).
+    pub(crate) ended_rows: Vec<super::ended_rows::EndedCheck>,
     /// The machines whose saved rows wait to attach again after a launch ([`super::relaunch`]).
     pub(crate) relaunch_reads: Vec<super::relaunch::RelaunchRead>,
     /// New viewer panes waiting for an origin split and its live daemon.
@@ -172,6 +172,13 @@ impl std::fmt::Debug for ViewerRuntime {
             .field("replicas", &self.replicas)
             .field("pages", &self.pages)
             .finish_non_exhaustive()
+    }
+}
+
+impl ViewerRuntime {
+    /// Whether session `session`'s row has a presentation client, running or not supported by its origin.
+    pub(crate) fn streams(&self, session: Uuid) -> bool {
+        self.clients.contains_key(&session)
     }
 }
 
@@ -221,7 +228,8 @@ impl Core {
         self.apply_client_effects(key.session, effects);
     }
 
-    /// A bridge ended with `reason`; commit afterwards.
+    /// A bridge ended with `reason`: a row with every pane held checks whether its origin still has the session
+    /// ([`super::ended_rows`]). Commit afterwards.
     pub fn viewer_closed(&mut self, key: LinkKey, reason: &str) {
         let Some(client) = self
             .remote
@@ -234,6 +242,7 @@ impl Core {
         };
         let effects = client.link_closed(key.launch, reason, Instant::now());
         self.apply_client_effects(key.session, effects);
+        self.check_ended_row(key.session);
     }
 
     /// The remote tick (upstream's `startRemoteTick` body): every client reconnects or goes stale on its schedule, the
@@ -262,7 +271,7 @@ impl Core {
         self.advance_remote_splits();
         self.advance_split_mirrors();
         self.settle_page_endings();
-        self.advance_ended_companions(now);
+        self.advance_ended_rows(now);
     }
 
     /// When the frontend should run [`Core::remote_tick`] next, `None` while nothing remote is up.
@@ -279,7 +288,7 @@ impl Core {
             || !viewer.queued_split_panes.is_empty()
             || !viewer.split_layouts.is_empty()
             || !viewer.page_endings.is_empty()
-            || !viewer.ended_companions.is_empty()
+            || !viewer.ended_rows.is_empty()
             || self.remote.respawns.waiting()
             || self.relaunch_pending() == Some(true)
         {
@@ -1135,6 +1144,8 @@ impl Core {
             remote: true,
             legacy_keys,
         });
+        // a stream stopped because the session was gone from its origin follows the pane back
+        self.start_remote_presentation(session);
         true
     }
 
