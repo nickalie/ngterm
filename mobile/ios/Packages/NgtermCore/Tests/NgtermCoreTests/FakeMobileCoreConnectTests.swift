@@ -31,13 +31,16 @@ internal struct FakeMobileCoreConnectTests {
         #expect(core.emitted == [Self.unreachable("no route")])
     }
 
-    @Test("an edited machine connects anew; one only renamed, or given another key, keeps its connection")
+    @Test("an edited machine connects anew; a new label, connect timeout or key keeps its connection")
     internal func editedMachineConnectsAnew() async throws {
         let core = FakeMobileCore()
         try await core.connect(machine: Self.machine)
         var renamed = Self.machine
         renamed.label = "renamed"
         try await core.connect(machine: renamed)
+        var retimed = renamed
+        retimed.connectTimeoutSecs = 30
+        try await core.connect(machine: retimed)
         try core.useKey(machineId: "m1", keyId: "k2")
         var rekeyed = renamed
         rekeyed.keyId = "k2"

@@ -232,7 +232,7 @@ public final class AppGraph {
         }
     }
 
-    deinit {
-        // nothing to release: the process ends with it
+    isolated deinit {
+        followingTimeout?.cancel()
     }
 }
