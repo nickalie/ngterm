@@ -4,7 +4,9 @@ renamed or closed on the server shows in the mirror, a server that stops answeri
 connects again once it answers, and a second open of the server answers the window that already shows it. A command
 that makes or changes rows in the remote window runs on the server, and the window shows its outcome once the catalog
 brings it; a command that would make a shell or a row on this machine is refused there, and every one of them runs as
-before in a local window.
+before in a local window. The CLI cases give the actions as a user does: a made row is selected when it arrives, an
+action while the server is not connected is refused and never sent later, and a reply lost in flight reads `unknown`
+until `window remote dismiss` clears it.
 
 The remote window is upstream's v0.42.0 feature, and test_remote_window.py keeps its since("0.42.0") cases. These cases
 need a Live origin in any login shell, which only the Rust build claims (`live-any-shell`), so the reference skips them.
@@ -15,7 +17,14 @@ import signal
 import time
 
 import pytest
-from agterm_conformance.match import assert_error, assert_ok, find_session, session_ids, window_ids
+from agterm_conformance.match import (
+    active_session_id,
+    assert_error,
+    assert_ok,
+    find_session,
+    session_ids,
+    window_ids,
+)
 from agterm_conformance.plugin import Cli, Ctl
 from agterm_conformance.remote_origin import ORIGIN_HOST
 from agterm_conformance.wait import wait_until
@@ -297,3 +306,339 @@ def test_the_same_row_commands_run_in_a_local_window(remote_origin, remote_viewe
     tree = _tree(viewer, local)
     assert sid not in session_ids(tree) and copy not in session_ids(tree)
     assert workspace not in [node["id"] for node in tree["tree"]["workspaces"]]
+
+
+# -- the row actions as a user gives them with the CLI
+
+LOST = "{host} did not answer {action}; its outcome is unknown until {host} can be asked"
+NOT_CONNECTED = "{host} is not connected"
+# An action whose reply never comes: the viewer's 30 s wait for the ssh run, with room for a loaded host.
+LOST_REPLY = 75.0
+
+
+def _cli(adapter, viewer, window):
+    """The viewer's CLI, once the module's shared window is connected: a case before may have stopped the server."""
+    wait_until(lambda: _state(viewer, window) == "connected", timeout=RECONNECT)
+    return Cli(adapter.ctl_path, viewer.instance, adapter.ctl_name)
+
+
+def _made(result):
+    """The id a CLI `--json` reply of a command that makes a row carries."""
+    assert (result.returncode, result.stderr) == (0, ""), (result.argv, result.returncode, result.stderr)
+    return result.json()["result"]["id"]
+
+
+def _done(result):
+    assert (result.returncode, result.stderr) == (0, ""), (result.argv, result.returncode, result.stderr)
+
+
+def _refused_by(result, error):
+    assert (result.returncode, result.stdout, result.stderr) == (1, "", f"error: {error}\n"), (
+        result.argv, result.returncode, result.stdout, result.stderr,
+    )
+
+
+def _workspace_of(tree, sid):
+    for workspace in tree["tree"]["workspaces"]:
+        if sid in [session["id"] for session in workspace["sessions"]]:
+            return workspace["id"]
+    return None
+
+
+def _workspace_ids(tree):
+    return [node["id"] for node in tree["tree"]["workspaces"]]
+
+
+def _panes(tree, sid):
+    """Session `sid`'s pane ids by pane kind (`left`, `right`)."""
+    surfaces = find_session(tree, sid).get("surfaces") or []
+    return {surface["kind"]: surface.get("paneID") for surface in surfaces if surface["kind"] in ("left", "right")}
+
+
+def _close_on_origin(origin, *sids):
+    for sid in sids:
+        if sid and sid in session_ids(origin.tree()):
+            assert_ok(origin.request("session.close", sid))
+
+
+def _probe(viewer, window, origin, name):
+    """Makes a session in the remote window and waits until the mirror shows it settled: an action sent before it,
+    queued or not, has reached the server by then."""
+    probe = assert_ok(viewer.request("session.new", window=window, name=name, noSelect=True))["id"]
+    _settled(viewer, window, origin, lambda tree, served: probe in session_ids(tree) and probe in session_ids(served))
+    return probe
+
+
+@pytest.mark.covers("cli:session new", "session.new", "field:tree.session.pending")
+def test_a_row_made_in_a_remote_window_is_selected_when_it_arrives(adapter, remote_origin, remote_viewer, mirror):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    window, sid = mirror
+    cli = _cli(adapter, viewer, window)
+    picked = quiet = None
+    try:
+        picked = _made(cli("session", "new", "--window", window, "--name", "picked", "--json"))
+        tree = _settled(
+            viewer, window, origin, lambda tree, served: picked in session_ids(served) and picked in session_ids(tree)
+        )
+        wait_until(lambda: active_session_id(_tree(viewer, window)) == picked)
+        assert find_session(tree, picked)["name"] == "picked"
+
+        quiet = _made(cli("session", "new", "--window", window, "--name", "quiet", "--no-select", "--json"))
+        _settled(
+            viewer, window, origin, lambda tree, served: quiet in session_ids(served) and quiet in session_ids(tree)
+        )
+        assert active_session_id(_tree(viewer, window)) == picked
+    finally:
+        _close_on_origin(origin, quiet, picked)
+    _settled(viewer, window, origin, lambda tree, _: picked not in session_ids(tree) and quiet not in session_ids(tree))
+    assert sid in session_ids(_tree(viewer, window))
+
+
+@pytest.mark.covers(
+    "cli:session split on", "cli:session swap", "cli:session split close", "cli:session new", "session.split",
+    "session.swap", "session.split.close", "session.companion.new",
+)
+def test_split_swap_and_a_companion_in_a_remote_window_run_on_the_server(
+    adapter, remote_origin, remote_viewer, mirror
+):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    window, _ = mirror
+    cli = _cli(adapter, viewer, window)
+    made = companion = None
+    try:
+        made = _made(cli("session", "new", "--window", window, "--name", "panes", "--no-select", "--json"))
+        _settled(viewer, window, origin, lambda tree, served: made in session_ids(tree) and made in session_ids(served))
+
+        _done(cli("session", "split", "on", "--target", made))
+        _settled(
+            viewer, window, origin,
+            lambda tree, served: find_session(served, made).get("hasSplit") is True
+            and find_session(tree, made).get("hasSplit") is True
+            and len(_panes(served, made)) == 2,
+        )
+        before = _panes(origin.tree(), made)
+        _done(cli("session", "swap", "--target", made))
+        swapped = {"left": before["right"], "right": before["left"]}
+        _settled(viewer, window, origin, lambda _, served: _panes(served, made) == swapped)
+
+        _done(cli("session", "split", "close", "--target", made))
+        _settled(
+            viewer, window, origin,
+            lambda tree, served: not find_session(served, made).get("hasSplit")
+            and not find_session(tree, made).get("hasSplit"),
+        )
+
+        companion = _made(cli("session", "new", "--parent", made, "--no-select", "--json"))
+        tree = _settled(
+            viewer, window, origin,
+            lambda tree, served: companion in session_ids(served) and companion in session_ids(tree),
+        )
+        assert find_session(origin.tree(), companion).get("parent") == made
+        assert find_session(tree, companion).get("parent") == made
+    finally:
+        _close_on_origin(origin, companion, made)
+    _settled(
+        viewer, window, origin, lambda tree, _: made not in session_ids(tree) and companion not in session_ids(tree)
+    )
+
+
+@pytest.mark.covers("cli:session scratch", "session.scratch")
+def test_a_scratch_shown_or_hidden_in_a_remote_window_runs_on_the_server(adapter, remote_origin, remote_viewer, mirror):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    window, _ = mirror
+    cli = _cli(adapter, viewer, window)
+    made = None
+    try:
+        made = _made(cli("session", "new", "--window", window, "--name", "scratch", "--no-select", "--json"))
+        _settled(viewer, window, origin, lambda tree, served: made in session_ids(tree) and made in session_ids(served))
+        for mode, shown in (("on", True), ("off", False)):
+            _done(cli("session", "scratch", mode, "--target", made))
+            _settled(
+                viewer, window, origin,
+                lambda tree, served, shown=shown: find_session(served, made)["scratch"] is shown
+                and find_session(tree, made)["scratch"] is shown,
+            )
+    finally:
+        _close_on_origin(origin, made)
+    _settled(viewer, window, origin, lambda tree, _: made not in session_ids(tree))
+
+
+@pytest.mark.covers("cli:session move", "cli:workspace move", "cli:workspace new", "session.move", "workspace.move")
+def test_a_session_and_a_workspace_moved_in_a_remote_window_move_on_the_server(
+    adapter, remote_origin, remote_viewer, mirror
+):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    window, _ = mirror
+    cli = _cli(adapter, viewer, window)
+    workspace = made = None
+    try:
+        workspace = _made(cli("workspace", "new", "moved-to", "--window", window, "--json"))
+        made = _made(cli("session", "new", "--window", window, "--name", "mover", "--no-select", "--json"))
+        _settled(
+            viewer, window, origin,
+            lambda tree, served: workspace in _workspace_ids(served) and workspace in _workspace_ids(tree)
+            and made in session_ids(served) and made in session_ids(tree),
+        )
+        assert _workspace_of(origin.tree(), made) != workspace
+
+        _done(cli("session", "move", workspace, "--target", made))
+        _settled(
+            viewer, window, origin,
+            lambda tree, served: _workspace_of(served, made) == workspace and _workspace_of(tree, made) == workspace,
+        )
+
+        for to, index in (("top", 0), ("bottom", -1)):
+            _done(cli("workspace", "move", "--to", to, "--target", workspace))
+            tree = _settled(
+                viewer, window, origin,
+                lambda tree, served, index=index: _workspace_ids(served)[index] == workspace
+                and _workspace_ids(tree)[index] == workspace,
+            )
+            assert _workspace_ids(tree) == _workspace_ids(origin.tree())
+    finally:
+        _close_on_origin(origin, made)
+        if workspace and workspace in _workspace_ids(origin.tree()):
+            assert_ok(origin.request("workspace.delete", workspace))
+    _settled(viewer, window, origin, lambda tree, _: workspace not in _workspace_ids(tree))
+
+
+@pytest.mark.covers(
+    "cli:session duplicate", "session.companion.duplicate", "session.page", "session.companion.page",
+    "live.attach.group",
+)
+def test_the_still_local_commands_are_refused_in_a_remote_window_and_change_nothing(
+    adapter, remote_origin, remote_viewer, mirror, tmp_path
+):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    window, sid = mirror
+    cli = _cli(adapter, viewer, window)
+    page = tmp_path / "page.html"
+    page.write_text("<p>page</p>")
+    before, origin_before = _tree(viewer, window), origin.tree()
+
+    _refused_by(
+        cli("session", "duplicate", "--companion", "--target", sid),
+        NOT_AVAILABLE.format(cmd="session.companion.duplicate"),
+    )
+    for cmd, target, args in [
+        ("session.companion.duplicate", sid, {}),
+        ("session.page", sid, {"html": str(page)}),
+        ("session.companion.page", sid, {"html": str(page)}),
+        ("live.attach.group", sid, {"host": ORIGIN_HOST}),
+    ]:
+        assert_error(viewer.request(cmd, target, window=window, **args), NOT_AVAILABLE.format(cmd=cmd))
+
+    after = _tree(viewer, window)
+    assert session_ids(after) == session_ids(before)
+    assert _workspace_ids(after) == _workspace_ids(before)
+    assert session_ids(origin.tree()) == session_ids(origin_before)
+    assert "operations" not in after["tree"]["remote"], after["tree"]["remote"]
+
+
+@pytest.mark.covers("cli:session new", "cli:session rename", "cli:workspace new", "session.new", "session.rename")
+def test_an_action_while_the_server_is_not_connected_is_refused_and_never_sent(
+    adapter, remote_origin, remote_viewer, mirror
+):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    window, sid = mirror
+    cli = _cli(adapter, viewer, window)
+    name = find_session(origin.tree(), sid)["name"]
+    refusal = NOT_CONNECTED.format(host=ORIGIN_HOST)
+    pid = remote_origin.instance.process.pid
+    os.kill(pid, signal.SIGSTOP)
+    try:
+        wait_until(lambda: _state(viewer, window) == "disconnected", timeout=SILENCE)
+        _refused_by(cli("session", "new", "--window", window, "--name", "queued"), refusal)
+        _refused_by(cli("session", "rename", "queued-name", "--target", sid), refusal)
+        _refused_by(cli("workspace", "new", "queued", "--window", window), refusal)
+        tree = _tree(viewer, window)
+        assert "operations" not in tree["tree"]["remote"], tree["tree"]["remote"]
+        assert "pending" not in find_session(tree, sid), find_session(tree, sid)
+    finally:
+        os.kill(pid, signal.SIGCONT)
+    wait_until(lambda: _state(viewer, window) == "connected", timeout=RECONNECT)
+
+    probe = _probe(viewer, window, origin, "after-refusals")
+    try:
+        served = origin.tree()
+        assert "queued" not in [find_session(served, each)["name"] for each in session_ids(served)]
+        assert "queued" not in _workspace_names(served)
+        assert find_session(served, sid)["name"] == name
+    finally:
+        _close_on_origin(origin, probe)
+
+
+@pytest.mark.covers(
+    "cli:session rename", "cli:session new", "cli:window remote dismiss", "window.remote.dismiss",
+    "field:tree.session.pending", "field:window.remote",
+)
+def test_a_lost_reply_reads_unknown_until_dismissed_and_is_never_sent_again(
+    adapter, remote_origin, remote_viewer, mirror
+):
+    """The server stopped after the window took the action: the reply never comes, the row reads `pending` and then
+    `unknown`, and `window remote dismiss` clears it. Once the server runs again, the action ran there at most once."""
+    import threading
+
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    window, sid = mirror
+    cli = _cli(adapter, viewer, window)
+    name = find_session(origin.tree(), sid)["name"]
+    results = {}
+
+    def run(key, *args):
+        results[key] = cli(*args, timeout=LOST_REPLY + 30)
+
+    pid = remote_origin.instance.process.pid
+    os.kill(pid, signal.SIGSTOP)
+    try:
+        threads = [
+            threading.Thread(target=run, args=("rename", "session", "rename", "lost-name", "--target", sid)),
+            threading.Thread(
+                target=run, args=("new", "session", "new", "--window", window, "--name", "lost-new", "--no-select")
+            ),
+        ]
+        for thread in threads:
+            thread.start()
+        pending = wait_until(
+            lambda: (node := _remote(viewer, window)) and len(node.get("operations", [])) == 2 and node["operations"]
+        )
+        assert sorted(operation["action"] for operation in pending) == ["New Session", "Rename Session"], pending
+        assert {operation["state"] for operation in pending} == {"pending"}, pending
+        assert find_session(_tree(viewer, window), sid).get("pending") == "pending"
+        for thread in threads:
+            thread.join(LOST_REPLY + 40)
+            assert not thread.is_alive(), "the CLI got no answer"
+        _refused_by(results["rename"], LOST.format(host=ORIGIN_HOST, action="Rename Session"))
+        _refused_by(results["new"], LOST.format(host=ORIGIN_HOST, action="New Session"))
+
+        tree = _tree(viewer, window)
+        assert find_session(tree, sid).get("pending") == "unknown", find_session(tree, sid)
+        operations = tree["tree"]["remote"]["operations"]
+        assert {operation["state"] for operation in operations} == {"unknown"}, operations
+        assert [operation for operation in operations if operation["action"] == "Rename Session"][0]["session"] == sid
+
+        dismissed = cli("window", "remote", "dismiss", window)
+        assert (dismissed.returncode, dismissed.stdout, dismissed.stderr) == (0, "2 dismissed\n", ""), dismissed
+        tree = _tree(viewer, window)
+        assert "operations" not in tree["tree"]["remote"], tree["tree"]["remote"]
+        assert "pending" not in find_session(tree, sid), find_session(tree, sid)
+        again = cli("window", "remote", "dismiss", window)
+        assert (again.returncode, again.stdout, again.stderr) == (0, "0 dismissed\n", ""), again
+    finally:
+        os.kill(pid, signal.SIGCONT)
+    wait_until(lambda: _state(viewer, window) == "connected", timeout=RECONNECT)
+
+    probe = _probe(viewer, window, origin, "after-lost")
+    lost = []
+    try:
+        served = origin.tree()
+        lost = [each for each in session_ids(served) if find_session(served, each)["name"] == "lost-new"]
+        assert len(lost) <= 1, lost
+        assert find_session(served, sid)["name"] in (name, "lost-name")
+        tree = _tree(viewer, window)
+        assert "operations" not in tree["tree"]["remote"], tree["tree"]["remote"]
+    finally:
+        _close_on_origin(origin, probe, *lost)
+        assert_ok(origin.request("session.rename", sid, name=name))
+    wait_until(lambda: find_session(_tree(viewer, window), sid)["name"] == name)
+
