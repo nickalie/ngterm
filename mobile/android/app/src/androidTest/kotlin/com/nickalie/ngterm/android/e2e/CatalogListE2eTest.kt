@@ -45,9 +45,9 @@ class CatalogListE2eTest {
             openANewSession(session)
             run(
                 "ngtermctl session new --no-select --name $signal >/dev/null\n" +
-                    // each wait ends after two minutes: a failed run leaves no poller behind
+                    // five minutes outlast the phone's waits in each window; a failed run leaves no poller
                     "shows() { n=0; until ngtermctl tree | grep -qF -- \"\$1\"; do " +
-                    "n=\$((n+1)); [ \$n -gt 120 ] && return 1; sleep 1; done; }\n" +
+                    "n=\$((n+1)); [ \$n -gt 300 ] && return 1; sleep 1; done; }\n" +
                     "(shows $opened && id=\$(ngtermctl session new --no-select --name $made) && " +
                     "shows $seen && ngtermctl session rename --target \"\$id\" $renamed) >/dev/null 2>&1 &\n" +
                     "echo catalog-armed\n",
