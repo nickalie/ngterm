@@ -455,3 +455,19 @@ def test_status_shape_picker_offers_the_checkmark(seeded, ui_for, adapter):
         _choose(ui, "Agent Status", picker, "Circle")
     # the default shape is stored as no key at all
     wait_until(lambda: "completedStatusShape" not in _settings(seeded))
+
+
+@pytest.mark.covers("ui:settings-font-family", "ui:settings-inactive-pane-mute")
+def test_the_wheel_scrolls_a_settings_tab(seeded, ui_for):
+    """Wheel ticks over the Appearance tab's rows move them up, and ticks back move them to where they were."""
+    ui = ui_for(seeded)
+    _open(ui, "Appearance")
+    first = ui.find("settings-font-family", role="popup")
+    ui.find("settings-inactive-pane-mute", role="slider")
+    top = ui.frame(first)[1]
+    try:
+        ui.scroll(first, 5)
+        wait_until(lambda: ui.frame("settings-font-family")[1] < top - 1, timeout=ui.timeout)
+    finally:
+        ui.scroll("settings-inactive-pane-mute", -30)
+    wait_until(lambda: abs(ui.frame("settings-font-family")[1] - top) <= 1, timeout=ui.timeout)

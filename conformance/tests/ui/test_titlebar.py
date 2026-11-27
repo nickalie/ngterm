@@ -3,8 +3,10 @@ grid, search, and the recent-sessions, attention and custom-commands popovers. E
 tree; a test that opens something closes it."""
 
 import re
+import sys
 
 import pytest
+from agterm_conformance.drivers.base import ElementNotFound
 from agterm_conformance.match import active_session_id, assert_ok, find_session, session_ids
 from agterm_conformance.wait import WaitTimeout, wait_until
 
@@ -265,3 +267,95 @@ def test_find_bar_counts_the_matches(ctl, ui):
     ui.menu("View", "Find…")
     ui.absent("search-field")
     assert_ok(ctl.request("session.close", sid))
+
+
+# The bar's buttons right of the title: the left one of them bounds the title's free part of the bar.
+TRAILING_BUTTONS = (
+    "recent-sessions-button", "attention-button", "split-toggle", "scratch-toggle", "quick-terminal-toggle",
+    "dashboard-toggle-button", "overlay-toggle", "custom-commands-button",
+)  # fmt: skip
+WINDOWS_ONLY = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="the window manager moves the window and shows its menu: the suite's Xvfb runs none, and macOS has no "
+    "Rust UI leg",
+)
+
+
+def _window_node(ctl):
+    (window,) = assert_ok(ctl.request("window.list"))["windows"]
+    return window
+
+
+def _bar_point(ui):
+    """The window and an offset in it on the bar's free part: between the sidebar toggle and the first button right
+    of the title, where a press reaches the bar itself."""
+    window = ui.window()
+    x, y, width, height = ui.frame(window)
+    tx, ty, tw, th = ui.frame("sidebar-toggle-button")
+    right = min(
+        frame[0]
+        for frame in (ui.frame(element) for name in TRAILING_BUTTONS for element in ui.all(name))
+        if frame[0] > tx + tw and abs(frame[1] + frame[3] / 2 - (ty + th / 2)) < th
+    )
+    left = tx + tw
+    assert right - left > 40, f"no free bar between {left} and {right}"
+    return window, ((left + right) / 2 - x) / width, (ty + th / 2 - y) / height
+
+
+@pytest.mark.covers("window.zoom", "field:window.zoomed")
+def test_a_double_click_on_the_title_bar_toggles_the_window_zoom(ctl, ui):
+    assert _window_node(ctl)["zoomed"] is False
+    try:
+        for zoomed in (True, False):
+            window, ox, oy = _bar_point(ui)
+            ui.mouse_double_click(window, offset=(ox, oy))
+            wait_until(lambda: _window_node(ctl)["zoomed"] is zoomed, timeout=ui.timeout)
+    finally:
+        if _window_node(ctl)["zoomed"]:
+            ctl.request("window.zoom")
+
+
+@WINDOWS_ONLY
+@pytest.mark.covers("field:window.geometry")
+def test_dragging_the_title_bar_moves_the_window(ctl, ui):
+    before = _window_node(ctl)["geometry"]
+    window, ox, oy = _bar_point(ui)
+    try:
+        ui.drag_by(window, 120, 80, offset=(ox, oy), steps=12, press_for=0.2, duration=0.4, hold_for=0.2)
+
+        def moved():
+            after = _window_node(ctl)["geometry"]
+            assert after["x"] - before["x"] > 40 and after["y"] - before["y"] > 25, (before, after)
+            assert (after["width"], after["height"]) == (before["width"], before["height"]), (before, after)
+            return True
+
+        moved.__qualname__ = "the window moved right and down at its size"
+        wait_until(moved, timeout=ui.timeout)
+        ctl.wait_tree(lambda tree: bool(session_ids(tree)))
+    finally:
+        ctl.request("window.move", x=before["x"], y=before["y"])
+
+
+@WINDOWS_ONLY
+def test_a_secondary_click_on_the_title_bar_opens_the_window_menu(ctl, ui):
+    """The system menu, its items enabled for a restored window as a caption's own menu has them; Escape closes it."""
+    window, ox, oy = _bar_point(ui)
+    ui.mouse_click(window, button="right", offset=(ox, oy))
+    try:
+        assert ui.menu_item("Restore").enabled is False
+        for item in ("Move", "Size", "Minimize", "Maximize", "Close"):
+            assert ui.menu_item(item).enabled is True, item
+    finally:
+        ui.press("escape")
+
+    def closed():
+        try:
+            ui.menu_item("Maximize", timeout=0.2)
+        except ElementNotFound:
+            return True
+        return False
+
+    closed.__qualname__ = "the window menu closed"
+    wait_until(closed, timeout=ui.timeout)
+    window = _window_node(ctl)
+    assert (window["open"], window["zoomed"], window["minimized"]) == (True, False, False), window

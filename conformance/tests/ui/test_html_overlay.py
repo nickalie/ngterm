@@ -3,6 +3,7 @@ failure cover. Buttons that leave the app (browser, Finder, copy to the clipboar
 
 import socket
 from http.server import BaseHTTPRequestHandler
+from io import BytesIO
 
 import pytest
 from agterm_conformance.drivers.base import ElementNotFound
@@ -318,3 +319,64 @@ def test_find_with_a_page_over_the_other_pane_searches_the_terminal(ctl, ui):
     finally:
         ctl.request("session.overlay.close", sid, pane="left")
         ctl.request("session.close", sid)
+
+
+RED = (255, 0, 0)
+# A page's share of the screen that no window chrome or theme color reaches alone.
+PAGE_PIXELS = 20_000
+
+
+class _RedPage(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"<!doctype html><title>Red Page</title><body style='margin:0;background:#ff0000'></body>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _red_pixels(ui):
+    from PIL import Image
+
+    image = Image.open(BytesIO(ui.screenshot())).convert("RGB")
+    return sum(
+        count
+        for count, pixel in image.getcolors(image.width * image.height)
+        if all(abs(channel - wanted) <= 24 for channel, wanted in zip(pixel, RED))
+    )
+
+
+def _red_reads(ui, accept, description):
+    def check():
+        count = _red_pixels(ui)
+        assert accept(count), f"{count} red pixels, wanted {description}"
+        return count
+
+    check.__qualname__ = f"red pixels {description}"
+    return wait_until(check)
+
+
+@pytest.mark.covers("ui:htmlOverlay.page")
+def test_a_page_shows_over_the_window_and_settings_covers_it(ctl, ui):
+    """The page's web view shows its pixels in the window (WebView2's child window over GPUI's composition; the
+    engine's frames as an external surface), and the in-window Settings popup covers them until it closes."""
+    sid = _new(ctl)
+    with serve(_RedPage) as server:
+        url = f"http://127.0.0.1:{server.server_port}/red.html"
+        assert_ok(ctl.request("session.overlay.open", sid, url=url))
+        try:
+            _state(ctl, sid, "loaded", "Red Page")
+            shown = _red_reads(ui, lambda count: count >= PAGE_PIXELS, f"at least {PAGE_PIXELS}")
+            _open_settings(ui)
+            ui.tab("General")
+            _red_reads(ui, lambda count: count <= shown * 0.8, f"at most {int(shown * 0.8)} under Settings")
+            ui.press("escape")
+            wait_until(lambda: not ui.all("settings-scroll-speed"))
+            _red_reads(ui, lambda count: count >= shown * 0.95, f"at least {int(shown * 0.95)} again")
+        finally:
+            ctl.request("session.overlay.close", sid)
+            ctl.request("session.close", sid)
