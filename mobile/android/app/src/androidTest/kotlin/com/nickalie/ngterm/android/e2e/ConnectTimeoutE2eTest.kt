@@ -55,6 +55,7 @@ class ConnectTimeoutE2eTest {
             screenshot("settings-changed")
 
             openMachines()
+            awaitStoredSettingsTimeout(SETTINGS_SECONDS)
             retry(SETTINGS_MACHINE)
             assertGaveUpAfter(SETTINGS_SECONDS, secondsToGiveUp(SETTINGS_MACHINE, settingsHole, 2), "Settings' value")
 

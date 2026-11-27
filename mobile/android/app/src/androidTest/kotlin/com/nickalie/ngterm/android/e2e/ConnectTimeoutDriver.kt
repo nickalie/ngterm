@@ -236,6 +236,18 @@ internal class ConnectTimeoutDriver(
         awaitText(text(R.string.settings_connect_timeout_value, seconds))
     }
 
+    /**
+     * Waits until the Add machine hint shows [seconds]. The hint comes from the stored settings, as the core's value
+     * does; the slider's label shows a move before the store has it.
+     */
+    fun awaitStoredSettingsTimeout(seconds: Int) {
+        compose.onAllNodesWithText(text(R.string.machines_add))[0].performClick()
+        awaitText(text(R.string.form_save))
+        timeoutField().performScrollTo()
+        awaitText(text(R.string.form_timeout_hint, seconds))
+        closeEditor()
+    }
+
     fun openEditor(label: String) {
         reveal(label)
         compose.onNodeWithContentDescription(text(R.string.action_more, label)).performClick()
@@ -389,9 +401,10 @@ internal class ConnectTimeoutDriver(
         const val OWN_MACHINE = "qa-timeout-own"
         const val REAL = "qa-timeout-real"
 
-        // fixed, so the run after a restart finds the machines the run before it added where they were
-        const val SETTINGS_PORT = 47231
-        const val OWN_PORT = 47232
+        // fixed, so the run after a restart finds the machines the run before it added where they were; below 32768,
+        // out of the ephemeral range that the script's adb reverse ports come from
+        const val SETTINGS_PORT = 27231
+        const val OWN_PORT = 27232
 
         const val SETTINGS_SECONDS = 4
         const val OWN_SECONDS = 7
@@ -401,7 +414,7 @@ internal class ConnectTimeoutDriver(
         private const val BACKLOG = 8
         private const val MS_PER_SECOND = 1000.0
 
-        /** How far from the timeout the give-up may land: the card's poll ahead, the app's work behind. */
+        // early: the app's deadline starts before the TCP connect that the hole stamps; late: the app's work to close
         private const val EARLY_S = 0.3
         private const val LATE_S = 2.5
         private const val GIVE_UP_MAX_MS = 70_000L

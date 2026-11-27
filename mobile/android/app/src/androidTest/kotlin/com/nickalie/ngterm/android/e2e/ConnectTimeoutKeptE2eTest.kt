@@ -22,8 +22,8 @@ import org.junit.runner.RunWith
  * machines connect at launch and give up after the stored Settings value and the machine's own value, the real
  * machine connects, and Settings and the editor show the stored values.
  *
- * It runs only after [ConnectTimeoutE2eTest] in the same script run, with the app kept installed (the commands are in
- * its doc); else it is skipped.
+ * It is skipped unless the run sets [KEPT] to `true`. Set it only for the run of [ConnectTimeoutE2eTest]'s doc, which
+ * runs that test first and keeps the app installed: this test needs what that test stored.
  */
 @RunWith(AndroidJUnit4::class)
 class ConnectTimeoutKeptE2eTest {
