@@ -144,8 +144,9 @@ mod host {
             String::from_utf8_lossy(&self.output.stderr).into_owned()
         }
 
-        /// The `xcrun` calls that change something: all but the `list` ones. The services are quieted side by side, so
-        /// each run of `launchctl` calls in a row is sorted where it came.
+        /// The `xcrun` calls other than `simctl list` and `simctl runtime list`; the `launchctl` reads stay, as they
+        /// show what a pass did. The services are quieted side by side, so each run of `launchctl` calls in a row is
+        /// sorted where it came.
         pub(super) fn changes(&self) -> Vec<String> {
             let mut changes: Vec<String> = self
                 .log
@@ -722,6 +723,51 @@ fn a_quiet_booted_simulator_is_only_read_again() {
         )),
         "{}",
         run.stderr()
+    );
+}
+
+#[test]
+fn a_service_counts_as_running_only_when_the_list_shows_its_own_label() {
+    let world = World {
+        devices: host::devices().replace(&format!("({UDID}) (Shutdown)"), &format!("({UDID}) (Booted)")),
+        disabled: QUIET.to_vec(),
+        running: vec!["com.apple.chronod.helper", "x.com.apple.newsd"],
+        ..World::ready()
+    };
+    let run = simulator(&world, &pin("IOS_SIM_PHONE_NAME"));
+    assert!(run.output.status.success(), "{}", run.stderr());
+    assert_eq!(launchctl_calls(&run), reading(UDID));
+    assert!(
+        run.stderr().contains(&format!(
+            "({UDID}): disabled {} of 8 services no test uses; stopped none\n",
+            QUIET.join(" ")
+        )),
+        "{}",
+        run.stderr()
+    );
+}
+
+#[test]
+fn a_service_that_a_pass_disables_is_stopped_also_when_the_list_does_not_show_it() {
+    let run = simulator(
+        &World {
+            running: Vec::new(),
+            ..World::ready()
+        },
+        &pin("IOS_SIM_PHONE_NAME"),
+    );
+    assert!(run.output.status.success(), "{}", run.stderr());
+    let mut expected = [
+        calls_for(&QUIET, &[("disable", 1), ("bootout", 1)]),
+        reading(UDID),
+        reading(UDID),
+    ]
+    .concat();
+    expected.sort();
+    assert_eq!(
+        launchctl_calls(&run),
+        expected,
+        "a service can load after the list is read"
     );
 }
 

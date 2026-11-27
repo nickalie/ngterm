@@ -330,8 +330,9 @@ QUIET_SERVICES=(com.apple.chronod com.apple.healthappd com.apple.siriactionsd co
 # Disable the QUIET_SERVICES in simulator $1 ($2, its UDID), so they do not start again, and stop those that run. A
 # service already disabled is not disabled again, and it is stopped only while it runs (the runner readies its
 # simulator once per test binary, and a stop that fails mid-boot after its disable worked is tried again). A service
-# that the runtime does not have or that does not run is left as it is: the run goes on without it. When launchctl does
-# not list what runs, each service counts as running. The simulator keeps no disabled service on disk to write before
+# that this pass disables is always stopped, as it can load after the list is read. A service that the runtime does not
+# have or that does not run is left as it is: the run goes on without it. When launchctl does not list what runs, each
+# service counts as running. The simulator keeps no disabled service on disk to write before
 # its boot, so this runs once the boot starts and again once it is done (a spawn refused mid-boot). A spawn can take a
 # minute on a busy Mac, so the services are quieted side by side.
 quiet_simulator() {
@@ -345,13 +346,12 @@ quiet_simulator() {
   wait
   for label in "${QUIET_SERVICES[@]}"; do
     {
-      if grep -qF "\"$label\" => disabled" "$done_dir/disabled" ||
-        simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl disable "system/$label" >/dev/null 2>&1; then
+      if grep -qF "\"$label\" => disabled" "$done_dir/disabled"; then
         touch "$done_dir/$label"
-        if service_runs "$done_dir/running" "$label" &&
-          simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl bootout "system/$label" >/dev/null 2>&1; then
-          touch "$done_dir/$label.stopped"
-        fi
+        ! service_runs "$done_dir/running" "$label" || stop_service "$udid" "$label" "$done_dir"
+      elif simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl disable "system/$label" >/dev/null 2>&1; then
+        touch "$done_dir/$label"
+        stop_service "$udid" "$label" "$done_dir"
       fi
     } &
   done
@@ -363,6 +363,13 @@ quiet_simulator() {
   rm -rf "$done_dir"
   echo "simulator $name ($udid): disabled ${quieted:-none} of ${#QUIET_SERVICES[@]} services no test uses;" \
     "stopped ${stopped:-none}" >&2
+}
+
+# Stop service $2 in simulator $1 and mark it stopped in directory $3.
+stop_service() {
+  if simctl_bounded "$SIMCTL_SECONDS" spawn "$1" launchctl bootout "system/$2" >/dev/null 2>&1; then
+    touch "$3/$2.stopped"
+  fi
 }
 
 # Whether `launchctl list` output $1 lists service $2, or is missing (the list could not be read).
