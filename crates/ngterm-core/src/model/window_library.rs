@@ -756,8 +756,8 @@ impl WindowLibrary {
     /// Reopens the entry `item` and answers the window it went to, for the caller to reveal; `None` when nothing was
     /// restored. That window is the one holding the entry's session, else the one holding its workspace, else `into`
     /// (an open window), else the active one; when that one is a remote window, the first open local window. A second
-    /// object under one id would make every id-keyed lookup answer with whichever window sorts first. The entry survives an incomplete restore, so a member left in no window
-    /// can still be reopened.
+    /// object under one id would make every id-keyed lookup answer with whichever window sorts first. The entry
+    /// survives an incomplete restore, so a member left in no window can still be reopened.
     pub fn reopen_recent_closed_reporting_window(&mut self, item: Uuid, into: Option<Uuid>) -> Option<Uuid> {
         self.reopen_recent_closed_outcome(item, into)
             .map(|outcome| outcome.window)

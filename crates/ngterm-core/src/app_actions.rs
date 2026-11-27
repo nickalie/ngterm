@@ -607,7 +607,7 @@ impl Core {
     }
 
     /// Toggle Split (upstream's `toggleSplit(axis:)`): inert under a shown full overlay; a shown scratch is dismissed
-    /// instead, so the panes come into view first.
+    /// instead, so the panes come into view first (refused in a remote window, whose scratch is the server's).
     fn toggle_split_action(&mut self, window: Uuid, session: Uuid, horizontal: bool) {
         let Some(state) = self.library().store(window).and_then(|store| store.session(session)) else {
             return;
@@ -790,7 +790,8 @@ impl Core {
 
     /// The session's own covers, topmost first: its HUD or shown overlay, its scratch, the focused pane's shown overlay
     /// (upstream's `closeActiveSession` rungs). A hidden overlay is not in front of the user, so it is skipped: with
-    /// only hidden ones, Close Session closes the session. Whether one closed.
+    /// only hidden ones, Close Session closes the session. Whether one closed; a remote window's shown scratch counts
+    /// as the cover although its hide is refused, so Close Session does not close the session behind it.
     fn close_session_cover(&mut self, window: Uuid, session: Uuid) -> bool {
         let Some(store) = self.library_mut().store_mut(window) else {
             return false;

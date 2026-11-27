@@ -309,7 +309,8 @@ impl Core {
     /// Lands keyboard focus on the pane that set selected session `session`'s status, from `indicator` captured
     /// before the selection reset it (upstream's `revealActiveBlockedPane`): a blocked or completed status hides a
     /// scratch that masks another pane, focuses a split pane that tagged it, or shows the scratch that did; anything
-    /// else just focuses the session. Commit afterwards.
+    /// else just focuses the session. A remote window's scratch is the server's and is left as it is. Commit
+    /// afterwards.
     pub fn reveal_blocked_pane(&mut self, session: Uuid, indicator: Option<&AgentIndicator>) {
         self.request_pane_focus(session);
         let Some(indicator) = indicator.filter(|indicator| indicator.status.needs_attention()) else {
