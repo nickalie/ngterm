@@ -87,7 +87,7 @@ data class NewSessionState(
  * New session (named or not; the dialog's state lives here so a rotation keeps a create under way), Duplicate session
  * (landing as New session does), Rename session, End session,
  * attaching and detaching. [opened] lists the machine afresh. [notice] carries what a list can't show (a create, an
- * End or an attach that failed) for a snackbar.
+ * End or an attach that failed, or a rename that failed after its dialog closed) for a snackbar.
  */
 @Suppress("TooManyFunctions") // a function per thing the screen does
 class SessionsViewModel(
@@ -122,23 +122,23 @@ class SessionsViewModel(
                 connections.peers,
                 connections.sessionPeers,
                 connections.catalogs,
-                ::Peers,
+                ::Marks,
             ),
-        ) { links, trees, (failures, hints), attached, peers ->
+        ) { links, trees, (failures, hints), attached, marks ->
             Live(
                 links[machineId] ?: Link.Offline,
                 trees[machineId],
                 failures[machineId],
                 attached[machineId].orEmpty(),
-                peers.chatViews,
-                peers.peers[machineId],
-                peers.sessionPeers.filterKeys { it.machineId == machineId }.mapKeys { it.key.sessionId },
+                marks.chatViews,
+                marks.peers[machineId],
+                marks.sessionPeers.filterKeys { it.machineId == machineId }.mapKeys { it.key.sessionId },
                 hints[machineId],
-                peers.catalogs[machineId],
+                marks.catalogs[machineId],
             )
         }
 
-    private data class Peers(
+    private data class Marks(
         val chatViews: ChatViews,
         val peers: Map<String, MachinePeer>,
         val sessionPeers: Map<SessionKey, MachinePeer>,

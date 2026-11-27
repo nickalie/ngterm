@@ -40,7 +40,8 @@ import com.nickalie.ngterm.core.ffi.RemoteSession
  * of, its agent's status, and a menu with Attach or Detach, Duplicate session, Chat view, Rename session and End
  * session ([onAskEnd]: the screen confirms it). Tapping it attaches it (the session view opens from there once it
  * lands). While its End or its Duplicate is under way it says so instead of its status. An ended session says "Ended
- * on build-01" and a page row its kind; neither takes a tap, and their menus hold only Rename session and End session.
+ * on build-01" and a page row its kind; neither takes a tap, and their menus hold only Rename session and End session
+ * (and Detach while an ended session is still attached).
  */
 @Composable
 internal fun SessionEntry(

@@ -25,6 +25,7 @@ import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.CatalogState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -168,6 +169,23 @@ class SessionsFlowTest {
         compose.onNodeWithText("Duplicate session").assertDoesNotExist()
         compose.onNodeWithText("Rename session").assertExists()
         compose.onNodeWithText("End session").assertExists()
+    }
+
+    @Test
+    fun anAttachedSessionThatEndedCanStillBeDetachedFromItsRow() {
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "build"))
+        openMachine()
+        compose.awaitText("build")
+        runBlocking { test.connections.attach("m1", "s1") }
+        val rows = listOf(fakeSession("s1", name = "build").copy(ended = true))
+        test.core.sessions["m1"] = rows.toMutableList()
+        test.core.emit(MobileEvent.Catalog("m1", CatalogState.Connected))
+        test.core.emit(MobileEvent.Tree("m1", rows, null))
+        compose.awaitDescription("Ended on build-01")
+        compose.onNodeWithContentDescription("More options for build").performClick()
+        compose.onNodeWithText("Detach").performClick()
+        compose.waitForIdle()
+        assertEquals(null, test.connections.attached.value["m1"])
     }
 
     @Test

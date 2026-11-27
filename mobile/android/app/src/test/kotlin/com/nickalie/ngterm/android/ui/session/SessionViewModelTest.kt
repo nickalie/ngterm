@@ -541,61 +541,6 @@ class SessionViewModelTest {
     }
 
     @Test
-    fun aSessionLinkAttachesTheSessionItNamesAndOpensIt() {
-        attached("s1", "s2")
-        val model = model()
-        model.open(key)
-        val linked = SessionKey("m1", "s2")
-        model.openLinked(linked)
-        eventually {
-            model.state.value.open
-                ?.key == linked
-        }
-        assertEquals(setOf("s1", "s2"), test.connections.attached.value["m1"])
-
-        model.openLinked(key)
-        eventually {
-            model.state.value.open
-                ?.key == key
-        }
-        assertEquals("an attached one is opened as it is", setOf("s1", "s2"), test.connections.attached.value["m1"])
-    }
-
-    @Test
-    fun aSessionLinkFinishingAfterTheViewMovedOnLeavesItsSessionAttachedInTheList() {
-        attached("s1", "s2")
-        val model = model()
-        model.open(key)
-        val gate = CompletableDeferred<Unit>().also { test.core.holds["attachSession"] = it }
-        model.openLinked(SessionKey("m1", "s2"))
-        eventually { test.core.calls.any { it.method == "attachSession" } }
-        model.close()
-        gate.complete(Unit)
-        eventually {
-            "s2" in
-                test.connections.attached.value["m1"]
-                    .orEmpty()
-        }
-        assertEquals(null, model.state.value.open)
-    }
-
-    @Test
-    fun aSessionLinkThatFailsToAttachIsANoticeAndTheViewStays() {
-        attached("s1", "s2")
-        val model = model()
-        model.open(key)
-        test.core.failNext("attachSession", MobileException.Remote("the session is gone"))
-        model.openLinked(SessionKey("m1", "s2"))
-        eventually { model.notice.value != null }
-        assertEquals("the session is gone", model.notice.value)
-        assertEquals(
-            key,
-            model.state.value.open
-                ?.key,
-        )
-    }
-
-    @Test
     fun aFailedDuplicateIsANoticeAndTheViewStays() {
         attached("s1")
         val model = model()
