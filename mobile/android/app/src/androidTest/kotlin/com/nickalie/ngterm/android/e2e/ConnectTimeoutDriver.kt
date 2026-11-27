@@ -281,6 +281,8 @@ internal class ConnectTimeoutDriver(
     /** Closes the machine editor with no change. */
     fun closeEditor() {
         compose.onNodeWithContentDescription(text(R.string.form_close)).performClick()
+        // the Add form's title is the same text as the list's Add button: wait for its Save to go
+        awaitNoText(text(R.string.form_save))
         awaitText(text(R.string.machines_add))
     }
 
@@ -323,6 +325,11 @@ internal class ConnectTimeoutDriver(
     fun awaitText(text: String) =
         compose.waitUntil(CONNECT_WAIT_MS) {
             compose.onAllNodes(hasText(text), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+
+    private fun awaitNoText(text: String) =
+        compose.waitUntil(CONNECT_WAIT_MS) {
+            compose.onAllNodes(hasText(text), useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
         }
 
     fun text(
