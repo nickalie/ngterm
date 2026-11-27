@@ -212,9 +212,6 @@ impl Core {
             .find(|candidate| candidate.id == request.session)
             .ok_or_else(|| ControlError::rejected(format!("no attachable session {} on {host}", request.session)))?;
         let window = Resolver::new(self.library()).open_placement_window(request.window.as_deref())?;
-        if let Some(&row) = self.rows_attached_from(host, &remote_tree.endpoint).get(&remote.id) {
-            return Ok(self.reuse_attached_row(row, request.select));
-        }
         let rows = super::companions::matching_parent_rows(
             self,
             window,
@@ -232,16 +229,23 @@ impl Core {
         self.attach_remote_session(remote, remote_tree, host, placement)
     }
 
-    /// The row here that already shows the origin session: a second row would run a second presentation stream and
-    /// post every origin notification twice.
+    /// The row here that already shows the origin session, in whichever window holds it: a second row would run a
+    /// second presentation stream and post every origin notification twice.
     fn reuse_attached_row(&mut self, row: Uuid, select: bool) -> ControlResult {
-        let store = self.library_mut().store_for_session_mut(row);
-        let parent = store
-            .as_ref()
+        let window = self.library().window_holding_session(row);
+        let parent = self
+            .library()
+            .store_for_session(row)
             .and_then(|store| store.session(row))
             .and_then(Session::parent_id);
-        if select && let Some(store) = store {
-            store.select_session(Some(row));
+        if select && let Some(window) = window {
+            if self.library().active_window_id() != Some(window) {
+                self.request_window(crate::WindowRequest::Raise(window));
+                self.take_frontmost(window);
+            }
+            if let Some(store) = self.library_mut().store_mut(window) {
+                store.select_session(Some(row));
+            }
             self.request_pane_focus(row);
         }
         ControlResult {
@@ -252,7 +256,7 @@ impl Core {
 
     /// Creates the local row for `remote`, one session of `remote_tree`, where `placement` says, and binds its panes
     /// (upstream's `attach(_:from:host:placement:)`). Everything that can fail is checked before the model is touched;
-    /// `{id, parent}`.
+    /// `{id, parent}`. A session a row here already shows answers with that row, wherever it is.
     pub(crate) fn attach_remote_session(
         &mut self,
         remote: &ControlRemoteSession,
@@ -260,6 +264,9 @@ impl Core {
         host: &str,
         placement: Placement,
     ) -> Outcome {
+        if let Some(&row) = self.rows_attached_from(host, &remote_tree.endpoint).get(&remote.id) {
+            return Ok(self.reuse_attached_row(row, placement.select));
+        }
         let (left, right) = panes_by_role(remote)
             .ok_or_else(|| ControlError::rejected(format!("{host} reported panes ngterm cannot address")))?;
         // attaching is the user asking for the session HERE, so every pane claims the lead at once

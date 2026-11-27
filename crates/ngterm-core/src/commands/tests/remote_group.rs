@@ -328,6 +328,41 @@ fn a_group_attached_with_no_select_leaves_the_selection_and_the_focus_alone() {
     );
 }
 
+/// A group a viewer shows already, its parent and its terminal companions, attaches again onto those same rows.
+#[test]
+fn attaching_a_shown_group_again_answers_with_its_rows() {
+    let listing = || {
+        tree(&[
+            parent(Some(&["c1", "c2"])),
+            terminal("c1", Some("P")),
+            terminal("c2", Some("P")),
+        ])
+    };
+    let mut group = Group::new(vec![listing(), listing()]);
+    let first = group.attach();
+    assert!(first.ok, "{first:?}");
+    let rows = group.fixture.store().sessions().count();
+
+    let again = group.attach();
+
+    assert!(again.ok, "{again:?}");
+    assert_eq!(group.fixture.store().sessions().count(), rows, "no second rows");
+    let [first, again] = [&first, &again].map(receipt);
+    assert_eq!(again.id, first.id);
+    let ids = |receipt: &ControlResult| {
+        receipt
+            .remote_group
+            .as_ref()
+            .unwrap()
+            .companions
+            .iter()
+            .map(|member| member.id.clone().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&again), ids(&first));
+    assert_eq!(group.origins(group.parent()), ["c1", "c2"]);
+}
+
 #[test]
 fn a_known_empty_group_is_one_row_and_ok() {
     let mut group = Group::new(vec![tree(&[parent(Some(&[]))])]);

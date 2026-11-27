@@ -299,6 +299,39 @@ fn the_origin_creates_the_companion_which_attaches_under_the_row_once_its_panes_
     }
 }
 
+/// The viewer hook can attach the new companion while New Companion still waits for the origin to list it: New
+/// Companion then answers with that row, tinted as asked, and adds no second one.
+#[test]
+fn a_companion_the_hook_attached_first_is_answered_with_its_row() {
+    let mut remote = Remote::new(vec![origin(), reply(CREATED), tree(&[session(CREATED)])]);
+    let parent = remote.row;
+    let workspace = remote.fixture.workspace;
+    let store = remote.fixture.store_mut().unwrap();
+    let spec = NewSession {
+        remote_host: Some("buildbox".to_owned()),
+        parent: Some(parent),
+        ..NewSession::at_cwd("/home/u")
+    };
+    let hooked = store.add_session(workspace, spec).unwrap();
+    let origin = RemoteOrigin {
+        host: "buildbox".to_owned(),
+        endpoint: serde_json::from_value(endpoint()).unwrap(),
+        session_name: "c".to_owned(),
+    };
+    store.bind_remote(RemoteBinding::new(CREATED, HashMap::new(), None, Some(origin)), hooked);
+    remote.fixture.core.commit();
+
+    let response = remote.new_companion(|a| {
+        a.no_select = Some(true);
+        a.tint = Some("red".to_owned());
+    });
+
+    assert_eq!(id_of(&response), hooked);
+    assert_eq!(remote.companions(), [hooked]);
+    let row = remote.fixture.store().session(hooked).unwrap();
+    assert_eq!(row.tint.map(SidebarTint::color), Some(TintColor::Red.into()));
+}
+
 #[test]
 fn duplicate_as_companion_on_a_remote_row_asks_the_origin_to_duplicate() {
     let mut remote = Remote::new(vec![origin(), reply(CREATED), tree(&[session(CREATED)])]);

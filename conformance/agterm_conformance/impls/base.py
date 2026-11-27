@@ -213,9 +213,9 @@ CAPABILITIES: Mapping[str, str] = {
     "keyboard focus where they were",
     "split-focus-survives-relaunch": "Rust-only: a split's focused pane survives a relaunch (`splitFocused` in the "
     "session snapshot), so a hidden split shows the same pane after it; upstream restores every split on its left pane",
-    "live-attach-one-row": "Rust-only: a `live attach HOST SESSION` of an origin session a row of the viewer already "
-    "shows (same host, endpoint and session id) answers with that row instead of adding a second one, and selects "
-    "it unless `--no-select` is given",
+    "live-attach-one-row": "Rust-only: a `live attach HOST SESSION`, also with `--companions`, of an origin terminal "
+    "session a row of the viewer already shows (same host, endpoint and session id) answers with that row, in the "
+    "window that holds it, instead of adding a second one, and selects it unless `--no-select` is given",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",

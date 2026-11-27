@@ -170,3 +170,31 @@ def test_a_second_attach_of_a_shown_session_answers_with_its_row(adapter, remote
         assert find_session(tree, row)["active"] is True
     finally:
         _close(viewer, origin, rows, [sid])
+
+
+@pytest.mark.requires("live-attach-one-row", reason="upstream's live attach adds a second row for a shown session")
+@pytest.mark.covers("cli:live attach")
+def test_a_second_attach_of_a_shown_group_answers_with_its_rows(adapter, remote_origin, remote_viewer):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    parent = assert_ok(origin.request("session.new", name="group-one-row"))["id"]
+    cli = _cli(adapter, viewer)
+    rows: list[str] = []
+    try:
+        origin.wait_mounted(parent, "left")
+        companion = assert_ok(
+            origin.request("session.companion.new", parent, name="group-one-row-member", noSelect=True)
+        )["id"]
+        origin.wait_mounted(companion, "left")
+        _listed(origin, parent, companion)
+        _attach(cli, remote_origin.host, parent, "--companions", "--no-select")
+        root = _row(viewer, parent)["id"]
+        member = _row(viewer, companion)["id"]
+        rows.extend([root, member])
+        viewer.wait_mounted(member, "left")
+
+        _attach(cli, remote_origin.host, parent, "--companions", "--no-select")
+
+        shown = [node.get("remoteSessionID") for node in sessions(viewer.tree())]
+        assert sorted(sid for sid in shown if sid in (parent, companion)) == sorted([parent, companion]), shown
+    finally:
+        _close(viewer, origin, rows, [parent])

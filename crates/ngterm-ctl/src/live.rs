@@ -440,7 +440,10 @@ impl RequestCommand for Tree {
                   was taken fails rather than handing back a fresh shell wearing its name.\n\
                   \n\
                   Closing it here ends only this side's connection: the far-side processes keep running, and nothing \
-                  this command does can kill them. The session is not restored after a relaunch."
+                  this command does can kill them. The session is not restored after a relaunch.\n\
+                  \n\
+                  A terminal session a row here already shows answers with that row, in the window that holds it, \
+                  and adds no second row."
 )]
 pub struct Attach {
     #[arg(help = "The host, as ssh would take it.")]
@@ -476,7 +479,8 @@ impl RequestCommand for Attach {
         &self.options
     }
 
-    /// It creates a local session, so it echoes that session's id like every other create command.
+    /// It creates a local session, or names the row that shows it already, so it echoes that session's id like every
+    /// other create command.
     fn echoes_result_id(&self) -> bool {
         true
     }

@@ -427,6 +427,15 @@ fn attaching_a_shown_session_again_answers_with_its_row() {
     let links = viewer.transport.0.borrow().len();
 
     let quiet = attach_without_selecting(&mut viewer.fixture.core);
+    assert_eq!(
+        viewer.fixture.selected(),
+        Some(local),
+        "--no-select keeps the selection"
+    );
+    assert!(
+        !viewer.fixture.core.pane_focus_requested(row),
+        "--no-select keeps the focus"
+    );
     let plain = attach(&mut viewer.fixture.core, Some("origin"), Some(ORIGIN_SESSION));
 
     assert_eq!(super::answered_id(&quiet), Some(row));
@@ -446,6 +455,35 @@ fn attaching_a_shown_session_again_answers_with_its_row() {
     );
     assert_eq!(viewer.fixture.selected(), Some(row), "the plain attach selects the row");
     assert!(viewer.fixture.core.pane_focus_requested(row));
+}
+
+/// The row that shows the session can be in another window: a quiet attach leaves the front window alone, and a plain
+/// one brings that window forward.
+#[test]
+fn attaching_a_session_shown_in_another_window_raises_that_window_only_to_select() {
+    let mut viewer = viewer_with(false);
+    let row = viewer.session;
+    let held = viewer.fixture.window;
+    let front = viewer.fixture.core.library_mut().new_window(Some("front"));
+    viewer.fixture.core.report_frontmost(front);
+    let _ = viewer.fixture.core.take_window_requests();
+
+    let quiet = attach_without_selecting(&mut viewer.fixture.core);
+    assert_eq!(super::answered_id(&quiet), Some(row));
+    assert!(viewer.fixture.core.take_window_requests().is_empty());
+    assert_eq!(viewer.fixture.core.library().active_window_id(), Some(front));
+
+    let plain = attach(&mut viewer.fixture.core, Some("origin"), Some(ORIGIN_SESSION));
+    assert_eq!(super::answered_id(&plain), Some(row));
+    assert!(
+        viewer
+            .fixture
+            .core
+            .take_window_requests()
+            .contains(&crate::WindowRequest::Raise(held))
+    );
+    assert_eq!(viewer.fixture.core.library().active_window_id(), Some(held));
+    assert_eq!(viewer.fixture.selected(), Some(row));
 }
 
 /// The same session id on another machine, or from another app on the same machine, is another session: it gets a

@@ -125,7 +125,7 @@ share is asserted directly, with no capability.
 | `auto-follow-skips-ended` |  | Rust-only: auto-follow never selects a blocked session that runs nothing: one whose live session was lost, or an attached row every pane of which holds its exit, since the build closes such a terminal companion row and the selection would come back at once |
 | `live-attach-no-select` |  | Rust-only: `live attach HOST SESSION --no-select`, also with `--companions` (`noSelect` on `live.attach` and `live.attach.group`), adds the rows and leaves the window's selection and keyboard focus where they were |
 | `split-focus-survives-relaunch` |  | Rust-only: a split's focused pane survives a relaunch (`splitFocused` in the session snapshot), so a hidden split shows the same pane after it; upstream restores every split on its left pane |
-| `live-attach-one-row` |  | Rust-only: a `live attach HOST SESSION` of an origin session a row of the viewer already shows (same host, endpoint and session id) answers with that row instead of adding a second one, and selects it unless `--no-select` is given |
+| `live-attach-one-row` |  | Rust-only: a `live attach HOST SESSION`, also with `--companions`, of an origin terminal session a row of the viewer already shows (same host, endpoint and session id) answers with that row, in the window that holds it, instead of adding a second one, and selects it unless `--no-select` is given |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -177,7 +177,7 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `live-attach-no-select`: on every OS, `live attach --no-select`, a Rust-only extension (below);
 - `split-focus-survives-relaunch`: on every OS, a split's focused pane kept across a relaunch, a Rust-only extension
   (below);
-- `live-attach-one-row`: on every OS, one row per attached origin session, a Rust-only extension (below).
+- `live-attach-one-row`: on every OS, one row per attached origin terminal session, a Rust-only extension (below).
 
 It does not claim:
 
@@ -344,7 +344,9 @@ skips a blocked session that runs nothing. `live-attach-no-select`: upstream's `
 This build's `--no-select` (`noSelect` on `live.attach` and `live.attach.group`) leaves the selection and the focus as
 they were. `live-attach-one-row`: upstream's `live attach` adds a second row for an origin session a row already shows,
 and each row then runs its own presentation stream and posts each origin notification again. This build answers with
-the row that shows it, and selects that row unless `--no-select` is given. Their tests are in
+the row that shows a terminal session, in the window that holds it, and selects that row unless `--no-select` is
+given; `--companions` and New Companion do the same for the parent and each terminal companion. A page session still
+gets the second view upstream gives it. Their tests are in
 `tests/behaviors/test_auto_follow.py` and `tests/cli/test_live_attach_select.py`. The build claims all three on every
 OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and the three Linux legs run with
 `--must-pass auto-follow-skips-ended --must-pass live-attach-no-select --must-pass live-attach-one-row`. The remote
