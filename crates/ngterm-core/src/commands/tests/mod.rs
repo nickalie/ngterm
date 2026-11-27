@@ -240,6 +240,20 @@ fn answered_affected(response: &Response) -> Option<i64> {
         .flatten()
 }
 
+/// The INFO and higher lines that `log_events` logs on this thread, without times, colors or targets.
+fn logged(log_events: impl FnOnce()) -> String {
+    let log = tempfile::NamedTempFile::new().unwrap();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_target(false)
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(std::sync::Mutex::new(log.reopen().unwrap()))
+        .finish();
+    tracing::subscriber::with_default(subscriber, log_events);
+    std::fs::read_to_string(log.path()).unwrap()
+}
+
 fn failure(error: &str) -> Response {
     Response::failure(error)
 }

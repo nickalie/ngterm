@@ -909,9 +909,33 @@ fn follow_selects_the_session() {
     let mut page = Replica::page(Replica::file(None));
     page["follow"] = json!(true);
 
-    replica.request(page);
+    let log = super::logged(|| replica.request(page));
 
     assert_eq!(replica.viewer.fixture.selected(), Some(replica.id()));
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.contains("origin follow"))
+            .collect::<Vec<_>>(),
+        [format!(
+            " INFO origin follow: selected the row of a replica page session={} page={}",
+            replica.id(),
+            ORIGIN.to_lowercase()
+        )]
+    );
+}
+
+/// A page without `follow` leaves the selection and writes no selection line.
+#[test]
+fn a_page_without_follow_keeps_the_selection_and_logs_no_selection() {
+    let mut replica = Replica::new();
+    let workspace = replica.viewer.fixture.workspace;
+    let other = replica.viewer.fixture.add_session(workspace);
+    replica.viewer.fixture.store_mut().unwrap().select_session(Some(other));
+
+    let log = super::logged(|| replica.request(Replica::page(Replica::file(None))));
+
+    assert_eq!(replica.viewer.fixture.selected(), Some(other));
+    assert!(!log.contains("origin follow"), "{log}");
 }
 
 // MARK: - closing

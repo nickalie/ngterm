@@ -1158,6 +1158,34 @@ fn a_pending_batch_applies_at_its_commit_and_a_dropped_stream_applies_nothing() 
     assert!(words.contains("run-job J1 --token T1"), "{command}");
 }
 
+/// An overlay the origin hands over with `follow` selects its row and logs the selection with the row and the job;
+/// one without `follow` leaves the selection and logs none.
+#[test]
+fn a_followed_replica_overlay_selects_its_row_and_logs_why() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    let (row, local) = (viewer.session, viewer.fixture.sessions[0]);
+    viewer.fixture.store_mut().unwrap().select_session(Some(local));
+
+    let log = super::logged(|| viewer.frame(overlay_request("J1", None, false)));
+    assert_eq!(viewer.fixture.selected(), Some(local));
+    assert!(!log.contains("origin follow"), "{log}");
+    viewer.frame(json!({"kind": "overlay.close", "overlay": {"job": "J1"}}));
+
+    let mut followed = overlay_request("J2", None, false);
+    followed["overlay"]["follow"] = json!(true);
+    let log = super::logged(|| viewer.frame(followed));
+    assert_eq!(viewer.fixture.selected(), Some(row));
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.contains("origin follow"))
+            .collect::<Vec<_>>(),
+        [format!(
+            " INFO origin follow: selected the row of a replica overlay session={row} job=J2"
+        )]
+    );
+}
+
 #[test]
 fn a_handed_over_overlay_runs_the_jobs_helper_and_its_close_here_tells_the_origin() {
     let mut viewer = viewer_with(false);

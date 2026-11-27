@@ -866,6 +866,7 @@ impl Core {
         };
         if overlay.follow {
             store.select_session(Some(session));
+            tracing::info!(%session, job = %overlay.job, "origin follow: selected the row of a replica overlay");
         }
         self.remote
             .viewer

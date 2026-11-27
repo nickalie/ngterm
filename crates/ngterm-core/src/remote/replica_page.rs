@@ -625,6 +625,7 @@ impl Core {
             .map_err(|failure| crate::commands::overlay_page::open_failure(failure, pane))?;
         if request.follow {
             store.select_session(Some(session));
+            tracing::info!(%session, page = %origin, "origin follow: selected the row of a replica page");
         }
         Ok(local)
     }
