@@ -1251,6 +1251,7 @@ tests/ui/test_pointer.py::test_the_wheel_scrolls_an_overflowing_sidebar
 tests/ui/test_pointer.py::test_the_workspace_row_menu_collapses_and_expands_it
 tests/ui/test_remote_ask_ui.py::test_an_ask_from_a_headless_origin_is_answered_on_the_viewer[gui-headless]
 tests/ui/test_remote_ask_ui.py::test_an_ask_from_a_headless_origin_is_answered_on_the_viewer[terminal-headless]
+tests/ui/test_remote_ended_row_ui.py::test_a_key_on_the_exit_line_of_an_ended_remote_row_closes_it
 tests/ui/test_settings.py::test_agent_status_tab
 tests/ui/test_settings.py::test_appearance_tab
 tests/ui/test_settings.py::test_general_tab
