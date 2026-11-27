@@ -16,7 +16,6 @@ import com.nickalie.ngterm.android.data.offersChat
 import com.nickalie.ngterm.android.data.reason
 import com.nickalie.ngterm.android.data.session
 import com.nickalie.ngterm.android.ui.chat.PaneView
-import com.nickalie.ngterm.android.ui.sessions.attachable
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneEnd
 import com.nickalie.ngterm.core.ffi.PaneRef
@@ -305,13 +304,14 @@ class SessionViewModel(
 
     /**
      * Opens [key], the session a session link tapped in the open session names, attaching it first when it is not,
-     * unless the view moved on meanwhile: it then stays attached in the list. A link to an ended session that is not
-     * attached does nothing, as a link to an unknown one does.
+     * unless the view moved on meanwhile: it then stays attached in the list. A session the core does not attach (an
+     * ended one, a page) is a [notice]; an attached one opens as it is, ended or not.
      */
     fun openLinked(key: SessionKey) {
-        val listed = connections.trees.value[key.machineId]?.firstOrNull { it.id == key.sessionId }
-        val attached = key.sessionId in connections.attached.value[key.machineId].orEmpty()
-        if (listed?.attachable == false && !attached) return
+        if (key.sessionId in connections.attached.value[key.machineId].orEmpty()) {
+            view(key)
+            return
+        }
         val at = moves
         viewModelScope.launch {
             try {

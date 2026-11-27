@@ -45,10 +45,11 @@ class CatalogListE2eTest {
             openANewSession(session)
             run(
                 "ngtermctl session new --no-select --name $signal >/dev/null\n" +
-                    "(until ngtermctl tree | grep -qF -- $opened; do sleep 1; done; " +
-                    "id=\$(ngtermctl session new --no-select --name $made); " +
-                    "until ngtermctl tree | grep -qF -- $seen; do sleep 1; done; " +
-                    "ngtermctl session rename --target \"\$id\" $renamed) >/dev/null 2>&1 &\n" +
+                    // each wait ends after two minutes: a failed run leaves no poller behind
+                    "shows() { n=0; until ngtermctl tree | grep -qF -- \"\$1\"; do " +
+                    "n=\$((n+1)); [ \$n -gt 120 ] && return 1; sleep 1; done; }\n" +
+                    "(shows $opened && id=\$(ngtermctl session new --no-select --name $made) && " +
+                    "shows $seen && ngtermctl session rename --target \"\$id\" $renamed) >/dev/null 2>&1 &\n" +
                     "echo catalog-armed\n",
             )
             awaitTerminal("catalog-armed")

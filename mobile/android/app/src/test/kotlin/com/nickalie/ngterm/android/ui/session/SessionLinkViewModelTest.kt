@@ -11,7 +11,6 @@ import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.core.fake.FakePane
 import com.nickalie.ngterm.core.fake.fakeSession
-import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -99,19 +98,14 @@ class SessionLinkViewModelTest {
     }
 
     @Test
-    fun aSessionLinkToAnEndedSessionAttachesNothingUnlessItIsAttached() {
+    fun aSessionLinkToAnEndedSessionShowsTheCoresRefusalUnlessItIsAttached() {
         attached("s1", "s2")
         val model = model()
         model.open(key)
-        val rows = listOf(fakeSession("s1", name = "s1-name"), fakeSession("s2", name = "s2-name").copy(ended = true))
-        test.core.emit(MobileEvent.Tree("m1", rows, null))
-        eventually {
-            test.connections.trees.value["m1"]
-                ?.any { it.ended } == true
-        }
+        test.core.failNext("attachSession", MobileException.Remote("the session has ended on m1"))
         model.openLinked(SessionKey("m1", "s2"))
-        shadowOf(Looper.getMainLooper()).idle()
-        assertEquals(0, test.core.calls.count { it.method == "attachSession" && "s2" in it.args })
+        eventually { model.notice.value != null }
+        assertEquals("the session has ended on m1", model.notice.value)
         assertEquals(setOf("s1"), test.connections.attached.value["m1"])
         assertEquals(
             key,
@@ -119,18 +113,23 @@ class SessionLinkViewModelTest {
                 ?.key,
         )
 
-        test.core.emit(MobileEvent.Tree("m1", rows.map { it.copy(ended = it.id == "s1") }, null))
-        eventually {
-            test.connections.trees.value["m1"]
-                ?.first()
-                ?.ended == true
-        }
+        val asked = test.core.calls.count { it.method == "attachSession" }
         model.close()
         model.openLinked(key)
-        eventually {
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(
+            key,
             model.state.value.open
-                ?.key == key
-        }
+                ?.key,
+        )
+        assertEquals(
+            "an attached session is not attached again",
+            asked,
+            test.core.calls.count {
+                it.method ==
+                    "attachSession"
+            },
+        )
     }
 
     @Test
