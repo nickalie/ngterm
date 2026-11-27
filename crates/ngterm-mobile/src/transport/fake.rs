@@ -82,6 +82,8 @@ struct State {
     connects: Vec<String>,
     /// The key each connect signed in with, in order.
     keys: Vec<String>,
+    /// The connect timeout each connect's machine record carried, in order.
+    timeouts: Vec<Option<u32>>,
     closed: Vec<String>,
     execs: Vec<Exec>,
     opened: VecDeque<Opened>,
@@ -206,6 +208,12 @@ impl FakeTransport {
         self.lock().keys.clone()
     }
 
+    /// The connect timeouts the connects' machine records carried so far, in order, refused and held ones included.
+    #[must_use]
+    pub fn timeouts(&self) -> Vec<Option<u32>> {
+        self.lock().timeouts.clone()
+    }
+
     /// The machine ids whose connections were closed, in order.
     #[must_use]
     pub fn closed(&self) -> Vec<String> {
@@ -255,6 +263,7 @@ impl Transport for FakeTransport {
         let mut state = self.lock();
         state.connects.push(machine.id.clone());
         state.keys.push(machine.key_id.clone());
+        state.timeouts.push(machine.connect_timeout_secs);
         let connected = if let Some(refusal) = state.refusals.get(&machine.host) {
             Err(refusal.clone())
         } else {

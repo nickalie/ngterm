@@ -675,8 +675,8 @@ fn session_command<T: Transport>(state: &Rc<State<T>>, command: Command) {
 /// part runs as a local task.
 fn connect<T: Transport>(state: &Rc<State<T>>, machine: Machine, reply: Reply) {
     // A connect of the machine as edited replaces whatever it had (a connection, a connect or retry in flight, a
-    // suspension), and its sessions' streams with it: the new connection reports its own state. One only renamed
-    // keeps it all and takes the new label.
+    // suspension), and its sessions' streams with it: the new connection reports its own state. One reached as before
+    // (renamed, or given another connect timeout) keeps it all and takes the new record.
     note!(
         INFO,
         tag::LINK,
@@ -689,7 +689,7 @@ fn connect<T: Transport>(state: &Rc<State<T>>, machine: Machine, reply: Reply) {
     );
     match known(state, &machine.id) {
         Some(known) if !known.reached_as(&machine) => disconnect(state, &machine.id),
-        Some(known) if known.label != machine.label => relabel(state, &machine.id, &machine.label),
+        Some(known) if known != machine => update_record(state, &machine),
         _ => {}
     }
     if state.connections.borrow().contains_key(&machine.id) {
@@ -745,16 +745,17 @@ fn use_key<T: Transport>(state: &State<T>, machine_id: &str, key_id: &str) {
     }
 }
 
-/// `machine_id`'s record, connected, being connected or set aside, takes the label `label`; its connection stays.
-fn relabel<T: Transport>(state: &State<T>, machine_id: &str, label: &str) {
-    if let Some(link) = state.connections.borrow_mut().get_mut(machine_id) {
-        label.clone_into(&mut link.machine.label);
+/// `machine`'s record, connected, being connected or set aside, becomes `machine`, so its next attempt, a reconnect
+/// included, takes the new label and connect timeout; its connection stays.
+fn update_record<T: Transport>(state: &State<T>, machine: &Machine) {
+    if let Some(link) = state.connections.borrow_mut().get_mut(&machine.id) {
+        machine.clone_into(&mut link.machine);
     }
-    if let Some(attempt) = state.attempts.borrow_mut().get_mut(machine_id) {
-        label.clone_into(&mut attempt.machine.label);
+    if let Some(attempt) = state.attempts.borrow_mut().get_mut(&machine.id) {
+        machine.clone_into(&mut attempt.machine);
     }
-    if let Some(set_aside) = state.suspended.borrow_mut().get_mut(machine_id) {
-        label.clone_into(&mut set_aside.machine.label);
+    if let Some(set_aside) = state.suspended.borrow_mut().get_mut(&machine.id) {
+        machine.clone_into(&mut set_aside.machine);
     }
 }
 

@@ -704,3 +704,69 @@ fn a_key_switch_reaches_a_machine_set_aside_by_suspend() {
         assert_eq!(actor.transport.keys(), ["key", "new"]);
     });
 }
+
+/// Posts a connect of the test machine with its own connect timeout `seconds`; the receiver gets its answer.
+fn connect_with_timeout(actor: &Actor, seconds: u32) -> oneshot::Receiver<Result<(), MobileError>> {
+    let (reply, answer) = oneshot::channel();
+    let machine = crate::api::Machine {
+        connect_timeout_secs: Some(seconds),
+        ..machine()
+    };
+    actor.post(Command::Connect { machine, reply });
+    answer
+}
+
+#[test]
+fn a_timeout_edit_keeps_the_connection_and_the_reconnect_takes_it() {
+    local(async {
+        let actor = Actor::start();
+        actor.connect().await;
+        actor.sink.take();
+
+        connect_with_timeout(&actor, 40).await.unwrap().unwrap();
+        assert!(actor.transport.closed().is_empty(), "the connection stays");
+        assert!(actor.sink.take().is_empty(), "and its state");
+
+        actor.transport.drop_connections("m1");
+        advance(1000).await;
+        assert_eq!(
+            actor.transport.timeouts(),
+            [None, Some(40)],
+            "the reconnect takes the new timeout"
+        );
+    });
+}
+
+#[test]
+fn a_timeout_edit_reaches_a_reconnect_waiting_out_its_delay() {
+    local(async {
+        let actor = Actor::start();
+        actor.connect().await;
+        actor.transport.drop_connections("m1");
+        settle().await;
+
+        connect_with_timeout(&actor, 40).await.unwrap().unwrap();
+        assert_eq!(actor.transport.timeouts(), [None, Some(40)]);
+    });
+}
+
+#[test]
+fn a_timeout_edit_reaches_a_retry_after_a_failed_reconnect() {
+    local(async {
+        let actor = Actor::start();
+        actor.connect().await;
+        actor.transport.hold("box");
+        actor.transport.refuse("box", "no route to host");
+        actor.transport.drop_connections("m1");
+        advance(1000).await;
+        assert_eq!(actor.transport.timeouts(), [None, None], "a reconnect is in flight");
+
+        let edit = connect_with_timeout(&actor, 40);
+        actor.transport.release("box");
+        settle().await;
+        actor.transport.accept("box");
+        advance(2000).await;
+        edit.await.unwrap().unwrap_err();
+        assert_eq!(actor.transport.timeouts(), [None, None, Some(40)]);
+    });
+}

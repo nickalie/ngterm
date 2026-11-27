@@ -18,6 +18,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -26,6 +27,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 private class MemoryPins : HostKeyStore {
     val pins = mutableMapOf<String, String>()
@@ -110,15 +112,35 @@ class ConnectionsTest {
         }
 
     @Test
-    fun aMachineEditedInItsConnectTimeoutAloneStaysConnected() =
+    fun anUnreadableAppWideConnectTimeoutLeavesTheCoreItsLastValue() =
         runTest {
             val connections = connections()
+            connections.followConnectTimeout(
+                flow {
+                    emit(30)
+                    throw IOException("settings unreadable")
+                },
+            )
+            advanceUntilIdle()
+            assertEquals(30u, core.connectTimeoutSecs())
             connections.connect(machine)
             advanceUntilIdle()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+        }
+
+    @Test
+    fun aMachineEditedInItsConnectTimeoutAloneKeepsItsConnectionAndSessions() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            connections.connect(machine)
+            advanceUntilIdle()
+            connections.attach("m1", "s1")
             connections.connect(machine.copy(connectTimeoutSecs = 30u))
             advanceUntilIdle()
             assertEquals(Link.Connected, connections.links.value["m1"])
-            assertTrue(core.calls.none { it.method == "disconnect" })
+            assertEquals(setOf("s1"), connections.attached.value["m1"])
+            assertTrue(core.calls.none { it.method == "disconnect" || it.method == "detachSession" })
         }
 
     @Test

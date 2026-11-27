@@ -43,7 +43,8 @@ data class FakeCall(
  *
  * It follows the real core's rules (crates/ngterm-mobile, api.rs and actor.rs) where the app sees them:
  * - [connect] reports [MachineState.Connected] as a [MobileEvent.MachineState] when the machine was not connected
- *   (or was connected as another record: an edited machine connects anew, one only renamed keeps its connection);
+ *   (or was connected as another record: an edited machine connects anew, one only renamed or given
+ *   another connect timeout keeps its connection);
  *   a connect that fails reports [MachineState.Unreachable] with the failure's reason before it throws
  *   [MobileException.Unreachable];
  *   [disconnect] reports nothing and forgets the machine's listing; [useKey] puts the key in the record the machine
@@ -237,8 +238,9 @@ class FakeMobileCore(
             unreachable(machine.id, error.reason)
         }
         val id = machine.id
-        // renamed only: the core keeps the connection and takes the label
-        if (id in connected && records[id]?.copy(label = machine.label) == machine) {
+        // reached as before (renamed, another connect timeout): the core keeps the connection and takes the record
+        val reachedAsBefore = records[id]?.copy(label = machine.label, connectTimeoutSecs = machine.connectTimeoutSecs)
+        if (id in connected && reachedAsBefore == machine) {
             records[id] = machine
             return
         }

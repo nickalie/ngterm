@@ -32,7 +32,8 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * Settings: one column, 640dp at most, of the terminal (a live sample over its text size, font and colors, and
- * keeping the screen on), the appearance, the extra keys, the agents (the chat view), the notifications
+ * keeping the screen on), the appearance, the extra keys, the connections (the connect timeout), the agents (the
+ * chat view), the notifications
  * ([notificationsOn]: whether the system lets the app post them), the machines trusted with the clipboard, the keys
  * ([keyWork]: a rotation under way or failed), the diagnostics (the way to the log), and the loaded core's
  * [coreVersion]. While the stores are read it

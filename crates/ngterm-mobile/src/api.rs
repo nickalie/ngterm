@@ -449,8 +449,8 @@ impl MobileCore {
     /// flight is joined, not repeated, and a machine waiting to reconnect is retried at once). Once connected, a lost
     /// connection is retried on its own, reported as [`MachineState::Reconnecting`], until
     /// [`MobileCore::disconnect`]. A connect of the machine as edited (another host, port, user or key:
-    /// [`Machine::reached_as`]) closes its connection and connects anew; one only renamed keeps it and takes the new
-    /// label. The state also arrives as a
+    /// [`Machine::reached_as`]) closes its connection and connects anew; one only renamed or given another connect
+    /// timeout keeps it and takes the new record for its next reconnect. The state also arrives as a
     /// [`MobileEvent::MachineState`].
     ///
     /// # Errors
