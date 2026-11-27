@@ -117,6 +117,8 @@ pub enum RemoteConnection {
     /// The origin predates the stream; final for the row, as nothing is ever launched.
     Unsupported,
     Failed(String),
+    /// The origin no longer has the session, so the stream stopped; final until a pane of the row attaches again.
+    Ended,
 }
 
 impl RemoteConnection {
@@ -131,6 +133,9 @@ impl RemoteConnection {
             )),
             Self::Failed(reason) => Some(format!(
                 "Lost the connection to {host} ({reason}), retrying. Close and reattach the session to retry now."
+            )),
+            Self::Ended => Some(format!(
+                "The session ended on {host}. Reattach a pane to get its status, context and notifications again."
             )),
         }
     }
@@ -205,6 +210,7 @@ impl RemotePresentationState {
             RemoteConnection::Connected => ("connected", None),
             RemoteConnection::Unsupported => ("unsupported", None),
             RemoteConnection::Failed(reason) => ("failed", Some(reason.clone())),
+            RemoteConnection::Ended => ("ended", None),
         };
         ControlPresentationNode {
             state: state.to_owned(),

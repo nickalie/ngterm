@@ -1271,3 +1271,13 @@ fn every_typed_key_reaches_an_origin_that_speaks_them() {
         }
     });
 }
+
+#[test]
+fn an_ended_stream_reaches_the_app_as_a_failure_that_names_the_ending() {
+    assert_eq!(
+        StreamState::from(ngterm_core::model::RemoteConnection::Ended),
+        StreamState::Failed {
+            reason: "the session ended".to_owned()
+        }
+    );
+}

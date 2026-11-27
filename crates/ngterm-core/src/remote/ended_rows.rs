@@ -3,8 +3,8 @@
 //!
 //! - A terminal companion closes here too. A companion is a worker under its parent, so a finished one has nothing left
 //!   to show.
-//! - Any other row keeps its exit line, but its presentation stream stops: each try would only fail with "no such
-//!   session" until the row closes. A reattach of one of its panes ([`Core::reattach_remote_pane`]) starts it again.
+//! - Any other row keeps its exit line, but its presentation stream stops, in the final `ended` state: each try would
+//!   only fail with "no such session" until the row closes. A reattach of one of its panes ([`Core::reattach_remote_pane`]) starts it again.
 //!
 //! The ssh of a replica ending says only that the attach stopped, so once every pane of a remote row is held, and again
 //! each time the stream of such a row ends, the origin's `live list` is read. The row ends when a complete inventory no
@@ -25,10 +25,11 @@ use super::ssh::control_command;
 use super::tree::{RemoteCommandResult, TREE_DEADLINE};
 use super::viewer::{Answer, run_off_thread, take_answer};
 use crate::Core;
-use crate::model::Session;
+use crate::model::{RemoteConnection, Session};
 
-/// How many inventories may still show the session before the row is left as it is.
-const READS: u32 = 3;
+/// How many inventories may still show the session before a row whose panes all just held is left as it is. A stream
+/// end reads once: the stream retries on its own backoff, and each of its ends reads again.
+pub(crate) const READS: u32 = 3;
 
 /// What a row does once its origin no longer has its session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,9 +85,9 @@ impl Core {
         ended_row(store.session(row)?, self.remote.viewer.streams(row))
     }
 
-    /// A pane of row `row` was held, or the row's stream ended: starts checking its origin when that leaves a remote row
-    /// with nothing running.
-    pub(crate) fn check_ended_row(&mut self, row: Uuid) {
+    /// A pane of row `row` was held, or the row's stream ended: starts checking its origin, up to `reads` times, when
+    /// that leaves a remote row with nothing running.
+    pub(crate) fn check_ended_row(&mut self, row: Uuid, reads: u32) {
         if self.remote.viewer.ended_rows.iter().any(|check| check.row == row) {
             return;
         }
@@ -97,7 +98,7 @@ impl Core {
                 origin_session,
                 read: None,
                 due: Instant::now(),
-                reads_left: READS,
+                reads_left: reads,
             });
         }
     }
@@ -132,7 +133,10 @@ impl Core {
                         store.close_session(check.row);
                     }
                 }
-                Ending::StopStream => self.stop_remote_presentation(check.row),
+                Ending::StopStream => {
+                    self.stop_remote_presentation(check.row);
+                    self.set_remote_connection(check.row, RemoteConnection::Ended);
+                }
             }
             return None;
         }

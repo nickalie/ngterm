@@ -13,7 +13,7 @@ A session attached from another machine (`live attach`, File â–¸ Attach Remoteâ€
 A row counts as ended only when all of these hold:
 
 - it is attached from another machine (`remoteHost` in `tree`);
-- its presentation stream is failing or retrying (`presentation.state` is `failed` or `connecting`), which is what slashes the cloud;
+- its presentation stream is failing, retrying or stopped (`presentation.state` is `failed`, `connecting` or `ended`, the last once its machine no longer has the session), which is what slashes the cloud;
 - no pane is reconnecting, and no process runs in any pane (`foreground` and `foregroundShell` both absent, the split pane's too);
 - nothing of this machine's is on the row: no scratch terminal and no overlay, hidden ones included;
 - each pane's screen ends on its disconnect line and the hold prompt under it.

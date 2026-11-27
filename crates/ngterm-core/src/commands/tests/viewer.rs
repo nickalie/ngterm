@@ -1784,6 +1784,20 @@ impl Viewer {
         self.fixture.core.commit();
     }
 
+    /// The row's stream stopped for good: `tree` says so, and its notice promises no retry.
+    fn assert_ended(&mut self) {
+        assert_eq!(self.node()["presentation"]["state"], "ended");
+        let notice = self
+            .session()
+            .remote_connection()
+            .and_then(|connection| connection.row_notice("origin"))
+            .unwrap();
+        assert_eq!(
+            notice,
+            "The session ended on origin. Reattach a pane to get its status, context and notifications again."
+        );
+    }
+
     /// Runs the remote tick from `now` until no ended-row check is left, letting each `live list` read finish and the
     /// pause after a read pass; the clock the last tick ran at.
     fn settle_checks(&mut self, now: Instant) -> Instant {
@@ -1834,6 +1848,7 @@ fn a_row_whose_session_is_gone_from_its_origin_stops_calling_it() {
         viewer.fixture.store().session(viewer.session).is_some(),
         "the row keeps its exit line"
     );
+    viewer.assert_ended();
 }
 
 /// Every pane held first and the stream ending later: the stream's end reads the origin again.
@@ -1854,6 +1869,58 @@ fn a_stream_that_ends_after_every_pane_held_reads_the_origin_again() {
 
     assert_eq!(viewer.lists(), reads + 1);
     assert_eq!(viewer.launches(), launched, "the stream stopped");
+    viewer.assert_ended();
+}
+
+/// A row still connected when its origin's listing drops the session withdraws what the stream put on it.
+#[test]
+fn a_connected_row_whose_session_is_gone_withdraws_what_its_stream_put_on_it() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({"context": "release prep"}));
+    assert_eq!(viewer.node()["context"], "release prep");
+    *viewer.runner.list.lock().unwrap() = inventory(&[]);
+
+    viewer.primary_ends_gone();
+    viewer.settle_checks(Instant::now());
+
+    viewer.assert_ended();
+    assert!(viewer.node().get("context").is_none());
+}
+
+/// A stream end reads the origin once, as each later end reads it again.
+#[test]
+fn a_stream_end_reads_the_origin_once() {
+    let mut viewer = viewer_with(false);
+    viewer.primary_ends_gone();
+    let now = viewer.settle_checks(Instant::now());
+    let reads = viewer.lists();
+
+    viewer.bridge_ends("exit 1");
+    viewer.settle_checks(now);
+
+    assert_eq!(viewer.lists(), reads + 1);
+    assert!(viewer.fixture.core.remote.viewer.streams(viewer.session));
+}
+
+/// A pane attached again runs: a later stream end does not read the origin, whichever path attached it.
+#[test]
+fn a_reattached_pane_no_longer_counts_as_held() {
+    let mut viewer = viewer_with(false);
+    viewer.primary_ends_gone();
+    viewer.settle_checks(Instant::now());
+    let reads = viewer.lists();
+    let pane = viewer.session().pane_identity;
+    assert!(viewer.fixture.core.reattach_remote_pane(
+        viewer.session,
+        pane,
+        crate::live::lead::LeadAttachment::new(false),
+        true
+    ));
+
+    viewer.bridge_ends("exit 1");
+
+    assert!(viewer.fixture.core.remote.viewer.ended_rows.is_empty());
+    assert_eq!(viewer.lists(), reads);
 }
 
 /// "no such session" alone proves nothing: an origin whose app restarts lists the same sessions again, so a row

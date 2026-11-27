@@ -28,14 +28,14 @@ case "${1:-}" in
     ;;
 esac
 
-# The rows worth reading the screen of: attached from another machine, the presentation stream failing or retrying
-# (the slashed cloud; `unsupported`, an origin too old to stream, has no stream to tell a live session by), no pane
+# The rows worth reading the screen of: attached from another machine, the presentation stream failing, retrying or
+# stopped (the slashed cloud; `unsupported`, an origin too old to stream, has no stream to tell a live session by), no pane
 # reconnecting, no process left in any pane, and nothing of this machine's on the row that closing it would end: a
 # scratch shell or an overlay, hidden ones included. Prints `id <TAB> hasSplit` per row.
 candidates='
   .workspaces[].sessions[]
   | select(.remoteHost != null and .content != "page")
-  | select(.presentation.state == "failed" or .presentation.state == "connecting")
+  | select(.presentation.state == "failed" or .presentation.state == "connecting" or .presentation.state == "ended")
   | select(all(.surfaces[]?; .reconnect == null and (.kind == "left" or .kind == "right")))
   | select((.overlay // false) == false and .paneOverlays == null and .htmlOverlays == null and .hiddenOverlays == null)
   | select(.foreground == null and .foregroundShell == null)

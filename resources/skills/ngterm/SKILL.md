@@ -279,7 +279,7 @@ entries in `surfaces` report their own Boolean, while scratch and overlays omit 
 `remoteHost` (the machine an attached session came from, the read side of `live attach`; omitted for a local
 session; after a relaunch the row comes back under a new id once that machine answers),
 `presentation` (attached session only: the mirroring stream's `state` - `connecting`, `connected`,
-`unsupported`, or `failed` with `error` - not the ssh connection's - plus `mode`, `presenter` while its stream holds that role, else `mirror`),
+`unsupported`, `ended` once its machine no longer has the session, or `failed` with `error` - not the ssh connection's - plus `mode`, `presenter` while its stream holds that role, else `mirror`),
 `presenters` (origin session: `mirrors`, the streams mirroring it without presenting, and `presenter: true`
 when one presents it) and `remoteOverlays` (origin session: overlay slots a presenting Mac holds, a page's
 `pageID` included, `parked: true` for a page waiting for the next presenter; HTML pages follow the same placement,

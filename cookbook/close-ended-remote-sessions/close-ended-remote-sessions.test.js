@@ -79,8 +79,8 @@ const FIXTURE = {
             { id: "R", name: "local R", surfaces: [{ kind: "left" }] },
             // a split whose second pane still runs something
             remote("S", { hasSplit: true }),
-            // its disconnect line wrapped by a narrow pane
-            remote("T"),
+            // its disconnect line wrapped by a narrow pane, its stream stopped as its machine no longer has the session
+            remote("T", { presentation: { state: "ended", mode: "mirror" } }),
             // not realized: its screen cannot be read
             remote("U"),
             // a local scratch shell, hidden or not, and a page over the row are this machine's work

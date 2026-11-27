@@ -242,7 +242,7 @@ impl Core {
         };
         let effects = client.link_closed(key.launch, reason, Instant::now());
         self.apply_client_effects(key.session, effects);
-        self.check_ended_row(key.session);
+        self.check_ended_row(key.session, 1);
     }
 
     /// The remote tick (upstream's `startRemoteTick` body): every client reconnects or goes stale on its schedule, the
@@ -572,7 +572,7 @@ impl Core {
 
     /// Moves the stream's state; leaving `connected` orphans the replica overlays: a held surface closes now, and a
     /// running one keeps its program and closes when its ssh ends, since no later stream adopts it.
-    fn set_remote_connection(&mut self, session: Uuid, connection: RemoteConnection) {
+    pub(super) fn set_remote_connection(&mut self, session: Uuid, connection: RemoteConnection) {
         let left = self
             .library_mut()
             .store_for_session_mut(session)
@@ -1058,9 +1058,6 @@ impl Core {
         // a row hidden for undo keeps waiting; finalizing its close lets the next due probe drop it
         let shown = self.library().store_for_session(entry.session).is_some();
         if shown && self.reattach_remote_pane(entry.session, pane, LeadAttachment::new(false), entry.cover) {
-            if let Some(store) = self.library_mut().store_for_session_mut(entry.session) {
-                store.remote_pane_resumed(pane, entry.session);
-            }
             return;
         }
         self.remote
@@ -1144,6 +1141,9 @@ impl Core {
             remote: true,
             legacy_keys,
         });
+        if let Some(store) = self.library_mut().store_for_session_mut(session) {
+            store.remote_pane_resumed(pane, session);
+        }
         // a stream stopped because the session was gone from its origin follows the pane back
         self.start_remote_presentation(session);
         true

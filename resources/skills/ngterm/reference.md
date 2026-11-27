@@ -2472,14 +2472,17 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
   left a hold prompt. The last replica waits for its ssh exit and may then close the row. A pending viewer
   split prevents automatic primary removal until its origin binding is ready; an ordinary disconnect still shows the disconnect line, held
   or reconnecting per the attach section above.
-- A terminal companion row whose panes have all stopped on their exit prompt asks its machine for the session, and closes
-  here once that machine no longer has it. A machine that doesn't answer leaves the row on its last line, as does a local
-  scratch shell or overlay open on the row, and a top-level row always keeps its line.
+- A remote row whose panes have all stopped on their exit prompt asks its machine for the session, again each time its
+  stream ends. Once that machine no longer has it, a terminal companion row closes here. Any other row keeps its last
+  line, as does a companion with a local scratch shell or overlay open on it, and its stream stops for good:
+  `presentation.state` reads `ended` and nothing retries. A key on the exit line attaches the pane again and starts the
+  stream again. A machine that doesn't answer, or still has the session, leaves the row as it is.
 - `presentation.state` in `tree` reports the stream. `connected` means mirroring works; it is not a claim
   about the panes' ssh connections. An origin too old for it reads `unsupported` and the attach still works.
 - When the stream drops, the mirrored status, context, info line and HUD are cleared here and come back on reconnect. Retries
   run after 1, 2, 4, 8, 16 then 30 seconds, slow to every 5 minutes after eight failures in a row, and
-  never stop; a wake or a network change retries at once and starts that schedule over.
+  stop only once the row's machine no longer has the session (`ended`, above); a wake or a network change retries at
+  once and starts that schedule over.
 - A notification raised while the stream is down is never shown here; status, context, info line and HUD are restored.
 - A terminal notification (OSC 9/777) is not mirrored: it already arrives in the pane's bytes and is
   raised here once. A mirrored `notify` records a `notify` event on each app.
@@ -2546,7 +2549,8 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
 - When the stream drops, a `--wait` overlay whose program already ended closes on the presenting Mac,
   and a running one keeps running and closes when its ssh ends. Nothing is handed back later.
 - While the stream is not up the row's indicator says so and names the host. It retries on its own, at
-  once when the Mac wakes or the network changes; close and reattach the session to retry by hand.
+  once when the Mac wakes or the network changes; close and reattach the session to retry by hand. A row whose
+  session ended on its machine says so instead and does not retry.
 
 `ngtermctl live present SESSION` is the plumbing behind it: it opens the stream on the local socket and
 bridges it to stdio as newline-delimited JSON. ngterm runs it over ssh on the origin; it is not meant to

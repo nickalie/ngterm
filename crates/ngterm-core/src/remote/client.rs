@@ -300,7 +300,8 @@ impl PresentationClient {
         effects
     }
 
-    /// Ends the stream for good, until [`PresentationClient::start`] again. Reports nothing: the row is leaving.
+    /// Ends the stream for good, until [`PresentationClient::start`] again. Reports nothing: the row is leaving, or
+    /// its caller sets the final state.
     pub fn stop(&mut self) {
         self.running = false;
         self.retry_at = None;

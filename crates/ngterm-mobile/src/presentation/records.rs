@@ -31,6 +31,10 @@ impl From<RemoteConnection> for StreamState {
             RemoteConnection::Connected => Self::Connected,
             RemoteConnection::Unsupported => Self::Unsupported,
             RemoteConnection::Failed(reason) => Self::Failed { reason },
+            // only a desktop viewer reads the origin's listing and stops a stream
+            RemoteConnection::Ended => Self::Failed {
+                reason: "the session ended".to_owned(),
+            },
         }
     }
 }
