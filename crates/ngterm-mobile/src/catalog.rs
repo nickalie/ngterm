@@ -116,8 +116,8 @@ pub fn hello_line() -> Vec<u8> {
 pub struct Received {
     /// The frame to send back (an ack for a ping).
     pub reply: Option<CatalogFrame>,
-    /// The catalog moved: `Some(true)` for a whole snapshot, `Some(false)` for a revision.
-    pub moved: Option<bool>,
+    /// The catalog moved: a whole snapshot or a revision.
+    pub moved: bool,
 }
 
 /// One machine's catalog as the stream has brought it (upstream's `RemoteCatalogMirror`, without the window's store).
@@ -129,6 +129,7 @@ pub struct Mirror {
     needs_snapshot: bool,
     chunks: CatalogChunks,
     hello_epoch: Option<String>,
+    added: Vec<String>,
 }
 
 impl Mirror {
@@ -142,6 +143,7 @@ impl Mirror {
             needs_snapshot: false,
             chunks: CatalogChunks::default(),
             hello_epoch: None,
+            added: Vec::new(),
         }
     }
 
@@ -210,6 +212,7 @@ impl Mirror {
     /// Drops session `id` and its companions from the rows, as the machine closed them; the stream's own change
     /// later finds them gone.
     pub fn forget(&mut self, id: &str) {
+        self.added.retain(|added| !added.eq_ignore_ascii_case(id));
         let Some(catalog) = self.catalog.as_mut() else {
             return;
         };
@@ -220,6 +223,39 @@ impl Mirror {
                 !own.eq_ignore_ascii_case(id) && !parent.is_some_and(|parent| parent.eq_ignore_ascii_case(id))
             });
         }
+    }
+
+    /// Gives session `id` the name `name` in the rows, as the machine renamed it; the stream's own change later brings
+    /// the same name.
+    pub fn rename(&mut self, id: &str, name: &str) {
+        let Some(catalog) = self.catalog.as_mut() else {
+            return;
+        };
+        let renamed = catalog
+            .workspaces
+            .iter_mut()
+            .flat_map(|workspace| &mut workspace.sessions)
+            .find(|session| uuid_string(session.id()).eq_ignore_ascii_case(id));
+        if let Some(session) = renamed {
+            name.clone_into(&mut session.fields.name);
+        }
+    }
+
+    /// Notes session `id`, which the machine made outside the catalog, until the catalog holds it or a snapshot comes.
+    pub fn add(&mut self, id: &str) {
+        let held = self
+            .catalog
+            .as_ref()
+            .is_some_and(|catalog| session(catalog, id).is_some());
+        if !held && !self.added.iter().any(|added| added.eq_ignore_ascii_case(id)) {
+            self.added.push(id.to_owned());
+        }
+    }
+
+    /// The sessions the machine made outside the catalog that it does not hold yet ([`Mirror::add`]).
+    #[must_use]
+    pub fn added(&self) -> &[String] {
+        &self.added
     }
 
     /// Takes one frame of the stream.
@@ -252,7 +288,8 @@ impl Mirror {
                 {
                     catalog.apply(&change);
                     catalog.rev = rev;
-                    received.moved = Some(false);
+                    self.added.retain(|added| session(catalog, added).is_none());
+                    received.moved = true;
                 }
             }
             CatalogFrame::Unknown { epoch, rev, .. } => {
@@ -262,7 +299,7 @@ impl Mirror {
                     && let Some(catalog) = self.catalog.as_mut()
                 {
                     catalog.rev = rev;
-                    received.moved = Some(false);
+                    received.moved = true;
                 }
             }
             CatalogFrame::Ping => received.reply = Some(CatalogFrame::Ack),
@@ -286,15 +323,16 @@ impl Mirror {
         false
     }
 
-    fn take(&mut self, snapshot: CatalogSnapshot) -> Option<bool> {
+    fn take(&mut self, snapshot: CatalogSnapshot) -> bool {
         if self.hello_epoch.as_ref().is_some_and(|epoch| *epoch != snapshot.epoch) {
             self.needs_snapshot = true;
-            return None;
+            return false;
         }
         self.catalog = Some(snapshot);
+        self.added.clear();
         self.needs_snapshot = false;
         self.state = CatalogState::Connected;
-        Some(true)
+        true
     }
 }
 

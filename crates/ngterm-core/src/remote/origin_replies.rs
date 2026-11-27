@@ -43,6 +43,12 @@ pub fn end_session_arguments(origin: &str) -> [&str; 4] {
     ["session", "close", "--target", origin]
 }
 
+/// Rename Session's words for the origin's session `origin`, whose new name follows as an operand.
+#[must_use]
+pub fn rename_session_arguments(origin: &str) -> [&str; 4] {
+    ["session", "rename", "--target", origin]
+}
+
 /// The receipt the origin's `ngtermctl --json` printed.
 #[must_use]
 pub fn reply_of(result: &RemoteCommandResult) -> Option<Response<ControlResult>> {
@@ -99,8 +105,15 @@ pub fn not_live(result: &RemoteCommandResult, host: &str) -> Option<String> {
 /// whatever the transport did afterwards, since it names work the origin did.
 #[must_use]
 pub fn end_failure(result: &RemoteCommandResult, host: &str) -> Option<String> {
+    command_failure(result, host, "whether the session ended there is unknown")
+}
+
+/// What the origin's answer to a session command said: `None` when it ran, else why it did not; `unknown` says what a
+/// missing answer leaves unknown.
+#[must_use]
+pub fn command_failure(result: &RemoteCommandResult, host: &str, unknown: &str) -> Option<String> {
     let Some(reply) = reply_of(result) else {
-        return Some(no_answer(result, host, "whether the session ended there is unknown"));
+        return Some(no_answer(result, host, unknown));
     };
     (!reply.ok).then(|| {
         reply

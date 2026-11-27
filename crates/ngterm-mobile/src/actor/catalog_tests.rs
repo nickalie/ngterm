@@ -7,6 +7,7 @@ use std::time::Duration;
 use ngterm_core::catalog::frames::{self, CatalogChange, CatalogFrame, CatalogHello};
 use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::origin::OriginShell;
+use ngterm_core::remote::origin_replies::rename_session_arguments;
 use ngterm_core::remote::ssh::{catalog_tail, control_tail, control_tail_with_operands, tree_tail};
 use ngterm_proto::CatalogVersions;
 use serde_json::{Value, json};
@@ -17,7 +18,7 @@ use super::Command;
 use super::presentation_tests::{Actor, local, settle};
 use crate::api::{MobileError, MobileEvent};
 use crate::catalog::CatalogState;
-use crate::catalog::operations::{rename_arguments, unknown_outcome};
+use crate::catalog::operations::unknown_outcome;
 use crate::catalog::tests::{EPOCH, ended, id, page, snapshot, terminal, versions, workspace};
 use crate::sessions::RemoteSession;
 use crate::transport::fake::{Opened, Script};
@@ -699,7 +700,7 @@ fn operations_on_a_machine_with_windows_run_plain_and_a_rename_reaches_its_listi
     local(async {
         let actor = Actor::start();
         actor.transport.script(&tree_tail(OriginShell::Posix), listing(false));
-        let rename = control_tail_with_operands(OriginShell::Posix, &rename_arguments(&main_id()), &["build"]);
+        let rename = control_tail_with_operands(OriginShell::Posix, &rename_session_arguments(&main_id()), &["build"]);
         actor.transport.script(&rename, Script::ok(r#"{"ok":true}"#));
         actor.connect().await;
         actor.list().await;
@@ -889,5 +890,158 @@ fn a_machine_running_both_apps_keeps_agterms_sessions_beside_the_catalog() {
         assert_eq!(post_end(&actor, &theirs).await.unwrap(), Ok(()));
         assert!(opened(&actor).await.is_empty(), "no operation id for agterm's session");
         assert_eq!(trees(&actor.sink.take()).last(), Some(&first_rows()));
+    });
+}
+
+#[test]
+fn a_plain_rename_while_the_stream_is_down_names_the_row_it_shows() {
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        peer.end(ChannelEnd::Exit {
+            code: Some(1),
+            signal: None,
+        })
+        .await;
+        settle().await;
+        actor.sink.take();
+        let rename = control_tail_with_operands(OriginShell::Posix, &rename_session_arguments(&main_id()), &["build"]);
+        actor.transport.script(&rename, Script::ok(r#"{"ok":true}"#));
+        assert_eq!(post_rename(&actor, &main_id(), "build").await.unwrap(), Ok(()));
+        let mut expected = first_rows();
+        expected[0] = row("build", "work", None, false);
+        assert_eq!(trees(&actor.sink.take()).last(), Some(&expected));
+    });
+}
+
+/// A listing of the headless machine's main session and the session `made` named `name`.
+fn listing_with(made: &str, name: &str) -> Script {
+    let session = |id: &str, name: &str| {
+        json!({
+            "id": id, "name": name, "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
+            "workspaceName": "work", "cwd": "/repo", "panes": [{"pane": "left", "daemon": "ngterm-live-0"}],
+        })
+    };
+    let remote = json!({
+        "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
+        "presentation": 1,
+        "headless": true,
+        "sessions": [session(&main_id(), "main"), session(made, name)],
+    });
+    Script::ok(&json!({"ok": true, "result": {"remote": remote}}).to_string())
+}
+
+#[test]
+fn a_plain_new_session_while_the_stream_is_down_stays_listed_until_a_snapshot() {
+    use ngterm_core::remote::origin_replies::{NEW_SESSION_ARGUMENTS, RESTORE_MODE_ARGUMENTS};
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        peer.end(ChannelEnd::Exit {
+            code: Some(1),
+            signal: None,
+        })
+        .await;
+        settle().await;
+        actor.sink.take();
+        let made = uuid_string(id(7));
+        let live = json!({"ok": true, "result": {"restore": {"configured": "live", "requestedAtLaunch": "live",
+            "active": "live", "restartRequired": false}}});
+        actor.transport.script(
+            &control_tail(OriginShell::Posix, &RESTORE_MODE_ARGUMENTS),
+            Script::ok(&live.to_string()),
+        );
+        actor.transport.script(
+            &control_tail(OriginShell::Posix, &NEW_SESSION_ARGUMENTS),
+            Script::ok(&json!({"ok": true, "result": {"id": made}}).to_string()),
+        );
+        for tail in [
+            tree_tail(OriginShell::Posix),
+            ngterm_core::remote::ssh::tree_tail_for(OriginShell::Posix, Some(ngterm_proto::RemotePeer::Ngterm)),
+        ] {
+            actor.transport.script(&tail, listing_with(&made, "fresh"));
+        }
+
+        assert_eq!(post_create(&actor, None).await.unwrap().unwrap().id, made);
+        let mut expected = first_rows();
+        expected.push(row("fresh", "work", None, false));
+        assert_eq!(trees(&actor.sink.take()).last(), Some(&expected));
+        actor.list().await;
+        assert_eq!(trees(&actor.sink.take()).last(), Some(&expected), "a refresh keeps it");
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let fresh = stream(&actor).await;
+        send(&fresh, &hello()).await;
+        let mut held = first_snapshot();
+        if let CatalogFrame::Snapshot(snapshot) = &mut held {
+            snapshot.workspaces[0].sessions.push(terminal(7, "fresh", None));
+        }
+        send(&fresh, &held).await;
+        let mut once = first_rows();
+        once.insert(2, row("fresh", "work", None, false));
+        assert_eq!(
+            trees(&actor.sink.take()).last(),
+            Some(&once),
+            "shown once the catalog holds it"
+        );
+        send(&fresh, &CatalogFrame::Snapshot(snapshot(5, Vec::new()))).await;
+        assert_eq!(
+            trees(&actor.sink.take()).last(),
+            Some(&Vec::new()),
+            "the catalog's word after that"
+        );
+    });
+}
+
+#[test]
+fn a_machine_running_both_apps_keeps_the_listings_hint_beside_the_catalog() {
+    local(async {
+        let actor = Actor::start();
+        let Script { stdout, .. } = listing(true);
+        let agterm = json!({"ok": true, "result": {"remote": {
+            "endpoint": {"executable": "/Applications/agterm.app/Contents/MacOS/zmx", "socketDirectory": "/tmp/zmx"},
+            "presentation": 1,
+            "sessions": [],
+        }}});
+        let both = format!(
+            "{}\n{}\n{agterm}\n",
+            String::from_utf8(stdout).unwrap(),
+            ngterm_core::remote::peer::AGTERM_ANSWER
+        );
+        actor
+            .transport
+            .script(&tree_tail(OriginShell::Posix), Script::ok(&both));
+        let mode = json!({"ok": true, "result": {"restore": {
+            "configured": "none", "requestedAtLaunch": "none", "active": "none", "restartRequired": false,
+        }}});
+        actor.transport.script(
+            &ngterm_core::remote::not_live::restore_tail(),
+            Script::ok(&mode.to_string()),
+        );
+        actor
+            .transport
+            .script(&version_line(), version_answer(Some(versions())));
+        actor.connect().await;
+        actor.list().await;
+        let peer = stream(&actor).await;
+        send(&peer, &hello()).await;
+        actor.sink.take();
+        send(&peer, &first_snapshot()).await;
+        let events = actor.sink.take();
+        let Some(MobileEvent::Tree { hint, .. }) = events
+            .iter()
+            .rev()
+            .find(|event| matches!(event, MobileEvent::Tree { .. }))
+        else {
+            panic!("no tree in {events:?}");
+        };
+        assert_eq!(trees(&events).last(), Some(&first_rows()));
+        assert_eq!(
+            hint.as_deref(),
+            Some(
+                "agterm on box is not in Live sessions mode: set Settings > General > Restore sessions to Live \
+                 sessions and restart agterm; only sessions started after that can be attached"
+            )
+        );
     });
 }

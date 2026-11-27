@@ -37,8 +37,8 @@ use ngterm_core::remote::not_live;
 use ngterm_core::remote::origin::{self, OriginForm, OriginShell};
 use ngterm_core::remote::origin_replies::{
     COMPANION_DEADLINE, ListingWait, NEW_SESSION_ARGUMENTS, PAUSE, RESTORE_MODE_ARGUMENTS, WaitStep,
-    check_restore_mode, duplicate_session_arguments, end_failure, end_session_arguments, no_answer, pickable_sessions,
-    read_remote_tree, reply_of, session_created,
+    check_restore_mode, command_failure, duplicate_session_arguments, end_failure, end_session_arguments,
+    pickable_sessions, read_remote_tree, rename_session_arguments, session_created,
 };
 use ngterm_core::remote::ssh::{control_tail, control_tail_with_operands, tree_tail_for};
 use ngterm_core::remote::tree::{
@@ -47,7 +47,6 @@ use ngterm_core::remote::tree::{
 use ngterm_proto::{ControlRemoteSession, ControlRemoteTree, RemotePeer};
 
 use crate::applog::tag;
-use crate::catalog::operations::rename_arguments;
 use crate::note;
 use crate::transport::{ChannelEnd, ChannelOutput, Connection};
 
@@ -567,7 +566,7 @@ pub async fn rename<C: Connection>(
         return Err(INVALID_REMOTE_SESSION.to_owned());
     }
     let form = known_form(connection, host, app).await?;
-    let line = control_tail_with_operands(form, &rename_arguments(session), &[name]);
+    let line = control_tail_with_operands(form, &rename_session_arguments(session), &[name]);
     let result = run(connection, &line, COMPANION_DEADLINE).await?;
     rename_failure(&result, host).map_or(Ok(()), Err)
 }
@@ -575,18 +574,7 @@ pub async fn rename<C: Connection>(
 /// Why `host`'s answer to `session rename` says the session was not renamed; `None` when it was.
 #[must_use]
 pub fn rename_failure(result: &RemoteCommandResult, host: &str) -> Option<String> {
-    let Some(reply) = reply_of(result) else {
-        return Some(no_answer(
-            result,
-            host,
-            "whether the session was renamed there is unknown",
-        ));
-    };
-    (!reply.ok).then(|| {
-        reply
-            .error
-            .unwrap_or_else(|| format!("the remote command failed on {host}"))
-    })
+    command_failure(result, host, "whether the session was renamed there is unknown")
 }
 
 /// `tree` with session `session` named `name`, whichever app listed it.

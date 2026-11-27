@@ -133,11 +133,48 @@ fn mirrored(snapshot: CatalogSnapshot) -> Mirror {
     let mut mirror = Mirror::new("box");
     mirror.subscribing();
     assert_eq!(mirror.receive(hello(Some(versions()))), Received::default());
-    assert_eq!(mirror.receive(CatalogFrame::Snapshot(snapshot)).moved, Some(true));
+    assert!(mirror.receive(CatalogFrame::Snapshot(snapshot)).moved);
     mirror
 }
 
 // MARK: - the mirror
+
+#[test]
+fn a_session_made_outside_the_catalog_is_noted_until_the_catalog_holds_it_or_a_snapshot_comes() {
+    let made = uuid_string(id(7));
+    let mut mirror = mirrored(snapshot(4, vec![workspace(9, "work", vec![terminal(1, "main", None)])]));
+    mirror.add(&made);
+    mirror.add(&made.to_lowercase());
+    mirror.add(&uuid_string(id(1)));
+    assert_eq!(
+        mirror.added(),
+        std::slice::from_ref(&made),
+        "once, and never a held session"
+    );
+    mirror.forget(&made);
+    assert!(mirror.added().is_empty(), "a plain End drops it");
+
+    mirror.add(&made);
+    let added = CatalogChange::SessionAdded {
+        session: terminal(7, "fresh", None),
+        workspace: id(9),
+        index: 1,
+    };
+    assert!(mirror.receive(delta(5, added)).moved);
+    assert!(mirror.added().is_empty(), "the catalog holds it");
+
+    mirror.add(&uuid_string(id(8)));
+    assert!(mirror.receive(CatalogFrame::Snapshot(snapshot(6, Vec::new()))).moved);
+    assert!(mirror.added().is_empty(), "a snapshot is the catalog's whole word");
+}
+
+#[test]
+fn a_plain_rename_names_the_row_until_the_stream_says_otherwise() {
+    let mut mirror = mirrored(snapshot(4, vec![workspace(9, "work", vec![terminal(1, "main", None)])]));
+    mirror.rename(&uuid_string(id(1)).to_lowercase(), "build");
+    mirror.rename(&uuid_string(id(7)), "nobody");
+    assert_eq!(names(&mirror), ["build"]);
+}
 
 #[test]
 fn a_snapshot_connects_and_each_next_revision_moves_the_rows() {
@@ -149,11 +186,11 @@ fn a_snapshot_connects_and_each_next_revision_moves_the_rows() {
         4,
         vec![workspace(9, "work", vec![main.clone()])],
     )));
-    assert_eq!((moved.moved, mirror.state()), (Some(true), &CatalogState::Connected));
+    assert_eq!((moved.moved, mirror.state()), (true, &CatalogState::Connected));
     assert_eq!(names(&mirror), ["main"]);
 
     let moved = mirror.receive(delta(5, renamed(1, "build", &main)));
-    assert_eq!(moved.moved, Some(false));
+    assert!(moved.moved);
     assert_eq!(names(&mirror), ["build"]);
     assert!(mirror.reaches(EPOCH, 5));
     assert!(!mirror.reaches(EPOCH, 6));
@@ -164,16 +201,15 @@ fn a_snapshot_connects_and_each_next_revision_moves_the_rows() {
 fn a_revision_already_seen_is_dropped_and_a_gap_or_another_epoch_asks_for_a_snapshot() {
     let main = terminal(1, "main", None);
     let mut mirror = mirrored(snapshot(4, vec![workspace(9, "work", vec![main.clone()])]));
-    assert_eq!(mirror.receive(delta(4, renamed(1, "old", &main))).moved, None);
+    assert!(!mirror.receive(delta(4, renamed(1, "old", &main))).moved);
     assert!(!mirror.needs_snapshot());
     assert_eq!(names(&mirror), ["main"]);
 
-    assert_eq!(mirror.receive(delta(6, renamed(1, "skipped", &main))).moved, None);
+    assert!(!mirror.receive(delta(6, renamed(1, "skipped", &main))).moved);
     assert!(mirror.needs_snapshot());
     assert_eq!(names(&mirror), ["main"], "the rows stay until the fresh snapshot");
-    assert_eq!(
-        mirror.receive(delta(5, renamed(1, "late", &main))).moved,
-        None,
+    assert!(
+        !mirror.receive(delta(5, renamed(1, "late", &main))).moved,
         "nothing applies past a gap"
     );
 
@@ -183,7 +219,7 @@ fn a_revision_already_seen_is_dropped_and_a_gap_or_another_epoch_asks_for_a_snap
         rev: 5,
         change: renamed(1, "restarted", &main),
     };
-    assert_eq!(mirror.receive(other).moved, None);
+    assert!(!mirror.receive(other).moved);
     assert!(mirror.needs_snapshot());
 
     mirror.subscribing();
@@ -202,7 +238,7 @@ fn a_snapshot_of_another_epoch_than_its_hello_asks_again() {
     mirror.receive(hello(Some(versions())));
     let mut stale = snapshot(1, Vec::new());
     stale.epoch = "E0".to_owned();
-    assert_eq!(mirror.receive(CatalogFrame::Snapshot(stale)).moved, None);
+    assert!(!mirror.receive(CatalogFrame::Snapshot(stale)).moved);
     assert!(mirror.needs_snapshot());
     assert_eq!(mirror.catalog(), None);
 }
@@ -215,7 +251,7 @@ fn an_unknown_change_moves_the_cursor_past_it_and_a_ping_is_acked() {
         epoch: Some(EPOCH.to_owned()),
         rev: Some(5),
     };
-    assert_eq!(mirror.receive(unknown).moved, Some(false));
+    assert!(mirror.receive(unknown).moved);
     assert!(mirror.reaches(EPOCH, 5));
     assert_eq!(mirror.receive(CatalogFrame::Ping).reply, Some(CatalogFrame::Ack));
     assert_eq!(mirror.receive(CatalogFrame::Ack), Received::default());
@@ -239,8 +275,8 @@ fn an_oversized_snapshot_applies_at_its_commit_and_bad_chunks_ask_again() {
     for frame in chunked.clone() {
         moved.push(mirror.receive(frame).moved);
     }
-    assert_eq!(moved.last(), Some(&Some(true)));
-    assert!(moved[..moved.len() - 1].iter().all(Option::is_none));
+    assert_eq!(moved.last(), Some(&true));
+    assert!(moved[..moved.len() - 1].iter().all(|moved| !moved));
     assert_eq!(mirror.catalog(), Some(&big));
 
     let mut mirror = Mirror::new("box");

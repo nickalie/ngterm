@@ -1,6 +1,7 @@
 //! The catalogs of headless machines on the actor ([`crate::catalog`]): a machine whose listing says it is headless is
-//! followed from then on, its stream a local task on the machine's connection. The rows it reports replace the
-//! listing's ([`MobileEvent::Tree`]) and its state arrives as [`MobileEvent::Catalog`].
+//! followed from then on, its stream a local task on the machine's connection. The rows it reports take the place of the
+//! listing's own-app rows; the other app's sessions and the listing's hint stay beside them ([`MobileEvent::Tree`]).
+//! Its state arrives as [`MobileEvent::Catalog`].
 //!
 //! - The first attempt, and each after a loss, asks `version` first: a machine that advertises no usable catalog is
 //!   refused for good, so its plain listing stays; one that does not answer is retried. The stream then opens with the
@@ -119,23 +120,31 @@ pub(super) fn forget<T: Transport>(state: &State<T>, machine_id: &str) {
     }
 }
 
-/// The rows of `machine_id`'s catalog, with what `tree` adds, then the sessions `tree` lists of the machine's other
-/// app; `None` while it has no catalog to list from.
+/// The rows of `machine_id`'s catalog, with what `tree` adds, then the sessions `tree` lists that a plain command made
+/// there and the catalog does not hold yet, then the sessions `tree` lists of the machine's other app; `None` while it
+/// has no catalog to list from.
 pub(super) fn rows<T: Transport>(
     state: &State<T>,
     machine_id: &str,
     tree: Option<&ControlRemoteTree>,
 ) -> Option<Vec<RemoteSession>> {
     let catalogs = state.catalogs.borrow();
-    let catalog = catalogs.get(machine_id)?.mirror.catalog()?;
+    let mirror = &catalogs.get(machine_id)?.mirror;
+    let catalog = mirror.catalog()?;
     let mut rows = catalog::rows(catalog, tree);
+    let (own, other): (Vec<_>, Vec<_>) = tree
+        .map(sessions::listed_sessions)
+        .unwrap_or_default()
+        .into_iter()
+        .partition(|listed| listed.peer == Some(RemotePeer::Ngterm.into()));
+    rows.extend(own.into_iter().filter(|listed| {
+        mirror
+            .added()
+            .iter()
+            .any(|added| added.eq_ignore_ascii_case(&listed.id))
+    }));
     // the other app of a machine that runs both is not in the catalog: its sessions stay as listed
-    rows.extend(
-        tree.map(sessions::listed_sessions)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|listed| listed.peer != Some(RemotePeer::Ngterm.into())),
-    );
+    rows.extend(other);
     Some(rows)
 }
 
@@ -362,7 +371,7 @@ fn take_lines<T: Transport>(
             &state,
             machine_id,
             |mirror| (mirror.receive(frame), mirror.state().clone(), mirror.needs_snapshot()),
-            |(received, ..)| received.moved.is_some(),
+            |(received, ..)| received.moved,
         );
         let Some((received, catalog_state, needs_snapshot)) = received else {
             return Some(Ended::Done);
@@ -421,6 +430,22 @@ pub(super) async fn wait_for<T: Transport, R>(
 pub(super) fn forget_session<T: Transport>(state: &State<T>, machine_id: &str, id: &str) {
     if let Some(follow) = state.catalogs.borrow_mut().get_mut(machine_id) {
         follow.mirror.forget(id);
+    }
+}
+
+/// `machine_id`'s catalog with session `id` named `name`, as a plain Rename Session named it there; the stream brings
+/// the same change later.
+pub(super) fn rename_session<T: Transport>(state: &State<T>, machine_id: &str, id: &str, name: &str) {
+    if let Some(follow) = state.catalogs.borrow_mut().get_mut(machine_id) {
+        follow.mirror.rename(id, name);
+    }
+}
+
+/// `machine_id`'s catalog shows session `id`, which a plain command made there, from the listing until the catalog
+/// holds it.
+pub(super) fn add_session<T: Transport>(state: &State<T>, machine_id: &str, id: &str) {
+    if let Some(follow) = state.catalogs.borrow_mut().get_mut(machine_id) {
+        follow.mirror.add(id);
     }
 }
 

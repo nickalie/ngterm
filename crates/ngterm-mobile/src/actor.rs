@@ -19,8 +19,9 @@
 //! agents from what the streams report; hiding the pane or detaching its session closes it.
 //!
 //! A headless machine's catalog ([`catalogs`]) is followed on its connection once a listing says the machine is
-//! headless: its rows replace the listing's, and New Session, Rename Session and End Session go to it under an operation
-//! id while its stream is up.
+//! headless: its rows take the place of the listing's own-app rows, with the other app's sessions and the listing's hint
+//! beside them, and New Session, Rename Session and End Session go to it under an operation id while its stream is up;
+//! while it is down, they run as plain commands and change the kept catalog as they change the kept listing.
 //!
 //! A connection the core holds is watched: lost by itself, it is retried on the reconnect schedule as a connect
 //! attempt that waits first ([`crate::reconnect`]) until it is back or refused for good
@@ -1161,6 +1162,7 @@ async fn create_session<T: Transport>(
     .await
     .map_err(remote)?;
     let receipt = RemoteSession::listed(&created, tree.endpoint.peer());
+    catalogs::add_session(&state, &machine_id, &created.id);
     let tree = with_other_app(&state, &machine_id, tree);
     let listing = listing.take();
     listed(
@@ -1199,6 +1201,7 @@ async fn duplicate_session<T: Transport>(
     .await
     .map_err(remote)?;
     let receipt = RemoteSession::listed(&created, tree.endpoint.peer());
+    catalogs::add_session(&state, &machine_id, &created.id);
     let tree = with_other_app(&state, &machine_id, tree);
     let listing = listing.take();
     listed(
@@ -1249,7 +1252,8 @@ async fn end_session<T: Transport>(
 }
 
 /// Renames the session there; while the connection is still the machine's, the kept listing takes the name and is
-/// reported. On a headless machine with its catalog up, the catalog brings the name instead.
+/// reported. On a headless machine with its catalog up, the catalog brings the name instead; with it down, the kept
+/// catalog takes the name too.
 async fn rename_session<T: Transport>(
     state: Rc<State<T>>,
     link: OnMachine<T::Connection>,
@@ -1271,6 +1275,7 @@ async fn rename_session<T: Transport>(
     sessions::rename(&*link.connection, &link.host, (&session_id, app), &name)
         .await
         .map_err(remote)?;
+    catalogs::rename_session(&state, &machine_id, &session_id, &name);
     if !state.is_current(&machine_id, &link.connection) {
         return Ok(());
     }

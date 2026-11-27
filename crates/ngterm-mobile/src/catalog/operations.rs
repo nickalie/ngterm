@@ -8,7 +8,9 @@
 //!   it.
 
 use ngterm_core::remote::origin::OriginForm;
-use ngterm_core::remote::origin_replies::{COMPANION_DEADLINE, end_session_arguments, reply_of};
+use ngterm_core::remote::origin_replies::{
+    COMPANION_DEADLINE, end_session_arguments, rename_session_arguments, reply_of,
+};
 use ngterm_core::remote::ssh::{control_tail, control_tail_with_operands};
 use ngterm_proto::{CatalogReceipt, ControlResult, Response};
 
@@ -39,7 +41,7 @@ impl Operation {
     pub fn arguments(&self) -> Vec<String> {
         match self {
             Self::NewSession { name } => new_session_arguments(name.as_deref()),
-            Self::RenameSession { id, .. } => rename_arguments(id),
+            Self::RenameSession { id, .. } => rename_session_arguments(id).map(str::to_owned).to_vec(),
             Self::EndSession { id } => end_session_arguments(id).map(str::to_owned).to_vec(),
         }
     }
@@ -52,12 +54,6 @@ impl Operation {
             Self::NewSession { .. } | Self::EndSession { .. } => Vec::new(),
         }
     }
-}
-
-/// `session rename --target ID`, whose name follows as an operand.
-#[must_use]
-pub fn rename_arguments(id: &str) -> Vec<String> {
-    ["session", "rename", "--target", id].map(str::to_owned).to_vec()
 }
 
 /// The catalog position an action was decided at.
