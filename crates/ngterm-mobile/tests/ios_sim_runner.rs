@@ -4,7 +4,7 @@
 //! `--simulator <name>` waits while a runtime disk image is in a transition, creates the simulator on the pinned runtime
 //! again when it is gone, boots it, makes sure that simctl lists it as booted, disables and stops the simulator's
 //! services that no test uses while it boots and again once it is up (a launchctl that refuses one leaves it running and
-//! the run goes on; one already disabled is only stopped again), and prints only its UDID. The runner
+//! the run goes on; one already disabled is only stopped while it runs), and prints only its UDID. The runner
 //! then runs the executable on that phone through `xcrun simctl spawn` with its arguments, forwards `RUST_BACKTRACE`
 //! and `RUST_TEST_*` (as `SIMCTL_CHILD_*`) and nothing else, and exits with the executable's status.
 //!
@@ -13,8 +13,9 @@
 //! `xcrun` logs each call and keeps the simulators in a file (its `-f simctl` names a stub `simctl` that calls it
 //! back): `simctl create` adds one, `simctl boot` refuses one that is booted, and `simctl bootstatus` marks one booted
 //! unless the case says the boot does not take. Its `simctl spawn` of launchctl exits with the status the case asks for
-//! it (a `bootout` fails when the case says so) and keeps each service it disables, and any other `simctl spawn` prints what the spawned process would get and
-//! exits with the status the case asks for. The
+//! it (a `bootout` or `list` fails when the case says so), keeps each service it disables, lists the services that run and
+//! takes out each one it stops; any other `simctl spawn` prints what the spawned process would get and exits with the
+//! status the case asks for. The
 //! real runner on a real simulator is what `cargo test --target aarch64-apple-ios-sim` uses (Task 2 of the iOS plan).
 //! Unix hosts only: the scripts are macOS-only, and the stub `uname` lets Linux run them too. They use the host's `jq`
 //! in `/usr/bin`: macOS has it, and a Linux host needs it installed (the `unit-coverage` job of `linux.yml` installs
@@ -102,8 +103,10 @@ mod host {
         pub(super) launchctl_status: i32,
         /// The services that `launchctl print-disabled system` lists as disabled.
         pub(super) disabled: Vec<&'static str>,
-        /// Whether `launchctl bootout` fails, as a spawn that times out mid-boot does.
-        pub(super) bootout_fails: bool,
+        /// The `launchctl` verbs (`bootout`, `list`) that fail, as a spawn that times out mid-boot does.
+        pub(super) failing: Vec<&'static str>,
+        /// The services that `launchctl list` lists as running until a `launchctl bootout` stops them.
+        pub(super) running: Vec<&'static str>,
     }
 
     impl World {
@@ -118,7 +121,8 @@ mod host {
                 finds_simctl: true,
                 launchctl_status: 0,
                 disabled: Vec::new(),
-                bootout_fails: false,
+                failing: Vec::new(),
+                running: QUIET.to_vec(),
             }
         }
     }
@@ -166,7 +170,7 @@ mod host {
         };
         let header = format!("-- iOS {} --", pin("IOS_SIMULATOR_RUNTIME"));
         let refused = if world.boots { "false" } else { "true" };
-        let bootout_fails = if world.bootout_fails { "true" } else { "false" };
+        let failing = world.failing.join(" ");
         let boot = if world.boots {
             r#"sed "s/($3) (Shutdown)/($3) (Booted)/" "$STUB_DIR/devices" >"$STUB_DIR/devices.new"
   mv "$STUB_DIR/devices.new" "$STUB_DIR/devices""#
@@ -201,7 +205,12 @@ case "$1 $2" in
     if [ "$4 $5 {launchctl_status}" = 'launchctl disable 0' ]; then
       printf '\t\t"%s" => disabled\n' "${{6#system/}}" >>"$STUB_DIR/disabled"
     fi
-    if [ "$4 $5" = 'launchctl bootout' ] && {bootout_fails}; then exit 5; fi
+    if [ "$4" = launchctl ]; then case " {failing} " in *" $5 "*) exit 5 ;; esac; fi
+    if [ "$4 $5" = 'launchctl list' ]; then
+      printf 'PID\tStatus\tLabel\n'
+      for label in "$STUB_DIR"/running/*; do [ -e "$label" ] && printf '1\t0\t%s\n' "${{label##*/}}"; done
+    fi
+    if [ "$4 $5 {launchctl_status}" = 'launchctl bootout 0' ]; then rm -f "$STUB_DIR/running/${{6#system/}}"; fi
     if [ "$4" = launchctl ]; then exit {launchctl_status}; fi
     env | grep '^SIMCTL_CHILD_' | sort; exit {} ;;
 esac
@@ -230,6 +239,10 @@ exit 0
         }
         fs::write(scratch.path().join("images-last.json"), world.images.last().unwrap()).unwrap();
         fs::write(scratch.path().join("xcrun.log"), "").unwrap();
+        fs::create_dir_all(scratch.path().join("running")).unwrap();
+        for label in &world.running {
+            fs::write(scratch.path().join("running").join(label), "").unwrap();
+        }
         let disabled = world.disabled.iter().fold(String::new(), |listing, label| {
             listing + "\t\t\"" + label + "\" => disabled\n"
         });
@@ -316,40 +329,38 @@ exit 0
         "com.apple.newsd",
     ];
 
-    /// The launchctl calls that quiet simulator `udid` when none of its services is disabled yet, as the stub xcrun
-    /// logs them (sorted): the read of what is disabled, then a disable and a stop for each service.
+    /// The launchctl calls that quiet simulator `udid` when none of its services is disabled yet and all run, as the
+    /// stub xcrun logs them (sorted): the reads of what is disabled and what runs, then a disable and a stop for each
+    /// service.
     pub(super) fn quieting(udid: &str) -> Vec<String> {
         QUIET
             .iter()
             .flat_map(|label| {
                 ["disable", "bootout"].map(|verb| format!("simctl spawn {udid} launchctl {verb} system/{label}"))
             })
-            .chain([format!("simctl spawn {udid} launchctl print-disabled system")])
+            .chain(reading(udid))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect()
     }
 
-    /// The launchctl calls that quiet simulator `udid` again when all its services are disabled, as the stub xcrun
-    /// logs them (sorted): a stop for each service, then the read of what is disabled.
-    pub(super) fn stopping(udid: &str) -> Vec<String> {
-        QUIET
-            .iter()
-            .map(|label| format!("simctl spawn {udid} launchctl bootout system/{label}"))
-            .chain([format!("simctl spawn {udid} launchctl print-disabled system")])
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect()
+    /// The launchctl calls that quiet simulator `udid` again when all its services are disabled and none runs, as the
+    /// stub xcrun logs them (sorted): only the reads of what is disabled and what runs.
+    pub(super) fn reading(udid: &str) -> Vec<String> {
+        vec![
+            format!("simctl spawn {udid} launchctl list"),
+            format!("simctl spawn {udid} launchctl print-disabled system"),
+        ]
     }
 
     /// The calls that boot simulator `udid` from shut down: its boot, the quieting while it boots, the wait for the
-    /// boot, then the quieting that finds every service already disabled and stops each one again.
+    /// boot, then the quieting that finds every service disabled and stopped.
     pub(super) fn boot_and_quiet(udid: &str) -> Vec<String> {
         [
             vec![format!("simctl boot {udid}")],
             quieting(udid),
             vec![format!("simctl bootstatus {udid} -b")],
-            stopping(udid),
+            reading(udid),
         ]
         .concat()
     }
@@ -374,8 +385,8 @@ exit 0
 use std::process::Command;
 
 use host::{
-    NEW_UDID, QUIET, UDID, World, boot_and_quiet, images, is_launchctl, pin, quieting, repo_root, runner, runtime_id,
-    runtime_line, simulator,
+    NEW_UDID, QUIET, UDID, World, boot_and_quiet, images, is_launchctl, pin, quieting, reading, repo_root, runner,
+    runtime_id, runtime_line, simulator,
 };
 
 #[test]
@@ -558,13 +569,19 @@ fn simulator_says_which_services_it_disabled() {
     let run = simulator(&World::ready(), &pin("IOS_SIM_PHONE_NAME"));
     assert!(run.output.status.success(), "{}", run.stderr());
     let stderr = run.stderr();
+    let all = "com.apple.chronod com.apple.healthappd com.apple.siriactionsd com.apple.intelligenceflowd \
+               com.apple.intelligencecontextd com.apple.sirittsd com.apple.photoanalysisd com.apple.newsd";
     assert!(
         stderr.contains(&format!(
-            "({UDID}): disabled com.apple.chronod com.apple.healthappd com.apple.siriactionsd \
-             com.apple.intelligenceflowd com.apple.intelligencecontextd com.apple.sirittsd com.apple.photoanalysisd \
-             com.apple.newsd of 8 services no test uses; stopped com.apple.chronod"
+            "({UDID}): disabled {all} of 8 services no test uses; stopped {all}\n"
         )),
         "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "({UDID}): disabled {all} of 8 services no test uses; stopped none\n"
+        )),
+        "the pass once the simulator is up finds nothing that runs: {stderr}"
     );
 }
 
@@ -617,7 +634,7 @@ fn calls_for(labels: &[&str], verbs: &[(&str, usize)]) -> Vec<String> {
 }
 
 #[test]
-fn simulator_does_not_disable_a_disabled_service_again_but_stops_it() {
+fn simulator_does_not_disable_a_disabled_service_again_and_stops_it_only_while_it_runs() {
     let run = simulator(
         &World {
             disabled: QUIET[..6].to_vec(),
@@ -627,9 +644,10 @@ fn simulator_does_not_disable_a_disabled_service_again_but_stops_it() {
     );
     assert!(run.output.status.success(), "{}", run.stderr());
     let mut expected = [
-        calls_for(&QUIET[..6], &[("bootout", 2)]),
-        calls_for(&QUIET[6..], &[("disable", 1), ("bootout", 2)]),
-        vec![format!("simctl spawn {UDID} launchctl print-disabled system"); 2],
+        calls_for(&QUIET[..6], &[("bootout", 1)]),
+        calls_for(&QUIET[6..], &[("disable", 1), ("bootout", 1)]),
+        reading(UDID),
+        reading(UDID),
     ]
     .concat();
     expected.sort();
@@ -650,7 +668,7 @@ fn simulator_does_not_disable_a_disabled_service_again_but_stops_it() {
 fn a_stop_that_fails_mid_boot_is_tried_again_once_the_simulator_is_up() {
     let run = simulator(
         &World {
-            bootout_fails: true,
+            failing: vec!["bootout"],
             ..World::ready()
         },
         &pin("IOS_SIM_PHONE_NAME"),
@@ -658,7 +676,8 @@ fn a_stop_that_fails_mid_boot_is_tried_again_once_the_simulator_is_up() {
     assert!(run.output.status.success(), "{}", run.stderr());
     let mut expected = [
         calls_for(&QUIET, &[("disable", 1), ("bootout", 2)]),
-        vec![format!("simctl spawn {UDID} launchctl print-disabled system"); 2],
+        reading(UDID),
+        reading(UDID),
     ]
     .concat();
     expected.sort();
@@ -675,6 +694,51 @@ fn a_stop_that_fails_mid_boot_is_tried_again_once_the_simulator_is_up() {
         "{}",
         run.stderr()
     );
+}
+
+#[test]
+fn a_quiet_booted_simulator_is_only_read_again() {
+    let world = World {
+        devices: host::devices().replace(&format!("({UDID}) (Shutdown)"), &format!("({UDID}) (Booted)")),
+        disabled: QUIET.to_vec(),
+        running: Vec::new(),
+        ..World::ready()
+    };
+    let run = simulator(&world, &pin("IOS_SIM_PHONE_NAME"));
+    assert!(run.output.status.success(), "{}", run.stderr());
+    assert_eq!(
+        run.changes(),
+        [
+            vec![format!("simctl boot {UDID}"), format!("simctl bootstatus {UDID} -b"),],
+            reading(UDID),
+        ]
+        .concat(),
+        "the runner readies its simulator again for each test binary"
+    );
+    assert!(
+        run.stderr().contains(&format!(
+            "({UDID}): disabled {} of 8 services no test uses; stopped none\n",
+            QUIET.join(" ")
+        )),
+        "{}",
+        run.stderr()
+    );
+}
+
+#[test]
+fn a_list_that_fails_counts_each_disabled_service_as_running() {
+    let world = World {
+        devices: host::devices().replace(&format!("({UDID}) (Shutdown)"), &format!("({UDID}) (Booted)")),
+        disabled: QUIET.to_vec(),
+        running: Vec::new(),
+        failing: vec!["list"],
+        ..World::ready()
+    };
+    let run = simulator(&world, &pin("IOS_SIM_PHONE_NAME"));
+    assert!(run.output.status.success(), "{}", run.stderr());
+    let mut expected = [calls_for(&QUIET, &[("bootout", 1)]), reading(UDID)].concat();
+    expected.sort();
+    assert_eq!(launchctl_calls(&run), expected);
 }
 
 #[test]

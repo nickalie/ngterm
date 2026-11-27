@@ -43,10 +43,10 @@
 #                                       (QUIET_SERVICES) while it boots and again once it is up, then print its UDID
 #                                       (build-ios.sh, ios-sim-runner.sh and test-ios-e2e.sh call it right before
 #                                       each test run).
-#                                       It prints how long the boot took. A boot that fails, or is not done in 15
-#                                       minutes (IOS_SIM_BOOT_SECONDS sets another limit), prints the simulators'
-#                                       state and the Mac's load, and the simulator is deleted, made again and booted
-#                                       once more
+#                                       It prints how long the boot took. A boot that fails, or whose wait is not
+#                                       done 15 minutes after the boot call and the quieting (IOS_SIM_BOOT_SECONDS sets
+#                                       another limit), prints the simulators' state and the Mac's load, and the
+#                                       simulator is deleted, made again and booted once more
 set -euo pipefail
 
 CHECK=0
@@ -328,24 +328,28 @@ QUIET_SERVICES=(com.apple.chronod com.apple.healthappd com.apple.siriactionsd co
   com.apple.intelligencecontextd com.apple.sirittsd com.apple.photoanalysisd com.apple.newsd)
 
 # Disable the QUIET_SERVICES in simulator $1 ($2, its UDID), so they do not start again, and stop those that run. A
-# service already disabled is not disabled again (the runner readies its simulator once per test binary), but it is
-# stopped again: its stop can fail mid-boot after its disable worked. A service that the runtime does not have or that
-# does not run is left as it is: the run goes on without it. The simulator keeps no disabled service on disk to write
-# before its boot, so this runs once the boot starts and again once it is done (a spawn refused mid-boot). A spawn can
-# take a minute on a busy Mac, so the services are quieted side by side.
+# service already disabled is not disabled again, and it is stopped only while it runs (the runner readies its
+# simulator once per test binary, and a stop that fails mid-boot after its disable worked is tried again). A service
+# that the runtime does not have or that does not run is left as it is: the run goes on without it. When launchctl does
+# not list what runs, each service counts as running. The simulator keeps no disabled service on disk to write before
+# its boot, so this runs once the boot starts and again once it is done (a spawn refused mid-boot). A spawn can take a
+# minute on a busy Mac, so the services are quieted side by side.
 quiet_simulator() {
-  local name="$1" udid="$2" label disabled quieted="" stopped="" done_dir
+  local name="$1" udid="$2" label quieted="" stopped="" done_dir
   done_dir="$(mktemp -d)"
-  # read from a file, not a pipe: a spawned launchctl that hangs could keep a pipe open after its simctl is stopped
+  # read from files, not pipes: a spawned launchctl that hangs could keep a pipe open after its simctl is stopped
   simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl print-disabled system >"$done_dir/disabled" 2>/dev/null ||
-    : >"$done_dir/disabled"
-  disabled="$(<"$done_dir/disabled")"
+    : >"$done_dir/disabled" &
+  simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl list >"$done_dir/running" 2>/dev/null ||
+    rm -f "$done_dir/running" &
+  wait
   for label in "${QUIET_SERVICES[@]}"; do
     {
-      if grep -qF "\"$label\" => disabled" <<<"$disabled" ||
+      if grep -qF "\"$label\" => disabled" "$done_dir/disabled" ||
         simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl disable "system/$label" >/dev/null 2>&1; then
         touch "$done_dir/$label"
-        if simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl bootout "system/$label" >/dev/null 2>&1; then
+        if service_runs "$done_dir/running" "$label" &&
+          simctl_bounded "$SIMCTL_SECONDS" spawn "$udid" launchctl bootout "system/$label" >/dev/null 2>&1; then
           touch "$done_dir/$label.stopped"
         fi
       fi
@@ -359,6 +363,11 @@ quiet_simulator() {
   rm -rf "$done_dir"
   echo "simulator $name ($udid): disabled ${quieted:-none} of ${#QUIET_SERVICES[@]} services no test uses;" \
     "stopped ${stopped:-none}" >&2
+}
+
+# Whether `launchctl list` output $1 lists service $2, or is missing (the list could not be read).
+service_runs() {
+  [[ ! -e "$1" ]] || awk -v label="$2" '$NF == label { found = 1 } END { exit !found }' "$1"
 }
 
 # --simulator: make simulator $1 ready for a run and print its UDID (see the usage above).
