@@ -479,15 +479,16 @@ fn the_split_terminal_is_created_once_laid_out() {
     restored.split = split(false, false);
     restored.split_pane_identity = Some(Uuid::new_v4());
     assert!(!needs(&restored, None).split, "a hidden split's unfocused pane waits");
-    restored.split.focused = true;
-    assert!(
-        !needs(&restored, None).split,
-        "focused but never laid out: the primary shows"
-    );
     assert!(
         needs(&restored, Some(zoom(&restored, ZoomSurface::Split))).split,
         "a zoom lays it out"
     );
+    restored.split.focused = true;
+    assert!(
+        needs(&restored, None).split,
+        "focused before the relaunch: the window shows it again, not the primary"
+    );
+    restored.split.focused = false;
     restored.split.shown = true;
     assert!(needs(&restored, None).split);
 }

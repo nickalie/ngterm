@@ -87,6 +87,9 @@ Linux build unless it names another OS.
   next launch lists each machine once and attaches every row it still offers where it stood; a machine that does not
   answer is listed again on the reconnect schedule for up to a week, and a session gone there is named in a banner
   (`crates/ngterm-core/src/remote/relaunch.rs`).
+- Another extension beyond upstream, which forgets it: a split's focused pane survives a relaunch (`splitFocused` in
+  the session snapshot), so a hidden split shows the same pane after a relaunch, its terminal started at once
+  (`crates/ngterm-core/src/model/snapshot.rs`, `crates/ngterm-gpui/src/split.rs`).
 - Another extension beyond upstream, which has no mobile app: Android and iOS apps that view and drive another
   machine's live sessions over ssh ([Android](#android), [iOS](#ios)); both also have a chat view of a pane running
   Claude Code or Codex. The origin serves the chat through the Rust-only `agent.*` commands (`ngtermctl

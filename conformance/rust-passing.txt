@@ -13,6 +13,8 @@ tests/behaviors/test_hooks.py::test_hooks_file_is_read_at_launch
 tests/behaviors/test_keymap.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_keymap.py::test_keymap_file_is_read_at_launch
 tests/behaviors/test_recent_closed.py::test_a_companion_whose_parent_is_nowhere_is_refused_by_name
+tests/behaviors/test_relaunch.py::test_a_hidden_split_shows_the_same_pane_after_a_relaunch_and_a_restart[left]
+tests/behaviors/test_relaunch.py::test_a_hidden_split_shows_the_same_pane_after_a_relaunch_and_a_restart[right]
 tests/behaviors/test_relaunch.py::test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch
 tests/behaviors/test_relaunch.py::test_a_page_companion_comes_back_after_relaunch
 tests/behaviors/test_relaunch.py::test_flagged_order_survives_relaunch
@@ -623,6 +625,10 @@ tests/protocol/test_live_sessions.py::test_remote_overlay_points_reach_capable_p
 tests/protocol/test_live_sessions.py::test_remote_page_points_and_resizes_reach_presenter
 tests/protocol/test_live_sessions.py::test_reset_requires_force
 tests/protocol/test_live_sessions.py::test_restart_command_interrupted_by_ctrl_c_leaves_a_prompt
+tests/protocol/test_live_sessions.py::test_restart_keeps_a_hidden_split_on_its_shown_pane[left-left]
+tests/protocol/test_live_sessions.py::test_restart_keeps_a_hidden_split_on_its_shown_pane[left-right]
+tests/protocol/test_live_sessions.py::test_restart_keeps_a_hidden_split_on_its_shown_pane[right-left]
+tests/protocol/test_live_sessions.py::test_restart_keeps_a_hidden_split_on_its_shown_pane[right-right]
 tests/protocol/test_live_sessions.py::test_restart_rejects[blank-command]
 tests/protocol/test_live_sessions.py::test_restart_rejects[no-pane]
 tests/protocol/test_live_sessions.py::test_restart_rejects[no-split]

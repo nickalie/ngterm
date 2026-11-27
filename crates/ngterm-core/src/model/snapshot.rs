@@ -217,6 +217,7 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         cwd: session.effective_cwd().to_owned(),
         is_split: Some(session.split.shown),
         has_split: exists.then_some(true),
+        split_focused: (exists && session.split.focused).then_some(true),
         split_axis: exists.then_some(session.split.axis),
         font_size: session.font_size,
         split_cwd: session.split_cwd.clone().or_else(|| session.initial_split_cwd.clone()),
@@ -316,6 +317,7 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool, h
     session.ended = snapshot.ended.unwrap_or(false);
     session.split.shown = snapshot.is_split.unwrap_or(false);
     session.split.exists = has_split;
+    session.split.focused = has_split && snapshot.split_focused.unwrap_or(false);
     session.split.axis = if has_split {
         snapshot.split_axis.unwrap_or_default()
     } else {

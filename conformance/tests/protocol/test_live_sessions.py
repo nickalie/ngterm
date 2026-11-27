@@ -395,6 +395,32 @@ def test_restart_replaces_the_pane_shell(live):
     _gone(live, before["daemon"])
 
 
+def _pane_layout(live, sid):
+    node = find_session(live.tree(), sid)
+    panes = {s["kind"]: (s["active"], s["visible"]) for s in node["surfaces"] if s["kind"] in ("left", "right")}
+    return node.get("split"), node.get("splitFocused"), panes
+
+
+@LIVE
+@pytest.mark.parametrize(
+    ("focus", "restarted"), [("left", "left"), ("right", "left"), ("left", "right"), ("right", "right")]
+)
+@pytest.mark.covers("session.restart", "field:tree.session.splitFocused")
+def test_restart_keeps_a_hidden_split_on_its_shown_pane(live, focus, restarted):
+    """A hidden split shows only its focused pane; restarting either pane keeps that pane on screen."""
+    sid = _live_session(live, split=True)
+    try:
+        assert_ok(live.request("session.focus", sid, pane=focus))
+        assert_ok(live.request("session.split", sid, mode="off"))
+        before = _pane_layout(live, sid)
+        assert before[0] is False and before[2][focus] == (True, True), before
+        # the answer comes once the window holds the new terminal
+        assert_ok(live.request("session.restart", sid, pane=restarted, command="cat"))
+        assert _pane_layout(live, sid) == before
+    finally:
+        assert_ok(live.request("session.close", sid))
+
+
 @LIVE
 @pytest.mark.covers("session.restart", "field:result.restart")
 def test_restart_without_a_command_replays_the_foreground_program(live, tmp_path):

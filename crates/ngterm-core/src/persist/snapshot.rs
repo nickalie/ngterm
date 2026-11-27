@@ -256,6 +256,10 @@ pub struct SessionSnapshot {
     pub is_split: Option<bool>,
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub has_split: Option<bool>,
+    /// The split's right pane holds the focus, so a hidden split shows it; written only then (a Rust-only field:
+    /// upstream forgets the focus across a relaunch).
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub split_focused: Option<bool>,
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub split_axis: Option<SplitAxis>,
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]

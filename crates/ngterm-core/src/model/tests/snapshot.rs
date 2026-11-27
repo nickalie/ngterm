@@ -266,7 +266,7 @@ fn split_state_round_trips_with_each_panes_cwd() {
 }
 
 #[test]
-fn a_hidden_split_keeps_identity_and_axis_but_focus_returns_to_the_primary() {
+fn a_hidden_split_keeps_identity_axis_and_its_focused_pane() {
     let (mut store, _, session) = store_with("/a");
     let split = Uuid::new_v4();
     {
@@ -280,12 +280,34 @@ fn a_hidden_split_keeps_identity_and_axis_but_focus_returns_to_the_primary() {
     let persisted = &snapshot.workspaces[0].sessions[0];
     assert_eq!(persisted.has_split, Some(true));
     assert_eq!(persisted.is_split, Some(false));
+    assert_eq!(persisted.split_focused, Some(true));
     assert_eq!(persisted.split_pane_identity, Some(split));
     let back = restored(&snapshot, false);
     let session = first(&back);
-    assert!(session.split.exists && !session.split.shown && !session.split.focused);
+    assert!(session.split.exists && !session.split.shown && session.split.focused);
     assert_eq!(session.split_pane_identity, Some(split));
     assert_eq!(session.split.axis, SplitAxis::TopBottom);
+}
+
+#[test]
+fn a_split_focused_on_its_primary_or_a_legacy_one_restores_on_the_primary() {
+    let (mut store, _, session) = store_with("/a");
+    {
+        let session = store.session_mut(session).unwrap();
+        session.split.exists = true;
+        session.split_pane_identity = Some(Uuid::new_v4());
+    }
+    let mut snapshot = store.snapshot();
+    assert_eq!(snapshot.workspaces[0].sessions[0].split_focused, None);
+    assert!(!first(&restored(&snapshot, false)).split.focused);
+    // a focus with no split to hold it reads as the primary's
+    let persisted = &mut snapshot.workspaces[0].sessions[0];
+    (
+        persisted.split_focused,
+        persisted.has_split,
+        persisted.split_pane_identity,
+    ) = (Some(true), None, None);
+    assert!(!first(&restored(&snapshot, false)).split.focused);
 }
 
 #[test]

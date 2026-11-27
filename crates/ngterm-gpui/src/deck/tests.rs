@@ -891,10 +891,15 @@ fn live_resources() -> tempfile::TempDir {
 
 /// The core of `library` with live sessions over a fake session host.
 fn live_core(library: WindowLibrary, resources: &Path) -> Core {
+    live_core_on(library, resources, Arc::new(FakeSessionHost::new()))
+}
+
+/// [`live_core`] over `host`.
+fn live_core_on(library: WindowLibrary, resources: &Path, host: Arc<dyn SessionHost>) -> Core {
     let mut core = core_of(library);
     core.set_restore_launch(RestoreLaunchDecision::new(RestoreMode::Live, None));
     core.install_live_sessions(LiveInstall {
-        host: Arc::new(FakeSessionHost::new()) as Arc<dyn SessionHost>,
+        host,
         endpoint: ControlLiveEndpoint {
             peer: None,
             attach_bridge: None,
@@ -1890,3 +1895,4 @@ mod overlay;
 mod overlay_visibility;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod page_sessions;
+mod restart;

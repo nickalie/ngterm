@@ -395,8 +395,9 @@ fn unzoomed_panes(session: &Session) -> Panes {
 /// The terminals a session's page has yet to create.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Needs {
-    /// The split pane: it exists, is laid out (or zoomed into) and has no terminal yet. A hidden split's unfocused
-    /// pane is created only once something lays it out, as upstream's deck mounts only the panes it renders.
+    /// The split pane: it exists, is laid out, zoomed into or focused, and has no terminal yet. A hidden split's
+    /// unfocused pane is created only once something lays it out, as upstream's deck mounts only the panes it renders;
+    /// its focused one now, so the window shows the pane focused before a relaunch, not the primary.
     pub split: bool,
     /// The scratch: shown and without a terminal (a closed scratch's next show starts fresh).
     pub scratch: bool,
@@ -410,7 +411,8 @@ pub fn needs(session: &Session, zoom: Option<SurfaceId>) -> Needs {
         split: session.split.exists
             && session.split_pane_identity.is_some()
             && !session.split_surface.is_present()
-            && (session.renders_pane(true) || zoomed_split),
+            && (session.renders_pane(true) || zoomed_split || session.split.focused)
+            && session.content() == ngterm_core::model::SessionContent::Terminal,
         scratch: session.scratch_active
             && !session.scratch_surface.is_present()
             && session.content() == ngterm_core::model::SessionContent::Terminal,
