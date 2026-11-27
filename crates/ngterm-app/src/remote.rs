@@ -783,20 +783,19 @@ mod tests {
     #[test]
     fn a_shut_down_transport_logs_the_count_of_each_row_and_forgets_its_runs() {
         let transport = ProcessTransport::new(Weak::<FakeMainLoop<Viewer>>::new() as Poster<Viewer>);
-        let text = logged(|| {
-            for row in [Uuid::nil(), Uuid::max()] {
-                for _ in 0..2 {
-                    log_bridge_lines_at(&b"refused\n"[..], &transport.stderr_runs, row, Instant::now);
-                }
+        for row in [Uuid::nil(), Uuid::max()] {
+            for _ in 0..2 {
+                log_bridge_lines_at(&b"refused\n"[..], &transport.stderr_runs, row, Instant::now);
             }
-            transport.shutdown();
-            drop(transport);
-        });
+        }
+        let at_quit = logged(|| transport.shutdown());
         assert_eq!(
-            text.lines().filter(|line| line.ends_with("repeats=1")).count(),
+            at_quit.lines().filter(|line| line.ends_with("repeats=1")).count(),
             2,
-            "{text}"
+            "{at_quit}"
         );
+        let at_drop = logged(|| drop(transport));
+        assert!(!at_drop.contains("repeats="), "{at_drop}");
     }
 
     #[test]
