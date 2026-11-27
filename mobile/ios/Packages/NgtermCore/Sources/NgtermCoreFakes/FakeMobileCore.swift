@@ -14,10 +14,10 @@
     ///
     /// It follows the real core's rules (crates/ngterm-mobile, api.rs and actor.rs) where the app sees them:
     /// - ``connect(machine:)`` reports ``MachineState/connected`` when the machine was not connected (or was connected
-    ///   as another record: an edited machine connects anew, one only renamed keeps its connection); a connect that
-    ///   fails reports ``MachineState/unreachable(reason:)`` with the failure's reason before it throws
-    ///   ``MobileError/Unreachable(reason:)``. ``disconnect(machineId:)`` reports nothing, forgets the machine's
-    ///   listing and cancels every connect of it in flight, held or waiting on the user or not
+    ///   as another record: an edited machine connects anew, one only renamed or given another connect timeout keeps
+    ///   its connection); a connect that fails reports ``MachineState/unreachable(reason:)`` with the failure's reason
+    ///   before it throws ``MobileError/Unreachable(reason:)``. ``disconnect(machineId:)`` reports nothing, forgets the
+    ///   machine's listing and cancels every connect of it in flight, held or waiting on the user or not
     ///   (``MobileError/Cancelled``); ``useKey(machineId:keyId:)`` puts the key in the record the machine is connected
     ///   with and keeps the connection, so a connect with that key is no edit;
     /// - host keys, when the fake has a host key store and ``hostKeys`` names the key a machine's host offers: a pinned

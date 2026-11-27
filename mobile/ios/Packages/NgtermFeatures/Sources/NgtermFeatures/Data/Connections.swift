@@ -146,10 +146,11 @@ public final class Connections {
 
     /// Connects `machine` (or retries it at once), then lists its sessions for ``trees``.
     ///
-    /// A machine already connected as it is stays connected; one connected as it was before an edit connects anew,
-    /// and lets go of its attached sessions (the core ends their streams with the old connection). A machine waiting
-    /// for the user to sign in keeps waiting (the core joins its connect), unless it was edited: that connect is
-    /// overtaken, and the new one asks again. The task it hands back ends once the connect and its listing have.
+    /// A machine already connected as it is (up to its label and connect timeout) stays connected; one connected as it
+    /// was before an edit of its host, port, user or key connects anew, and lets go of its attached sessions (the core
+    /// ends their streams with the old connection). A machine waiting for the user to sign in keeps waiting (the core
+    /// joins its connect), unless it was edited: that connect is overtaken, and the new one asks again. The task it
+    /// hands back ends once the connect and its listing have.
     @discardableResult
     public func connect(_ machine: Machine) -> Task<Void, Never> {
         let id = machine.id

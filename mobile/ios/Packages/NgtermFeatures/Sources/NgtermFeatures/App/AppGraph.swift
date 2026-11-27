@@ -70,6 +70,7 @@ public final class AppGraph {
     // the trusted machines and the sessions' own chat views, read again with the other stores
     private let clipboardTrust: ClipboardTrustStore
     private let sessionChatViews: SessionChatViewsStore
+    private var followingTimeout: Task<Void, Never>?
 
     /// The graph over its parts: `core` connects, `stores` keep the small state, and `notices` (the system's unless a
     /// test gives its own) takes the notifications; `pathSource` (the system's unless a test gives its own) tells the
@@ -219,14 +220,16 @@ public final class AppGraph {
 
     // hands the core Settings' connect timeout now and after each change of the settings
     private func followConnectTimeout() {
-        let seconds = withObservationTracking {
-            settings.settings.connectTimeout
-        } onChange: { [weak self] in
-            Task { @MainActor in
-                self?.followConnectTimeout()
+        connections.setConnectTimeout(seconds: settings.settings.connectTimeout)
+        followingTimeout = Task { [weak self] in
+            let seconds = Observations { @MainActor [weak self] in self?.settings.settings.connectTimeout }
+            for await now in seconds {
+                guard let self, let now else {
+                    return
+                }
+                connections.setConnectTimeout(seconds: now)
             }
         }
-        connections.setConnectTimeout(seconds: seconds)
     }
 
     deinit {

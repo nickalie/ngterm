@@ -93,6 +93,7 @@ internal final class SettingsTests: XCTestCase {
         let own = app.textFields["machine-timeout"]
         FormScroll.scroll(to: own, in: app.collectionViews["machine-form"], swipes: Self.swipes)
         XCTAssertEqual(own.placeholderValue, "60 s from Settings")
+        XCTAssertEqual(own.label, "Connection timeout", "VoiceOver names the field, not the hint")
     }
 
     @MainActor

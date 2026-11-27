@@ -159,7 +159,8 @@ internal struct MachineFormView: View {
                 text: $draft.timeout,
                 problem: problem(.timeout),
                 focus: $focus,
-                isMono: true
+                isMono: true,
+                label: String(localized: "Connection timeout")
             )
             .keyboardType(.numberPad)
         } header: {

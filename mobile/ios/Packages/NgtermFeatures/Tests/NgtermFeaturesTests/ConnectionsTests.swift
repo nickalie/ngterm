@@ -304,9 +304,10 @@ internal struct ConnectionsTests {
         // connected again as it is: the attachment stays
         await connections.connect(machine).value
         #expect(connections.attached["m1"] == ["s1"])
-        // renamed: the connection and the attachment stay
+        // renamed and given another connect timeout: the connection and the attachment stay
         var renamed = machine
         renamed.label = "build-01 (lab)"
+        renamed.connectTimeoutSecs = 45
         await connections.connect(renamed).value
         #expect(connections.attached["m1"] == ["s1"])
         #expect(calls("detachSession").isEmpty)

@@ -13,6 +13,8 @@ internal struct FormField: View {
     // a newline in it, which the draft trims from either end (as Android's trim()), and one inside a host reads as the
     // space problem
     internal var wraps = false
+    // what VoiceOver names the field, when its title is a hint rather than its name
+    internal var label: String?
 
     internal var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
@@ -21,6 +23,7 @@ internal struct FormField: View {
                 .autocorrectionDisabled()
                 .frame(minHeight: Spacing.hitTarget)
                 .focused(focus, equals: field)
+                .accessibilityLabel(label ?? title)
                 .accessibilityIdentifier("machine-\(field)")
             if let problem {
                 InlineProblem(problem.message)
