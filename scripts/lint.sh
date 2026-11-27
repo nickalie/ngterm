@@ -8,8 +8,9 @@
 # - the cookbook's layout check (scripts/check-cookbook.sh), `node --check` over its *.js and `node --test` over its
 #   *.test.js;
 # - the self-test of every scripts/*.py that has one (`--self-test`), the pre-commit hook's test (it needs cargo and
-#   rustfmt), the Mac runner's test (scripts/test-ios-mac-run.sh: rsync, flock, perl and cargo), the smoke set test and
-#   the emulator stop's test (scripts/test-android-emulator-tests.sh).
+#   rustfmt), the load monitor's test (scripts/test-ci-host-monitor.sh), the Mac runner's test
+#   (scripts/test-ios-mac-run.sh: rsync, flock, perl and cargo), the smoke set test and the emulator stop's test
+#   (scripts/test-android-emulator-tests.sh).
 #
 # Both are the versions packaging/release/pins.env pins: each release archive is downloaded once into the vendor root
 # and unpacked only after its sha256 matches (scripts/lib/fetch-tool.sh). Runs on Linux, x86_64 or aarch64.
@@ -66,6 +67,8 @@ for script in scripts/*.py; do
 done
 echo "test: .githooks/pre-commit"
 scripts/test-pre-commit-hook.sh || status=1
+echo "test: scripts/ci-host-monitor.sh"
+scripts/test-ci-host-monitor.sh || status=1
 echo "test: scripts/ios-mac-run.sh"
 scripts/test-ios-mac-run.sh || status=1
 echo "test: the iOS smoke set"
