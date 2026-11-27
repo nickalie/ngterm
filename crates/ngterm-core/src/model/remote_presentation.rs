@@ -117,7 +117,8 @@ pub enum RemoteConnection {
     /// The origin predates the stream; final for the row, as nothing is ever launched.
     Unsupported,
     Failed(String),
-    /// The origin no longer has the session, so the stream stopped for good.
+    /// The origin no longer has the session, so the stream stopped; it starts again only when a pane of the row attaches
+    /// again through the core.
     Ended,
 }
 

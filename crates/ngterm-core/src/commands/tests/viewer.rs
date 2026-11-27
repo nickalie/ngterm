@@ -1784,7 +1784,7 @@ impl Viewer {
         self.fixture.core.commit();
     }
 
-    /// The row's stream stopped for good: `tree` says so, and its notice promises no retry.
+    /// The row's stream stopped: `tree` says so, and its notice promises no retry.
     fn assert_ended(&mut self) {
         assert_eq!(self.node()["presentation"]["state"], "ended");
         let notice = self
