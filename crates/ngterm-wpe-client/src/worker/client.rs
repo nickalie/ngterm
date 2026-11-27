@@ -255,8 +255,7 @@ impl Outgoing {
                 Err(err) => {
                     tracing::debug!(%err, "the WPE worker's socket closed: commands dropped");
                     // the worker may be dying of a signal: only the reader, past its reap, knows how it ended
-                    self.close();
-                    let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
+                    self.shut();
                 }
             }
         }
@@ -269,13 +268,19 @@ impl Outgoing {
         first
     }
 
-    /// Breaks the transport without waiting for anything: the queue closes, the socket shuts (a writer stuck on it and
-    /// the reader go on, the worker's sends fail), and so do the events, so the app fails the pages at once, even while
-    /// a full event queue holds the reader. The reader then ends as on the worker's death and reaps it. Whether this
-    /// call closed the queue.
-    fn sever(&self) -> bool {
+    /// Closes the queue and shuts the socket (a writer stuck on it and the reader go on, the worker's sends fail), but
+    /// leaves the events to the reader; whether this call closed the queue.
+    fn shut(&self) -> bool {
         let first = self.close();
         let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
+        first
+    }
+
+    /// Breaks the transport without waiting for anything: [`Self::shut`], and the events close too, so the app fails
+    /// the pages at once, even while a full event queue holds the reader. The reader then ends as on the worker's death
+    /// and reaps it. Whether this call closed the queue.
+    fn sever(&self) -> bool {
+        let first = self.shut();
         self.events.close();
         first
     }
@@ -380,7 +385,6 @@ impl Worker {
 /// The app's handle on a running worker.
 pub struct Client {
     outgoing: Outgoing,
-    socket: Arc<OwnedFd>,
     evaluations: Arc<Mutex<Evaluations>>,
     worker: Arc<Worker>,
     /// The pages the app made, shared with the reader.
@@ -676,7 +680,6 @@ impl Client {
         }
         let client = Self {
             outgoing,
-            socket,
             evaluations,
             worker,
             pages,
@@ -791,8 +794,7 @@ impl Client {
             }
         }
         // frees a writer stuck on a worker that stopped reading, and the reader
-        let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
-        self.outgoing.close();
+        self.outgoing.shut();
         self.worker.reap(REAP_GRACE);
         lock(&self.pages).0.clear();
     }
@@ -940,8 +942,7 @@ impl Reader {
         for reply in waiting.into_values() {
             let _ = reply.try_send(Err(ENDED.to_owned()));
         }
-        self.outgoing.close();
-        let _ = rustix::net::shutdown(&*self.socket, Shutdown::Both);
+        self.outgoing.shut();
         // the dmabufs go with the worker
         lock(&self.pages).0.clear();
         let status = self.worker.reap(REAP_GRACE);
