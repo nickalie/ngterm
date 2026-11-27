@@ -338,13 +338,16 @@ def _red_pixels(ui):
 
 
 def _red_reads(ui, accept, description):
+    """The screen's red pixel count once `accept` takes it; a count of 0 is a reading too."""
+
     def check():
         count = _red_pixels(ui)
         assert accept(count), f"{count} red pixels, wanted {description}"
-        return count
+        return (count,)
 
     check.__qualname__ = f"red pixels {description}"
-    return wait_until(check)
+    (count,) = wait_until(check)
+    return count
 
 
 @pytest.mark.covers("ui:htmlOverlay.page")
