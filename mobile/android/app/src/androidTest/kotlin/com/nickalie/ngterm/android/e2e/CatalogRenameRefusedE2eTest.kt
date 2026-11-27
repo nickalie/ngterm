@@ -76,8 +76,8 @@ class CatalogRenameRefusedE2eTest {
         }
 
     private companion object {
-        /** Long enough for the phone to open the dialog and type the new name before the machine closes the row. */
-        const val OPEN_DELAY_S = 8
+        /** Well past the phone's time to open the dialog and type the name, and inside the wait for the row to go. */
+        const val OPEN_DELAY_S = 30
 
         /** The machine's words for a session it does not hold. */
         const val NO_SUCH_SESSION = "no such session"

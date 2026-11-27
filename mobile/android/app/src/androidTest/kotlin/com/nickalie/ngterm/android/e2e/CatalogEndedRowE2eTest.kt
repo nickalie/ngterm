@@ -53,7 +53,9 @@ class CatalogEndedRowE2eTest {
                 "ngtermctl session new --no-select --name $signal >/dev/null\n" +
                     "ngtermctl session new --no-select --name $ending >/dev/null\n" +
                     SHOWS +
-                    "(shows $go && pkill -KILL -fx \"\$(command -v ngterm-session) server \$NGTERM_LIVE_DIR\") " +
+                    // the socket goes first: the kill hangs up this shell, and a server killed by KILL leaves it behind
+                    "(shows $go && rm -f \"\$NGTERM_LIVE_DIR/server.sock\" && " +
+                    "pkill -KILL -f -- \"ngterm-session server \$NGTERM_LIVE_DIR\\\$\") " +
                     ">/dev/null 2>&1 &\n" +
                     "echo catalog-armed\n",
             )

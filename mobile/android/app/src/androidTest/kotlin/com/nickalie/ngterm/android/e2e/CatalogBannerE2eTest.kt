@@ -45,8 +45,9 @@ class CatalogBannerE2eTest {
                     SHOWS +
                     // this run's ngterm-headless alone: the one with this shell's state dir
                     "app() { for p in \$(pgrep -x ngterm-headless); do " +
-                    "grep -qzx \"NGTERM_STATE_DIR=\$NGTERM_STATE_DIR\" /proc/\$p/environ && echo \$p; done; }\n" +
-                    "(shows $cut && pid=\$(app) && kill -STOP \$pid && sleep $HELD_S; kill -CONT \$pid; " +
+                    "grep -qzx \"NGTERM_STATE_DIR=\$NGTERM_STATE_DIR\" /proc/\$p/environ && echo \$p; done; true; }\n" +
+                    "(shows $cut && pid=\$(app) && [ -n \"\$pid\" ] && " +
+                    "kill -STOP \$pid && sleep $HELD_S; kill -CONT \$pid; " +
                     "ngtermctl session new --no-select --name $back) >/dev/null 2>&1 &\n" +
                     "echo catalog-armed\n",
             )
