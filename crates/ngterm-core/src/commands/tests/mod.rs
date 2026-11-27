@@ -64,6 +64,7 @@ mod remote_page_routing;
 mod remote_roles;
 mod remote_split;
 mod remote_text_pages;
+mod remote_window;
 mod replica_page;
 mod respawn;
 mod restart;

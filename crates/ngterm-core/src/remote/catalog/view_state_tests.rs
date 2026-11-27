@@ -1,0 +1,67 @@
+//! A remote window's view state (upstream's `RemoteWindowViewState` cases).
+
+use uuid::Uuid;
+
+use super::{RemoteWindowViewState, SessionView};
+use crate::model::{AppStore, NewSession};
+
+fn split_store() -> (AppStore, Uuid) {
+    let mut store = AppStore::new();
+    let workspace = store.add_workspace("w");
+    let id = store.add_session(workspace, NewSession::at_cwd("/tmp")).unwrap();
+    store.set_split_visibility(id, true, None);
+    (store, id)
+}
+
+#[test]
+fn a_rows_focus_font_and_divider_come_back_on_the_row() {
+    let (mut store, id) = split_store();
+    let session = store.session_mut(id).unwrap();
+    session.split.focused = true;
+    session.split.ratio = Some(0.3);
+    session.font_size = Some(16.0);
+    let view = SessionView::of(session);
+    assert_eq!(view.focused_pane, session.split_pane_identity);
+    session.split.focused = false;
+    session.split.ratio = None;
+    session.font_size = None;
+    view.apply(session);
+    assert!(session.split.focused);
+    assert_eq!(session.split.ratio, Some(0.3));
+    assert_eq!(session.font_size, Some(16.0));
+}
+
+#[test]
+fn a_focused_pane_the_row_no_longer_has_is_ignored() {
+    let (mut store, id) = split_store();
+    let session = store.session_mut(id).unwrap();
+    session.split.focused = true;
+    let view = SessionView {
+        focused_pane: Some(Uuid::new_v4()),
+        ..SessionView::default()
+    };
+    view.apply(session);
+    assert!(!session.split.focused);
+}
+
+#[test]
+fn the_capture_leaves_out_default_rows_and_round_trips_through_its_file() {
+    let (mut store, id) = split_store();
+    let workspace = store.workspaces()[0].id();
+    let plain = store.add_session(workspace, NewSession::at_cwd("/tmp")).unwrap();
+    store.set_font_size(id, 15.0);
+    store.set_workspace_expanded(workspace, false);
+    let state = RemoteWindowViewState::capture(&store);
+    assert_eq!(state.selected_session_id, Some(plain));
+    assert_eq!(state.collapsed_workspaces, vec![workspace]);
+    assert!(state.sessions.contains_key(&id));
+    assert!(!state.sessions.contains_key(&plain));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("remote").join("w.view.json");
+    state.save(&path).unwrap();
+    assert_eq!(RemoteWindowViewState::load(&path), state);
+    assert_eq!(
+        RemoteWindowViewState::load(&dir.path().join("missing")),
+        RemoteWindowViewState::default()
+    );
+}

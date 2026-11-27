@@ -114,6 +114,7 @@ fn entry(window: Uuid, name: &str, is_open: bool) -> WindowEntry {
         id: window,
         name: name.to_owned(),
         is_open,
+        source: None,
     }
 }
 
@@ -1446,4 +1447,61 @@ fn a_session_or_window_removed_for_good_takes_its_rendered_text_along() {
     persistence.commit(&mut library);
     assert!(!open_file.exists());
     assert!(kept_file.exists());
+}
+
+// MARK: - remote windows
+
+#[test]
+fn a_remote_window_is_never_seeded_and_keeps_its_source_across_a_relaunch() -> io::Result<()> {
+    let (dir, mut persistence) = fresh()?;
+    let mut library = persistence.bootstrap(HOME);
+    let (window, created) = library.new_remote_window("me@box");
+    assert!(created);
+    assert_eq!(
+        library.bind_catalog(Uuid::from_u128(7), window),
+        ngterm_core::model::CatalogBinding::Bound
+    );
+    persistence.commit(&mut library);
+    assert!(persistence.save_window(&library, window));
+    assert!(
+        !persistence.window_path(window).exists(),
+        "a remote window writes no snapshot, so recovery cannot take its rows for a local window's"
+    );
+    let index = fs::read_to_string(persistence.index_path())?;
+    assert!(index.contains("\"host\" : \"me@box\""), "{index}");
+    let (_, relaunched) = launch(dir.path());
+    let source = relaunched.remote_source(window).expect("the source");
+    assert_eq!(source.host, "me@box");
+    assert_eq!(source.catalog_id, Some(Uuid::from_u128(7)));
+    assert!(relaunched.is_open(window));
+    assert!(
+        relaunched.store(window).unwrap().workspaces().is_empty(),
+        "its rows come with its catalog"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_remote_windows_view_state_is_saved_only_once_its_catalog_arrived_and_goes_with_the_window() -> io::Result<()> {
+    let (_dir, mut persistence) = fresh()?;
+    let mut library = persistence.bootstrap(HOME);
+    let (window, _) = library.new_remote_window("box");
+    let view = persistence.remote_view_path(window);
+    persistence.save_window(&library, window);
+    assert!(
+        !view.exists(),
+        "a window that has not seen its catalog keeps the state it will apply"
+    );
+    let store = library.store_mut(window).unwrap();
+    let workspace = store.add_workspace("w");
+    let row = store.add_session(workspace, NewSession::at_cwd("/tmp")).unwrap();
+    store.set_font_size(row, 15.0);
+    store.catalog_mirrored = true;
+    assert!(persistence.save_window(&library, window));
+    let saved = ngterm_core::remote::catalog::RemoteWindowViewState::load(&view);
+    assert_eq!(saved.selected_session_id, Some(row));
+    assert_eq!(saved.sessions.get(&row).and_then(|view| view.font_size), Some(15.0));
+    persistence.remove_window(&mut library, window);
+    assert!(!view.exists());
+    Ok(())
 }

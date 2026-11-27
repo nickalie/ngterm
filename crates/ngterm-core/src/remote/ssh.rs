@@ -586,6 +586,38 @@ pub fn catalog_tail(shell: OriginShell) -> String {
     remote_cli_chain(&format!("exec {REMOTE_CLI} {}", shell_quoted_line(&words)))
 }
 
+/// One ssh invocation carrying `host`'s catalog stream for as long as a remote window shows it (upstream's
+/// `catalogCommand`): plain stdio and no lifetime deadline, as [`present_command`] has.
+///
+/// # Errors
+///
+/// A host ssh may not take.
+pub fn catalog_command(host: &str) -> Result<Vec<String>, InvocationError> {
+    validate(host)?;
+    let mut argv = ssh_arguments(host, 5, false);
+    argv.push(catalog_tail(origin::shell_of(host)));
+    Ok(argv)
+}
+
+/// What a remote window's row whose session ended on `host` runs in place of an attach (upstream's `endedCommand`):
+/// a dim line naming the host, held open, so a row this machine has no screen for never starts a local shell. A
+/// `/bin/sh` line on Unix; a Windows viewer's pane runs it as a [`ViewerRun::Held`].
+#[must_use]
+pub fn ended_command(host: &str) -> String {
+    let host = crate::model::naming::sanitized(host);
+    if cfg!(windows) {
+        return ViewerRun::Held {
+            text: format!("\x1b[2mEnded on {host}\x1b[0m\r\n"),
+        }
+        .line();
+    }
+    let line = format!(
+        "printf '\\033[2mEnded on %s\\033[0m\\n' {}; exec cat >/dev/null",
+        shell_quoted_line(&[host.as_str()])
+    );
+    shell_quoted_line(&["/bin/sh", "-c", line.as_str()])
+}
+
 /// `value` quoted as one word that sh, zsh, tcsh and fish all read alike (upstream's `accountShellQuoted`): an
 /// apostrophe or a backslash goes outside the quotes, escaped, since fish treats both specially inside single quotes.
 fn account_shell_quoted(value: &str) -> String {
@@ -928,6 +960,47 @@ mod tests {
         assert_eq!(
             catalog_tail(OriginShell::Windows),
             windows_cli_tail(&["catalog", "subscribe"])
+        );
+    }
+
+    #[test]
+    fn the_catalog_stream_is_one_plain_ssh_to_the_subscribe_tail() {
+        let argv = catalog_command("me@box").unwrap();
+        assert_eq!(argv[0], "ssh");
+        assert!(!argv.contains(&"-tt".to_owned()), "frames travel on plain stdio");
+        assert_eq!(argv.last(), Some(&catalog_tail(OriginShell::Posix)));
+        assert!(catalog_command("").is_err());
+        assert!(catalog_command("-oProxyCommand=x").is_err());
+    }
+
+    /// The ended line a row runs prints the host dimmed and holds until its input ends, starting no shell. Unix only:
+    /// the line is a `/bin/sh` one.
+    #[cfg(unix)]
+    #[test]
+    fn an_ended_row_prints_its_host_and_holds_until_its_input_ends() {
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(ended_command("me@box; rm -rf x"))
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "\x1b[2mEnded on me@box; rm -rf x\x1b[0m\n"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_ended_row_holds_its_line_through_viewer_run() {
+        let line = ended_command("box");
+        let word = line.rsplit(' ').next().unwrap();
+        assert_eq!(
+            ViewerRun::decode(word).unwrap(),
+            ViewerRun::Held {
+                text: "\x1b[2mEnded on box\x1b[0m\r\n".to_owned()
+            }
         );
     }
 

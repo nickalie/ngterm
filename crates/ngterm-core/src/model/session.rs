@@ -305,6 +305,17 @@ pub struct Session {
     /// What this machine keeps about the origin of a session attached from another machine
     /// ([`Session::remote_presentation`]); `None` for a local session. Ephemeral.
     pub(crate) remote_presentation: Option<super::remote_presentation::RemotePresentationState>,
+    /// A remote window's row: the scratch its server runs for the session ([`super::catalog_rows`]), `None` for any
+    /// other row or while the server runs none. Ephemeral.
+    pub catalog_scratch: Option<CatalogScratchMark>,
+}
+
+/// The scratch a remote window's server runs for a row (upstream's `Session.ScratchDaemon`): its pane identity, and
+/// whether the server shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatalogScratchMark {
+    pub identity: Uuid,
+    pub shown: bool,
 }
 
 /// The outcome of resolving a command's `--pane-id` and `--pane` pair (upstream's `Session.PaneAddress`).
@@ -397,6 +408,7 @@ impl Session {
             ask: None,
             remote_overlays: super::remote_overlay::RemoteOverlays::default(),
             remote_presentation: None,
+            catalog_scratch: None,
         }
     }
 

@@ -35,6 +35,7 @@
 
 mod agents;
 pub(crate) mod attach;
+pub mod catalog;
 pub mod client;
 pub mod clipboard;
 mod companion_page;

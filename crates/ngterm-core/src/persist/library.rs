@@ -27,13 +27,14 @@ use uuid::Uuid;
 
 use super::parse_uuid_string;
 use super::recent_closed::RecentClosedStore;
-use super::snapshot::{PersistenceStore, Snapshot, WindowEntry, WindowsIndex};
+use super::snapshot::{PersistenceStore, Snapshot, WindowEntry, WindowSourceEntry, WindowsIndex};
 use crate::model::{
-    AppStore, PendingCloseTimer, RecentClosedChange, SaveRequest, WatermarkRemoval, WindowEvent, WindowInfo,
-    WindowLibrary,
+    AppStore, PendingCloseTimer, RecentClosedChange, RemoteSource, SaveRequest, WatermarkRemoval, WindowEvent,
+    WindowInfo, WindowLibrary,
 };
 use crate::pane_env::uuid_string;
 use crate::persist::settings::FlaggedViewLayout;
+use crate::remote::catalog::RemoteWindowViewState;
 use crate::watermark;
 
 /// The window index's file name in the state directory.
@@ -121,6 +122,15 @@ impl LibraryPersistence {
         self.windows_directory().join(format!("{}.json", uuid_string(id)))
     }
 
+    /// Where remote window `id` keeps its view state (upstream's `remote/<id>.view.json`): never under `windows/`,
+    /// so orphan recovery cannot take it for a local window.
+    #[must_use]
+    pub fn remote_view_path(&self, id: Uuid) -> PathBuf {
+        self.directory
+            .join("remote")
+            .join(format!("{}.view.json", uuid_string(id)))
+    }
+
     fn window_store(&self, id: Uuid) -> PersistenceStore {
         PersistenceStore::new(self.window_path(id))
     }
@@ -193,6 +203,15 @@ impl LibraryPersistence {
                     id: entry.id,
                     name: entry.name.clone(),
                 });
+                if let Some(source) = &entry.source {
+                    library.set_remote_source(
+                        entry.id,
+                        RemoteSource {
+                            host: source.host.clone(),
+                            catalog_id: source.catalog_id,
+                        },
+                    );
+                }
             }
             library.frontmost_window_id = index.frontmost;
             self.reopen(&mut library, &index);
@@ -292,6 +311,12 @@ impl LibraryPersistence {
             return false;
         }
         if library.is_open(id) {
+            return true;
+        }
+        if library.is_remote_window(id) {
+            // a remote window's rows come with its catalog, never from a file
+            let store = library.blank_store();
+            library.open_window(id, store);
             return true;
         }
         let snapshot = self.window_store(id).load();
@@ -464,6 +489,17 @@ impl LibraryPersistence {
     fn write_window(&mut self, library: &WindowLibrary, id: Uuid) -> Option<bool> {
         self.pending.remove(&id);
         let store = library.store(id)?;
+        if library.is_remote_window(id) {
+            // its sessions are its server's: only how it shows them is saved, and nothing before its first catalog
+            if !store.catalog_mirrored {
+                return Some(true);
+            }
+            let saved = RemoteWindowViewState::capture(store).save(&self.remote_view_path(id));
+            if let Err(error) = &saved {
+                tracing::warn!(%error, window = %id, "saving a remote window's view state failed");
+            }
+            return Some(saved.is_ok());
+        }
         match self.window_store(id).save(&store.snapshot()) {
             Ok(()) => {
                 if self.index_unsaved {
@@ -487,6 +523,10 @@ impl LibraryPersistence {
                 id: info.id,
                 name: info.name.clone(),
                 is_open: library.is_open(info.id),
+                source: library.remote_source(info.id).map(|source| WindowSourceEntry {
+                    host: source.host.clone(),
+                    catalog_id: source.catalog_id,
+                }),
             })
             .collect();
         let index = WindowsIndex::new(library.frontmost_window_id, entries);
@@ -555,6 +595,7 @@ impl LibraryPersistence {
         library.remove_window(id);
         // best effort: a window that never wrote its file has nothing to remove
         let _ = fs::remove_file(self.window_path(id));
+        let _ = fs::remove_file(self.remote_view_path(id));
     }
 
     /// Clears every session's font size in every window: open ones live, closed ones by rewriting their file when

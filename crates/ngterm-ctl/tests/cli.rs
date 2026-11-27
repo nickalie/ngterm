@@ -1143,12 +1143,11 @@ fn the_v042_leaves_reach_the_app_and_print_its_refusal() -> TestResult {
     let dir = short_dir()?;
     let socket = dir.path().join("ngterm.sock");
     let _server = serve_core(&socket)?;
-    let leaves: [(&[&str], &str); 6] = [
+    let leaves: [(&[&str], &str); 5] = [
         (&["session", "detach"], "session.detach"),
         (&["session", "reattach", "--target", "ab12"], "session.reattach"),
         (&["workspace", "detach"], "workspace.detach"),
         (&["workspace", "reattach", "--target", "ab12"], "workspace.reattach"),
-        (&["window", "remote", "open", "buildbox"], "window.remote.open"),
         (&["window", "remote", "dismiss"], "window.remote.dismiss"),
     ];
     for (argv, command) in leaves {
@@ -1162,6 +1161,15 @@ fn the_v042_leaves_reach_the_app_and_print_its_refusal() -> TestResult {
             "{argv:?}"
         );
     }
+    // `window remote open` has its handler, which checks the host before any ssh
+    assert_eq!(
+        outcome(&run_on(dir.path(), &socket, &["window", "remote", "open", "a b"])?),
+        (
+            Some(1),
+            String::new(),
+            "error: window.remote.open: not a host ssh can be given\n".to_owned()
+        )
+    );
     // these leaves have their handler, which resolves the session: this core has none active
     for argv in [
         &["session", "overlay", "wrap", "on"][..],

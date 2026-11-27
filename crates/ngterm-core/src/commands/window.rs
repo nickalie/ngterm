@@ -79,7 +79,7 @@ pub(crate) fn window_nodes(core: &Core) -> Vec<ControlWindowNode> {
                 fullscreen: live.map(|state| state.fullscreen),
                 zoomed: live.map(|state| state.zoomed),
                 minimized: live.map(|state| state.minimized.unwrap_or(false)),
-                remote: None,
+                remote: core.remote_window_node(info.id),
             }
         })
         .collect()

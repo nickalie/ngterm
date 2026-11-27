@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use ngterm_host::TextScope;
-use ngterm_proto::command::{BrowserCmd, ConfigCmd, LiveCmd, QuickCmd, SessionCmd};
+use ngterm_proto::command::{BrowserCmd, ConfigCmd, LiveCmd, QuickCmd, SessionCmd, WindowCmd};
 use ngterm_proto::{Args, Command, ControlResult, Request};
 use uuid::Uuid;
 
@@ -127,6 +127,7 @@ pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched>
         Command::Live(LiveCmd::Tree) => Some(crate::remote::begin_tree(core, request)),
         Command::Live(LiveCmd::Attach) => Some(crate::remote::attach::begin_attach(core, request)),
         Command::Live(LiveCmd::AttachGroup) => Some(crate::remote::group_attach::begin(core, request)),
+        Command::Window(WindowCmd::RemoteOpen) => Some(crate::remote::catalog::run::begin_open(core, request)),
         _ => None,
     }
 }

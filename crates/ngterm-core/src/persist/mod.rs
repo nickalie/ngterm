@@ -27,7 +27,7 @@ pub use recent_closed::{
 pub use settings::{AppSettings, RestoreMode, SettingsStore};
 pub use snapshot::{
     PageSlotSnapshot, PageSnapshot, PageSourceSnapshot, PersistenceStore, RemoteSessionSnapshot,
-    SessionContentSnapshot, SessionSnapshot, Snapshot, WindowEntry, WindowsIndex, WorkspaceSnapshot,
+    SessionContentSnapshot, SessionSnapshot, Snapshot, WindowEntry, WindowSourceEntry, WindowsIndex, WorkspaceSnapshot,
 };
 
 /// Decodes an optional field LOSSILY, as upstream's `(try? c.decodeIfPresent(...)) ?? nil`: a present value that does

@@ -73,6 +73,9 @@ pub enum ViewerRun {
         report: String,
         lost: Option<LostLink>,
     },
+    /// `text` on this stdout, then a wait until the input ends, unseen: a remote window's row whose session ended
+    /// there, which holds its line rather than start a shell here. The pane ends with 0.
+    Held { text: String },
 }
 
 impl ViewerRun {
@@ -189,6 +192,7 @@ pub(crate) fn readable(line: &str) -> String {
                 .unwrap_or_default();
             format!("{} {report}{lost}", shell_quoted_line(&attach))
         }
+        Ok(ViewerRun::Held { text }) => text,
         Err(_) => line.to_owned(),
     }
 }

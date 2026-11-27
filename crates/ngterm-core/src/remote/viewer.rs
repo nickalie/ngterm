@@ -126,7 +126,7 @@ struct Probe {
 #[derive(Default)]
 pub(crate) struct ViewerRuntime {
     clients: HashMap<Uuid, PresentationClient>,
-    transport: Option<Rc<dyn PresentationTransport>>,
+    pub(super) transport: Option<Rc<dyn PresentationTransport>>,
     pub(crate) reconnects: ReconnectBook,
     probes: Vec<Probe>,
     replicas: HashMap<Uuid, Vec<ReplicaOverlay>>,
@@ -162,8 +162,10 @@ pub(crate) struct ViewerRuntime {
     pub(super) awaited_split_answers: HashSet<Uuid>,
     /// The HUD slot generation of the refusal panel a forwarded click opened, by session ([`super::link_click`]).
     pub(crate) link_refusal_huds: HashMap<Uuid, u64>,
+    /// The remote windows' connections, by window ([`super::catalog`]).
+    pub(crate) catalogs: HashMap<Uuid, super::catalog::run::CatalogRun>,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.
-    last_client: u64,
+    pub(super) last_client: u64,
 }
 
 impl std::fmt::Debug for ViewerRuntime {
@@ -217,6 +219,9 @@ impl Core {
 
     /// One line, without its newline, a bridge read; commit afterwards.
     pub fn viewer_line(&mut self, key: LinkKey, line: &[u8]) {
+        if self.remote_catalog_line(key, line) {
+            return;
+        }
         let Some(client) = self
             .remote
             .viewer
@@ -233,6 +238,9 @@ impl Core {
     /// A bridge ended with `reason`: a row with every pane held checks whether its origin still has the session
     /// ([`super::ended_rows`]). Commit afterwards.
     pub fn viewer_closed(&mut self, key: LinkKey, reason: &str) {
+        if self.remote_catalog_closed(key, reason) {
+            return;
+        }
         let Some(client) = self
             .remote
             .viewer
@@ -262,6 +270,7 @@ impl Core {
             let effects = client.tick(transport.as_ref(), now);
             self.apply_client_effects(session, effects);
         }
+        self.tick_catalogs(now);
         self.prune_respawn_book();
         self.tick_respawn_watches();
         self.tick_reconnects(now);
@@ -280,7 +289,9 @@ impl Core {
     #[must_use]
     pub fn remote_wake(&self) -> Option<Duration> {
         let viewer = &self.remote.viewer;
-        if !viewer.probes.is_empty()
+        let (catalog_probing, catalogs) = self.catalog_wake();
+        if catalog_probing
+            || !viewer.probes.is_empty()
             || !viewer.attach_flows.is_empty()
             || !viewer.companion_flows.is_empty()
             || !viewer.handed_companions.is_empty()
@@ -298,8 +309,12 @@ impl Core {
         }
         // respawn entries keep it alive so the last row's own prune still runs after that row is gone
         let waiting = self.relaunch_pending().is_some();
-        (waiting || !viewer.clients.is_empty() || !viewer.reconnects.is_empty() || !viewer.respawns.is_empty())
-            .then_some(TICK)
+        (waiting
+            || catalogs
+            || !viewer.clients.is_empty()
+            || !viewer.reconnects.is_empty()
+            || !viewer.respawns.is_empty())
+        .then_some(TICK)
     }
 
     /// Every waiting pane and dropped stream retries now, not on its backoff (upstream's `retryRemoteLinksNow`).
@@ -316,6 +331,7 @@ impl Core {
     /// path).
     pub fn shutdown_remote_presentations(&mut self) {
         self.shutdown_replica_channels();
+        self.shutdown_catalogs();
         for client in self.remote.viewer.clients.values_mut() {
             client.stop();
         }
@@ -439,6 +455,10 @@ impl Core {
         let (Some(host), Some(state)) = (found.remote_host(), found.remote_presentation()) else {
             return;
         };
+        // the server refuses a stream for a session that ended with no scratch running
+        if state.binding.catalog_owned && !found.presents_catalog() {
+            return;
+        }
         let binding = &state.binding;
         let peer = self.remote_row_peer(session, host);
         let Ok(argv) = super::ssh::present_command(host, peer, &binding.remote_session_id) else {

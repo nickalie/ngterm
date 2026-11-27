@@ -469,6 +469,22 @@ pub struct WindowEntry {
     pub id: Uuid,
     pub name: String,
     pub is_open: bool,
+    /// The server a remote window mirrors; absent for a local window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<WindowSourceEntry>,
+}
+
+/// A remote window's server in the index (upstream's `WindowSource`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowSourceEntry {
+    pub host: String,
+    #[serde(
+        default,
+        rename = "catalogID",
+        serialize_with = "upper::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub catalog_id: Option<Uuid>,
 }
 
 /// `windows.json`: the ordered window list and the frontmost window.

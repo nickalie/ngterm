@@ -224,6 +224,9 @@ pub struct AppStore {
     /// The user's home, which a restored file page's grant is checked against ([`crate::html::grant_error`]); set by
     /// the library that builds the store, empty in one built on its own. Not persisted.
     pub(crate) home: String,
+    /// A remote window's store that took its first catalog snapshot: until then its saved view state is kept as it is,
+    /// for the snapshot to apply. Not persisted.
+    pub catalog_mirrored: bool,
 }
 
 impl AppStore {
@@ -1028,7 +1031,7 @@ impl AppStore {
 
     /// One session's hard close: with `recorded`, its Open Recent entry holding those written companions; `None` records
     /// nothing (a companion riding its parent's entry).
-    fn close_one_session(
+    pub(super) fn close_one_session(
         &mut self,
         id: Uuid,
         recorded: Option<Vec<crate::persist::SessionSnapshot>>,

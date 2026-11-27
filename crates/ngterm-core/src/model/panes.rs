@@ -143,6 +143,20 @@ impl AppStore {
         Ok(())
     }
 
+    /// Exchanges session `id`'s two panes whether or not their terminals started (upstream's
+    /// `swapPanes(allowingUnrealized:)`): a remote window follows a swap its server already made.
+    pub(super) fn swap_panes_unrealized(&mut self, id: Uuid) {
+        let Some(session) = self.session_mut(id).filter(|session| session.split.exists) else {
+            return;
+        };
+        let moves_overlay = holds_pane_overlay(session);
+        swap_pane_fields(session);
+        if moves_overlay {
+            self.schedule_tree_changed();
+        }
+        self.save();
+    }
+
     /// Closes the split pane: hides it and tears its terminal down, dropping everything it owned, so a later split
     /// starts a fresh shell at an even ratio (upstream's `closeSplit`).
     pub fn close_split(&mut self, id: Uuid) {
@@ -214,6 +228,13 @@ impl AppStore {
             self.close_session(id);
             return PrimaryPaneExit::Closed;
         }
+        self.promote_split(id)
+    }
+
+    /// Moves session `id`'s split pane into the primary slot, its terminal started or not, dropping the primary's
+    /// (upstream's `promoteSplit`): what a primary exit with a split survivor does, and what a remote window does when
+    /// its server killed the primary.
+    pub(super) fn promote_split(&mut self, id: Uuid) -> PrimaryPaneExit {
         self.dispose_pane_mailbox(id, StatusPane::Left);
         let primary_identity = self.session(id).map(|session| session.pane_identity);
         self.close_hud_owned_by(id, primary_identity);
@@ -366,7 +387,7 @@ impl AppStore {
     }
 
     /// `pane.split`/`pane.scratch` with `shown` or `hidden` (upstream's `emitPaneVisibility`).
-    fn emit_pane_visibility(&mut self, kind: EventKind, id: Uuid, shown: bool) {
+    pub(super) fn emit_pane_visibility(&mut self, kind: EventKind, id: Uuid, shown: bool) {
         let workspace = self.workspace_for_session(id).map(Workspace::id);
         let name = self.session(id).map(Session::display_name);
         let payload = EventPayload {

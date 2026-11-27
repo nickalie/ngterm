@@ -669,6 +669,7 @@ impl Core {
         let rows = crate::remote::row_changes(&events);
         let tree_changed = self.events.record(events);
         self.follow_remote_rows(rows);
+        self.sync_remote_windows();
         self.run_hooks();
         self.refresh_catalog();
         CommitTimers {
@@ -870,6 +871,7 @@ impl Core {
         } else {
             scoped.and_then(|id| self.zoom_target(id)).map(SurfaceId::control_id)
         };
+        tree.remote = scoped.and_then(|id| self.remote_window_node(id));
         commands::dashboard::project(self, scoped, &mut tree);
         crate::auto_follow::project(self, scoped, &mut tree);
         if let Some(slot) = scoped.and_then(|id| self.modals.controller(id)) {
@@ -1023,7 +1025,6 @@ mod tests {
     #[test]
     fn registered_v042_commands_refuse_until_their_feature_handlers_land() {
         for name in [
-            "window.remote.open",
             "window.remote.dismiss",
             "session.detach",
             "session.reattach",

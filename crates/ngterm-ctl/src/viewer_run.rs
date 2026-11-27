@@ -58,6 +58,8 @@ trait Machine {
     fn print(&mut self, text: &str);
     /// Shows `lost`'s bar, then waits until the input ends, unseen.
     fn wait_lost(&mut self, lost: &LostLink);
+    /// Shows `text`, then waits until the input ends, unseen.
+    fn hold(&mut self, text: &str);
 }
 
 /// Carries out `run` and answers with the status the pane ends with.
@@ -73,6 +75,10 @@ fn carry_out(run: &ViewerRun, machine: &mut dyn Machine) -> i32 {
                 _ => machine.print(&format!("{report} {status}\n")),
             }
             status
+        }
+        ViewerRun::Held { text } => {
+            machine.hold(text);
+            0
         }
     }
 }
@@ -131,12 +137,25 @@ impl Machine for Process {
         console::lost_link_modes();
         show_lost(lost, &mut io::stdout().lock(), &mut io::stdin().lock());
     }
+
+    fn hold(&mut self, text: &str) {
+        #[cfg(windows)]
+        console::lost_link_modes();
+        show_held(text, &mut io::stdout().lock(), &mut io::stdin().lock());
+    }
 }
 
 /// Writes `lost`'s bar to `output`, then reads `input` to its end: the app ends the pane to attach it again, so the
 /// end of input is the pane's own end.
 fn show_lost(lost: &LostLink, output: &mut impl Write, input: &mut impl Read) {
     let _ = output.write_all(lost.output().as_bytes());
+    let _ = output.flush();
+    let _ = io::copy(input, &mut io::sink());
+}
+
+/// Writes `text` to `output`, then reads `input` to its end, as [`show_lost`] does.
+fn show_held(text: &str, output: &mut impl Write, input: &mut impl Read) {
+    let _ = output.write_all(text.as_bytes());
     let _ = output.flush();
     let _ = io::copy(input, &mut io::sink());
 }
@@ -195,6 +214,7 @@ mod tests {
         ran: Vec<Vec<String>>,
         printed: String,
         waited: Option<LostLink>,
+        held: Option<String>,
     }
 
     impl Machine for Fake {
@@ -215,6 +235,10 @@ mod tests {
 
         fn wait_lost(&mut self, lost: &LostLink) {
             self.waited = Some(lost.clone());
+        }
+
+        fn hold(&mut self, text: &str) {
+            self.held = Some(text.to_owned());
         }
     }
 
@@ -349,6 +373,22 @@ mod tests {
             input.is_empty(),
             "every key is read, none left for anything after the pane"
         );
+    }
+
+    #[test]
+    fn a_held_line_is_shown_and_the_input_drained_and_the_pane_ends_clean() {
+        let mut fake = Fake::default();
+        let run = ViewerRun::Held {
+            text: "Ended on box\n".to_owned(),
+        };
+        assert_eq!(carry_out(&run, &mut fake), 0);
+        assert_eq!(fake.held.as_deref(), Some("Ended on box\n"));
+        assert!(fake.ran.is_empty(), "nothing runs: the line is all the pane shows");
+        let mut output = Vec::new();
+        let mut input: &[u8] = b"any keys";
+        show_held("Ended on box\n", &mut output, &mut input);
+        assert_eq!(output, b"Ended on box\n");
+        assert!(input.is_empty());
     }
 
     /// The real machine: what a program printed when it succeeded, nothing when it failed or could not start.

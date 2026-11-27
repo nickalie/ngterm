@@ -68,6 +68,10 @@ fn ended_row(row: &Session, streams: bool) -> Option<(String, String, Ending)> {
     };
     let host = row.remote_host()?;
     let state = row.remote_presentation()?;
+    // a remote window's row ends only with its catalog's word
+    if state.binding.catalog_owned {
+        return None;
+    }
     Some((host.to_owned(), state.binding.remote_session_id.clone(), ending))
 }
 

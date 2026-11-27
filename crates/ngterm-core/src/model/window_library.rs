@@ -71,7 +71,7 @@ pub struct WindowLibrary {
     default_shell_profile: Option<crate::shell_profiles::ShellProfile>,
     /// The app-global, in-memory pane mailboxes, shared with every open store.
     pub(crate) messages: crate::messages::MessageBus,
-    windows: Vec<WindowInfo>,
+    pub(super) windows: Vec<WindowInfo>,
     stores: HashMap<Uuid, AppStore>,
     /// The id of the frontmost on-screen window. Outlives the window only when it was the last one closed, so the
     /// index records which window the user exited from; [`WindowLibrary::active_window_id`] resolves it to an open one.
@@ -83,7 +83,7 @@ pub struct WindowLibrary {
     /// Library-level events (retired windows' outboxes, window renames and removals) waiting for the next drain,
     /// each with its place in the app-wide emission order.
     pending_events: Vec<(u64, WindowEvent)>,
-    index_dirty: bool,
+    pub(super) index_dirty: bool,
     /// Open Recent, newest first (upstream's `recentClosedItems`), shared with every open store.
     recent_closed: RecentClosedList,
     /// Open Recent changes the library itself made, and those of retired stores, with their emission places.
@@ -98,6 +98,10 @@ pub struct WindowLibrary {
     pending_remote_overlay_changes: Vec<super::remote_overlay::RemoteOverlayChange>,
     /// The app-wide flagged layout, copied onto every store as it is made, before its restore picks a selection.
     flagged_layout: FlaggedViewLayout,
+    /// The server each remote window mirrors ([`super::remote_windows`]). Persisted in the index.
+    pub(super) remote_sources: HashMap<Uuid, super::remote_windows::RemoteSource>,
+    /// A just-opened remote window whose server another window already shows, and that window.
+    pub(super) remote_duplicates: HashMap<Uuid, Uuid>,
 }
 
 impl WindowLibrary {
@@ -518,6 +522,8 @@ impl WindowLibrary {
         }
         self.push_library_event(id, ModelEvent::bare(ngterm_proto::EventKind::TreeChanged));
         self.windows.remove(index);
+        self.remote_sources.remove(&id);
+        self.remote_duplicates.remove(&id);
         if self.frontmost_window_id == Some(id) {
             self.frontmost_window_id = None;
         }

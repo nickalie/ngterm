@@ -7,6 +7,7 @@
 mod ask;
 mod ask_form;
 mod background;
+mod catalog_rows;
 mod companions;
 mod duplicate;
 mod flagged_order;
@@ -30,6 +31,7 @@ mod recent_closed;
 mod remote_companions;
 mod remote_overlay;
 mod remote_presentation;
+mod remote_windows;
 mod restore;
 mod saved_remote_rows;
 mod search;
@@ -52,6 +54,7 @@ pub use ask_form::{AskChoiceForm, AskDraft, AskForm, AskInputForm, AskInputMode,
 pub use background::{
     BackdropWashRegion, BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition,
 };
+pub use catalog_rows::{CatalogRowCommands, CatalogRowContext};
 pub use companions::{
     CompanionOptions, CompanionRefusal, CompanionState, ConvertRefusal, PageCompanionOptions, PrimaryPaneExit,
     RESPAWN_MINIMUM_UPTIME, SessionContent,
@@ -83,9 +86,11 @@ pub use remote_companions::{RemoteCompanionPlace, ReplicaPageRefusal, ReplicaPag
 pub(crate) use remote_overlay::HandedOn;
 pub use remote_overlay::{RemoteOverlayChange, RemoteOverlayOutcome, RemoteOverlaySlot, RemoteOverlays, RemotePage};
 pub use remote_presentation::{RemoteBinding, RemoteConnection, RemoteOrigin, RemotePresentationState};
+pub use remote_windows::{CatalogBinding, RemoteSource};
 pub use search::{SearchFollowUp, SearchReport, SearchState};
 pub use session::{
-    AgentIndicator, AgentStatus, CONTEXT_BYTE_LIMIT, PaneAddress, Session, SessionSeed, validate_context,
+    AgentIndicator, AgentStatus, CONTEXT_BYTE_LIMIT, CatalogScratchMark, PaneAddress, Session, SessionSeed,
+    validate_context,
 };
 pub use session_moves::MoveTree;
 pub use sidebar_search::{SearchHit, SidebarSearch, match_range};
