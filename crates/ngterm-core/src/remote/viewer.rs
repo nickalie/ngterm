@@ -1013,6 +1013,13 @@ impl Core {
     /// `waitToReconnect`): only the pane's current attachment is believed, and only an origin that reported a role
     /// before (or a reconnect still waiting for its first report) covers the fresh attach. Whether it was taken.
     pub(crate) fn remote_link_lost(&mut self, session: Uuid, token: &str, notice: &RemoteLinkNotice) -> bool {
+        let scratch = self
+            .library()
+            .held_session(session)
+            .is_some_and(|found| found.pane_role_for_token(token) == Some(StatusPane::Scratch));
+        if scratch && self.catalog_scratch_stopped(session) {
+            return true;
+        }
         let Ok(pane) = Uuid::parse_str(token) else {
             return false;
         };
@@ -1086,6 +1093,10 @@ impl Core {
         if !self.waiting_surface(pane, entry.session) {
             return;
         }
+        if self.is_catalog_scratch(entry.session, pane) {
+            self.replace_scratch_attachment(entry.session, pane);
+            return;
+        }
         // a row hidden for undo keeps waiting; finalizing its close lets the next due probe drop it
         let shown = self.library().store_for_session(entry.session).is_some();
         if shown && self.reattach_remote_pane(entry.session, pane, LeadAttachment::new(false), entry.cover) {
@@ -1100,10 +1111,23 @@ impl Core {
     /// Whether the pane `pane` of session `session` still has its terminal, its row in a window or a pending close.
     fn waiting_surface(&self, pane: Uuid, session: Uuid) -> bool {
         let library = self.library();
+        if self.is_catalog_scratch(session, pane) {
+            return library
+                .held_session(session)
+                .is_some_and(|found| found.scratch_surface.is_present());
+        }
         library
             .held_session(session)
             .and_then(|found| found.pane_role_for_identity(pane).map(|role| (found, role)))
             .is_some_and(|(found, role)| found.overlay_pane_slot(role).is_present())
+    }
+
+    /// Whether `pane` is the server scratch of remote window row `session`.
+    fn is_catalog_scratch(&self, session: Uuid, pane: Uuid) -> bool {
+        self.library()
+            .held_session(session)
+            .and_then(|found| found.catalog_scratch)
+            .is_some_and(|mark| mark.identity == pane)
     }
 
     /// Replaces the remote replica `pane` of session `session` with a fresh ssh attach of its daemon under `lead`

@@ -37,9 +37,9 @@ pub enum PaneReport {
 impl Core {
     /// The shell of the pane carrying `token` exited (upstream's per-pane `onExit`): the primary's promotes a split
     /// survivor, the split pane's collapses the split, and the last pane's respawns a parent with companions or closes
-    /// the session (`Core::close_exited_pane`); the scratch's closes the scratch. A token no pane of the session
-    /// carries any more (the terminal was replaced or torn down meanwhile) changes nothing. Whether it changed
-    /// anything; commit afterwards when it did.
+    /// the session (`Core::close_exited_pane`); the scratch's closes the scratch, except a remote window's, which waits
+    /// to attach again (`Core::catalog_scratch_stopped`). A token no pane of the session carries any more (the terminal
+    /// was replaced or torn down meanwhile) changes nothing. Whether it changed anything; commit afterwards when it did.
     pub fn pane_exited(&mut self, session: Uuid, token: &str) -> bool {
         self.pane_exited_at(session, token, Instant::now())
     }
@@ -53,15 +53,23 @@ impl Core {
             }
             return false;
         }
-        let Some(store) = self.library_mut().store_for_session_mut(session) else {
-            return false;
-        };
-        match store
-            .session(session)
-            .and_then(|found| found.pane_role_for_token(token))
-        {
+        let role = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+            .and_then(|found| found.pane_role_for_token(token));
+        match role {
             Some(role @ (StatusPane::Left | StatusPane::Right)) => self.close_exited_pane(session, role, now),
-            Some(StatusPane::Scratch) => return store.close_scratch(session, true),
+            Some(StatusPane::Scratch) => {
+                // a remote window's scratch is its server's: a stopped attach keeps its screen until it reconnects
+                if self.catalog_scratch_stopped(session) {
+                    return true;
+                }
+                return self
+                    .library_mut()
+                    .store_for_session_mut(session)
+                    .is_some_and(|store| store.close_scratch(session, true));
+            }
             None => return false,
         }
         true

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::companions::SessionContent;
 use super::naming::{sanitized, trimmed_or_none};
-use super::pane::SplitAxis;
+use super::pane::{SplitAxis, StatusPane};
 use super::remote_presentation::{RemoteBinding, RemoteOrigin, RemotePresentationState};
 use super::session::{CatalogScratchMark, Session, SessionSeed};
 use super::store::AppStore;
@@ -430,6 +430,19 @@ impl AppStore {
         {
             self.toggle_scratch(id, true);
         }
+    }
+
+    /// Drops row `id`'s scratch terminal, whose attach ended without the scratch's own close, so the frontend builds the
+    /// next one from `command` (upstream's `replaceScratchSurface`); the scratch stays shown or hidden as it was.
+    pub fn replace_scratch_surface(&mut self, id: Uuid, command: String) {
+        let Some(session) = self.session_mut(id) else {
+            return;
+        };
+        if session.search.owner == Some(StatusPane::Scratch) {
+            session.search.clear();
+        }
+        session.scratch_surface.teardown();
+        session.scratch_command = Some(command);
     }
 
     /// Removes row `id` because its server no longer has the session: no Open Recent entry, and nothing ends on the

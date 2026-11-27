@@ -871,6 +871,58 @@ fn a_shown_server_scratch_attaches_and_a_gone_one_closes() {
     assert!(row.scratch_command.is_none());
 }
 
+/// Upstream's `catalogScratchStopped` and `replaceScratchAttachment`: the attach can start before the server's scratch
+/// daemon does, and its end must not hide the server's scratch here.
+#[test]
+fn a_server_scratch_whose_attach_ends_stays_shown_and_attaches_again() {
+    let mut remote = Remote::opened(&server_version());
+    let a = session("a");
+    remote.snapshot(snapshot(vec![workspace(Uuid::new_v4(), "w", vec![a.clone()])]));
+    let scratch = pane();
+    let mut shown = a.fields.clone();
+    shown.scratch = Some(CatalogScratch {
+        pane: scratch.clone(),
+        shown: true,
+    });
+    remote.delta(1, CatalogChange::SessionChanged(shown));
+    let token = wire(Uuid::new_v4());
+    let row = remote
+        .fixture
+        .core
+        .library_mut()
+        .store_mut(remote.window)
+        .unwrap()
+        .session_mut(a.id())
+        .unwrap();
+    row.scratch_command = None;
+    row.scratch_surface
+        .replace(Box::new(ngterm_host::fakes::FakeSurface::new(token.clone())));
+
+    assert!(remote.fixture.core.pane_exited(a.id(), &token));
+    remote.fixture.core.commit();
+    let row = remote.row(a.id());
+    assert!(row.scratch_active, "the server's scratch stays shown");
+    assert!(
+        row.scratch_surface.is_present(),
+        "its screen stays until it attaches again"
+    );
+    assert_eq!(remote.tree()["workspaces"][0]["sessions"][0]["scratch"], json!(true));
+
+    for _ in 0..400 {
+        remote.fixture.core.remote_tick(Instant::now());
+        remote.fixture.core.commit();
+        if remote.row(a.id()).scratch_command.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let row = remote.row(a.id());
+    assert!(row.scratch_active);
+    assert!(!row.scratch_surface.is_present(), "the stopped attach is replaced");
+    let command = readable(row.scratch_command.as_deref().expect("a fresh attach"));
+    assert!(command.contains(&scratch.daemon), "{command}");
+}
+
 #[test]
 fn an_ended_row_with_a_running_scratch_keeps_its_presentation() {
     let mut remote = Remote::opened(&server_version());

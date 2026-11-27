@@ -523,6 +523,62 @@ impl Core {
         self.follow_remote_rows(streams);
     }
 
+    /// Parks row `session`'s remote window scratch whose current attach ended while the catalog still lists it (upstream's
+    /// `catalogScratchStopped`): its screen and shown state stay, and the next answered probe attaches it again. False
+    /// for any other scratch, which keeps its own close.
+    pub(crate) fn catalog_scratch_stopped(&mut self, session: Uuid) -> bool {
+        let Some(found) = self.library.held_session(session) else {
+            return false;
+        };
+        let Some(mark) = found.catalog_scratch else {
+            return false;
+        };
+        let host = found.remote_host().map(str::to_owned);
+        let listed = self.listed_scratch(session).map(|(pane, _)| pane.identity);
+        if let Some(host) = host.filter(|_| found.scratch_surface.is_present() && listed == Some(mark.identity)) {
+            let now = (self.remote.clock)();
+            self.remote
+                .viewer
+                .reconnects
+                .wait(mark.identity, session, &host, false, now);
+        }
+        true
+    }
+
+    /// Swaps row `session`'s stopped scratch attach for a fresh one of `pane` (upstream's `replaceScratchAttachment`),
+    /// the scratch left shown or hidden as the catalog has it. False once the catalog changed that scratch.
+    pub(crate) fn replace_scratch_attachment(&mut self, session: Uuid, pane: Uuid) -> bool {
+        let Some((listed, host)) = self
+            .listed_scratch(session)
+            .filter(|(listed, _)| listed.identity == pane)
+        else {
+            return false;
+        };
+        let Some(store) = self.library.store_for_session_mut(session) else {
+            return false;
+        };
+        let attached = store.session(session).is_some_and(|row| {
+            row.scratch_surface.is_present() && row.catalog_scratch.is_some_and(|mark| mark.identity == pane)
+        });
+        if !attached {
+            return false;
+        }
+        let mut commands = RowCommands {
+            host: &host,
+            leads: Vec::new(),
+        };
+        store.replace_scratch_surface(session, commands.scratch(&listed));
+        true
+    }
+
+    /// The scratch the catalog of row `session`'s remote window lists for it, with that window's host.
+    fn listed_scratch(&self, session: Uuid) -> Option<(CatalogPane, String)> {
+        let window = self.library.window_id_for_session(session)?;
+        let stream = &self.remote.viewer.catalogs.get(&window)?.stream;
+        let scratch = stream.catalog()?.session(session)?.fields.scratch.as_ref()?;
+        Some((scratch.pane.clone(), stream.host().to_owned()))
+    }
+
     /// The `remote` node of window `window`, `None` for a local one: its server, catalog and connection, the
     /// connection absent while the window is closed.
     pub(crate) fn remote_window_node(&self, window: Uuid) -> Option<ControlRemoteWindow> {
