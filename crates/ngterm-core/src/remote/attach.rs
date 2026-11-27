@@ -53,6 +53,8 @@ const HINT_SECONDS: f64 = 12.0;
 /// What the panels of an attach are headed by.
 const ATTACH_REMOTE: &str = "Attach Remote";
 
+pub(crate) const SHOWN_OUTSIDE_GROUP: &str = "shown here in a row outside this group";
+
 /// Starts reading `host`'s attachable sessions off the main thread.
 ///
 /// # Errors
@@ -252,6 +254,28 @@ impl Core {
             parent: parent.map(uuid_string),
             ..ControlResult::id(uuid_string(row))
         }
+    }
+
+    /// Attaches `remote` as a companion of `placement`'s parent: a row outside that group that already shows it
+    /// refuses, as that row cannot also be the parent's member.
+    pub(crate) fn attach_remote_companion(
+        &mut self,
+        remote: &ControlRemoteSession,
+        remote_tree: &ControlRemoteTree,
+        host: &str,
+        placement: Placement,
+    ) -> Outcome {
+        if let Some(&row) = self.rows_attached_from(host, &remote_tree.endpoint).get(&remote.id) {
+            let parent = self
+                .library()
+                .store_for_session(row)
+                .and_then(|store| store.session(row))
+                .and_then(Session::parent_id);
+            if parent != placement.parent {
+                return Err(ControlError::rejected(SHOWN_OUTSIDE_GROUP));
+            }
+        }
+        self.attach_remote_session(remote, remote_tree, host, placement)
     }
 
     /// Creates the local row for `remote`, one session of `remote_tree`, where `placement` says, and binds its panes

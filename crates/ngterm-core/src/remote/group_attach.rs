@@ -235,7 +235,7 @@ fn next_member(core: &mut Core, host: &str, attached: &mut Attached) -> Option<P
             Err(reason) => Err(reason),
         }
     } else {
-        core.attach_remote_session(row, &attached.tree, host, placement)
+        core.attach_remote_companion(row, &attached.tree, host, placement)
             .map_err(|error| error.to_string())
     };
     attached.record(outcome);

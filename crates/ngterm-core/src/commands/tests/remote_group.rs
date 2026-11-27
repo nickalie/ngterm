@@ -363,6 +363,35 @@ fn attaching_a_shown_group_again_answers_with_its_rows() {
     assert_eq!(group.origins(group.parent()), ["c1", "c2"]);
 }
 
+/// A companion a row outside the group already shows is named as not attached, not counted as the parent's member.
+#[test]
+fn a_member_shown_outside_its_group_is_named_not_attached() {
+    let listing = || tree(&[parent(Some(&["c1"])), terminal("c1", Some("P"))]);
+    let mut group = Group::new(vec![listing(), listing()]);
+    let alone = group.request(LiveCmd::Attach, "c1", args(|a| a.host = Some("buildbox".to_owned())));
+    assert!(alone.ok, "{alone:?}");
+    let rows = group.fixture.store().sessions().count();
+
+    let reply = group.attach();
+
+    assert!(!reply.ok, "{reply:?}");
+    let row = receipt(&reply).id.unwrap();
+    assert_eq!(
+        reply.error,
+        Some(format!(
+            "kept build ({row}) and 0 companion(s); not attached: c1-name (shown here in a row outside this group)"
+        ))
+    );
+    let members = receipt(&reply).remote_group.unwrap().companions;
+    assert_eq!(members[0].id, None);
+    assert!(group.origins(group.parent()).is_empty());
+    assert_eq!(
+        group.fixture.store().sessions().count(),
+        rows + 1,
+        "only the parent's row is new"
+    );
+}
+
 #[test]
 fn a_known_empty_group_is_one_row_and_ok() {
     let mut group = Group::new(vec![tree(&[parent(Some(&[]))])]);

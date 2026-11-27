@@ -594,7 +594,7 @@ impl Core {
     ) -> Result<ControlResult, String> {
         let placement = Placement::under(self.library(), flow.parent, flow.select).ok_or(PARENT_CLOSED)?;
         let attached = self
-            .attach_remote_session(remote, tree, &flow.host, placement)
+            .attach_remote_companion(remote, tree, &flow.host, placement)
             .map_err(|error| error.to_string())?;
         if let Some(tint) = flow.request.tint()
             && let Some(id) = attached.id.as_deref().and_then(frames::parse_uuid)

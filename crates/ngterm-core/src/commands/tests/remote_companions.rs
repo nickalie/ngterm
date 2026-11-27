@@ -332,6 +332,38 @@ fn a_companion_the_hook_attached_first_is_answered_with_its_row() {
     assert_eq!(row.tint.map(SidebarTint::color), Some(TintColor::Red.into()));
 }
 
+/// A companion the hook attached outside the parent's group stays as it is: New Companion refuses and tints nothing.
+#[test]
+fn a_companion_the_hook_attached_outside_the_group_is_refused() {
+    let mut remote = Remote::new(vec![origin(), reply(CREATED), tree(&[session(CREATED)])]);
+    let workspace = remote.fixture.workspace;
+    let store = remote.fixture.store_mut().unwrap();
+    let spec = NewSession {
+        remote_host: Some("buildbox".to_owned()),
+        ..NewSession::at_cwd("/home/u")
+    };
+    let hooked = store.add_session(workspace, spec).unwrap();
+    let origin = RemoteOrigin {
+        host: "buildbox".to_owned(),
+        endpoint: serde_json::from_value(endpoint()).unwrap(),
+        session_name: "c".to_owned(),
+    };
+    store.bind_remote(RemoteBinding::new(CREATED, HashMap::new(), None, Some(origin)), hooked);
+    remote.fixture.core.commit();
+
+    let response = remote.new_companion(|a| a.tint = Some("red".to_owned()));
+
+    assert_eq!(
+        error(&response),
+        format!(
+            "created companion {CREATED} on buildbox but could not attach it: shown here in a row outside this group; \
+             `ngtermctl live attach buildbox {CREATED}` attaches it"
+        )
+    );
+    assert!(remote.companions().is_empty());
+    assert_eq!(remote.fixture.store().session(hooked).unwrap().tint, None);
+}
+
 #[test]
 fn duplicate_as_companion_on_a_remote_row_asks_the_origin_to_duplicate() {
     let mut remote = Remote::new(vec![origin(), reply(CREATED), tree(&[session(CREATED)])]);
