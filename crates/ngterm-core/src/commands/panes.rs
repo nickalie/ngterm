@@ -78,7 +78,8 @@ impl Core {
     /// The live session of the pane carrying `token` was lost, or its terminal could not start, rather than its shell
     /// exiting (upstream's `PaneObserver.settle`): beside a live pane of the session it ends that pane alone, as an
     /// exit does; as the session's last pane it marks the session ended ([`AppStore::mark_session_ended`]), never
-    /// closing or respawning it. The scratch's closes the scratch. Whether it changed anything.
+    /// closing or respawning it. The scratch's runs as its exit does ([`Core::pane_exited`]). Whether it changed
+    /// anything.
     ///
     /// [`AppStore::mark_session_ended`]: crate::model::AppStore::mark_session_ended
     pub fn pane_lost(&mut self, session: Uuid, token: &str) -> bool {

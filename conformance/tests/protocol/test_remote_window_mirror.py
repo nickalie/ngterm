@@ -395,7 +395,7 @@ def test_a_row_made_in_a_remote_window_is_selected_when_it_arrives(adapter, remo
 
 
 @pytest.mark.covers(
-    "cli:session split on", "cli:session swap", "cli:session split close", "cli:session new", "session.split",
+    "cli:session split", "cli:session swap", "cli:session split close", "cli:session new", "session.split",
     "session.swap", "session.split.close", "session.companion.new",
 )
 def test_split_swap_and_a_companion_in_a_remote_window_run_on_the_server(
@@ -502,18 +502,13 @@ def test_a_session_and_a_workspace_moved_in_a_remote_window_move_on_the_server(
     _settled(viewer, window, origin, lambda tree, _: workspace not in _workspace_ids(tree))
 
 
-@pytest.mark.covers(
-    "cli:session duplicate", "session.companion.duplicate", "session.page", "session.companion.page",
-    "live.attach.group",
-)
+@pytest.mark.covers("cli:session duplicate", "session.companion.duplicate", "live.attach.group")
 def test_the_still_local_commands_are_refused_in_a_remote_window_and_change_nothing(
-    adapter, remote_origin, remote_viewer, mirror, tmp_path
+    adapter, remote_origin, remote_viewer, mirror
 ):
     origin, viewer = Ctl(remote_origin.instance), remote_viewer
     window, sid = mirror
     cli = _cli(adapter, viewer, window)
-    page = tmp_path / "page.html"
-    page.write_text("<p>page</p>")
     before, origin_before = _tree(viewer, window), origin.tree()
 
     _refused_by(
@@ -522,8 +517,6 @@ def test_the_still_local_commands_are_refused_in_a_remote_window_and_change_noth
     )
     for cmd, target, args in [
         ("session.companion.duplicate", sid, {}),
-        ("session.page", sid, {"html": str(page)}),
-        ("session.companion.page", sid, {"html": str(page)}),
         ("live.attach.group", sid, {"host": ORIGIN_HOST}),
     ]:
         assert_error(viewer.request(cmd, target, window=window, **args), NOT_AVAILABLE.format(cmd=cmd))

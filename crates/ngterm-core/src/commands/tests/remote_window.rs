@@ -875,6 +875,19 @@ fn a_shown_server_scratch_attaches_and_a_gone_one_closes() {
 /// daemon does, and its end must not hide the server's scratch here.
 #[test]
 fn a_server_scratch_whose_attach_ends_stays_shown_and_attaches_again() {
+    a_stopped_server_scratch_stays_shown_and_attaches_again(crate::Core::pane_exited);
+}
+
+/// Upstream's `PaneLead.linkLost` parks a scratch before it checks the notice's nonce.
+#[test]
+fn a_server_scratch_whose_link_is_lost_stays_shown_and_attaches_again() {
+    a_stopped_server_scratch_stays_shown_and_attaches_again(|core, session, token| {
+        let lost = crate::PaneReport::Title(crate::remote::reconnect::RemoteLinkNotice::title("any"));
+        core.report_pane(session, token, &lost)
+    });
+}
+
+fn a_stopped_server_scratch_stays_shown_and_attaches_again(stop: impl FnOnce(&mut crate::Core, Uuid, &str) -> bool) {
     let mut remote = Remote::opened(&server_version());
     let a = session("a");
     remote.snapshot(snapshot(vec![workspace(Uuid::new_v4(), "w", vec![a.clone()])]));
@@ -898,7 +911,7 @@ fn a_server_scratch_whose_attach_ends_stays_shown_and_attaches_again() {
     row.scratch_surface
         .replace(Box::new(ngterm_host::fakes::FakeSurface::new(token.clone())));
 
-    assert!(remote.fixture.core.pane_exited(a.id(), &token));
+    assert!(stop(&mut remote.fixture.core, a.id(), &token));
     remote.fixture.core.commit();
     let row = remote.row(a.id());
     assert!(row.scratch_active, "the server's scratch stays shown");
