@@ -93,7 +93,6 @@ def test_help_lists_the_v042_subcommands_and_options(cli):
         pytest.param(["workspace", "detach"], "workspace.detach", id="workspace-detach"),
         pytest.param(["workspace", "reattach", "--target", "WORKSPACE"], "workspace.reattach",
                      id="workspace-reattach"),
-        pytest.param(["window", "remote", "dismiss"], "window.remote.dismiss", id="window-remote-dismiss"),
     ],
 )
 def test_a_command_registered_ahead_of_its_feature_is_refused_by_name(cli, ctl, row, argv, command):

@@ -1,8 +1,10 @@
 """A remote window that mirrors the catalog of a real `ngterm-headless` (`remote_origin`, behind the harness's own sshd
 on loopback): the window's `remote` node goes `connected` with the server's sessions as its rows, a session made,
 renamed or closed on the server shows in the mirror, a server that stops answering shows `disconnected` and the window
-connects again once it answers, a second open of the server answers the window that already shows it, and a command
-that makes or changes rows is refused in the remote window while it runs as before in a local one.
+connects again once it answers, and a second open of the server answers the window that already shows it. A command
+that makes or changes rows in the remote window runs on the server, and the window shows its outcome once the catalog
+brings it; a command that would make a shell or a row on this machine is refused there, and every one of them runs as
+before in a local window.
 
 The remote window is upstream's v0.42.0 feature, and test_remote_window.py keeps its since("0.42.0") cases. These cases
 need a Live origin in any login shell, which only the Rust build claims (`live-any-shell`), so the reference skips them.
@@ -172,54 +174,96 @@ def test_a_host_ssh_cannot_be_given_opens_no_window(remote_viewer, mirror, host)
     assert window_ids(viewer.request("window.list")) == before
 
 
-def _row_requests(sid, workspace):
-    return [
-        ("session.new", None, {}),
-        ("session.rename", sid, {"name": "renamed-here"}),
-        ("session.close", sid, {}),
-        ("session.split", sid, {"mode": "on"}),
-        ("session.duplicate", sid, {}),
-        ("workspace.new", None, {"name": "made-here"}),
-        ("workspace.rename", workspace, {"name": "renamed-here"}),
-    ]
+def _workspace_names(tree):
+    return [node["name"] for node in tree["tree"]["workspaces"]]
+
+
+def _settled(viewer, window, origin, check):
+    """The remote window's tree once `check(tree, origin_tree)` holds, no row reading back `pending`."""
+
+    def ready():
+        tree, origin_tree = _tree(viewer, window), origin.tree()
+        rows = [row for workspace in tree["tree"]["workspaces"] for row in workspace["sessions"]]
+        return check(tree, origin_tree) and not any("pending" in row for row in rows) and tree
+
+    return wait_until(ready, timeout=CONNECT)
 
 
 @pytest.mark.covers(
-    "session.new", "session.rename", "session.close", "session.split", "session.duplicate", "workspace.new",
-    "workspace.rename",
+    "session.new", "session.rename", "session.split", "session.duplicate", "session.close", "workspace.new",
+    "workspace.rename", "workspace.delete", "tree", "field:tree.session.pending", "field:window.remote",
 )
-def test_a_row_command_in_a_remote_window_is_refused_and_changes_nothing(remote_origin, remote_viewer, mirror):
+def test_a_row_command_in_a_remote_window_runs_on_the_server(remote_origin, remote_viewer, mirror):
     origin, viewer = Ctl(remote_origin.instance), remote_viewer
-    window, sid = mirror
+    window, _ = mirror
     assert_ok(viewer.request("window.select", window))
-    before, origin_before = _tree(viewer, window), origin.tree()
-    workspace = before["tree"]["workspaces"][0]["id"]
-    for cmd, target, args in _row_requests(sid, workspace):
-        assert_error(viewer.request(cmd, target, window=window, **args), NOT_AVAILABLE.format(cmd=cmd))
-    assert_error(viewer.request("session.new"), NOT_AVAILABLE.format(cmd="session.new"))
-    after = _tree(viewer, window)
-    assert session_ids(after) == session_ids(before)
-    assert find_session(after, sid)["name"] == find_session(before, sid)["name"]
-    assert find_session(after, sid).get("hasSplit") == find_session(before, sid).get("hasSplit")
-    assert [node["name"] for node in after["tree"]["workspaces"]] == [
-        node["name"] for node in before["tree"]["workspaces"]
-    ]
-    assert session_ids(origin.tree()) == session_ids(origin_before)
+    made = assert_ok(viewer.request("session.new", window=window, name="made-here"))["id"]
+    copy = None
+    workspace = None
+    try:
+        assert made in session_ids(origin.tree())
+        _settled(viewer, window, origin, lambda tree, _: made in session_ids(tree))
+
+        assert_ok(viewer.request("session.rename", made, name="-renamed-here"))
+        assert_ok(viewer.request("session.split", made, mode="on"))
+        tree = _settled(
+            viewer, window, origin,
+            lambda tree, served: find_session(served, made)["name"] == "-renamed-here"
+            and find_session(served, made).get("hasSplit") is True
+            and find_session(tree, made)["name"] == "-renamed-here"
+            and find_session(tree, made).get("hasSplit") is True,
+        )
+        assert tree["tree"]["remote"]["state"] == "connected"
+        assert "operations" not in tree["tree"]["remote"], tree["tree"]["remote"]
+
+        copy = assert_ok(viewer.request("session.duplicate", made))["id"]
+        workspace = assert_ok(viewer.request("workspace.new", window=window, name="made-here"))["id"]
+        assert_ok(viewer.request("workspace.rename", workspace, name="renamed-here"))
+        _settled(
+            viewer, window, origin,
+            lambda tree, served: copy in session_ids(tree) and copy in session_ids(served)
+            and "renamed-here" in _workspace_names(tree) and "renamed-here" in _workspace_names(served),
+        )
+    finally:
+        for closed in (copy, made):
+            if closed:
+                assert_ok(viewer.request("session.close", closed, window=window))
+        if workspace:
+            assert_ok(viewer.request("workspace.delete", workspace, window=window))
+    _settled(
+        viewer, window, origin,
+        lambda tree, served: made not in session_ids(served) and copy not in session_ids(served)
+        and made not in session_ids(tree) and copy not in session_ids(tree)
+        and "renamed-here" not in _workspace_names(tree) and "renamed-here" not in _workspace_names(served),
+    )
     assert _state(viewer, window) == "connected"
 
 
-@pytest.mark.covers("cli:session new", "cli:session rename")
-def test_the_cli_reports_the_refusal_of_a_remote_window(adapter, remote_viewer, mirror):
+@pytest.mark.covers("session.companion.convert", "recent.open", "live.attach")
+def test_a_command_that_makes_a_local_row_is_refused_in_a_remote_window(remote_origin, remote_viewer, mirror):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    window, sid = mirror
+    before, origin_before = session_ids(_tree(viewer, window)), session_ids(origin.tree())
+    for cmd, target, args in [
+        ("session.companion.convert", sid, {}),
+        ("recent.open", None, {}),
+        ("live.attach", None, {"name": "x"}),
+    ]:
+        assert_error(viewer.request(cmd, target, window=window, **args), NOT_AVAILABLE.format(cmd=cmd))
+    assert session_ids(_tree(viewer, window)) == before
+    assert session_ids(origin.tree()) == origin_before
+
+
+@pytest.mark.covers("cli:session convert", "cli:window remote dismiss", "window.remote.dismiss")
+def test_the_cli_reports_a_local_only_refusal_and_dismisses_nothing_unknown(adapter, remote_viewer, mirror):
     viewer = remote_viewer
     window, sid = mirror
     cli = Cli(adapter.ctl_path, viewer.instance, adapter.ctl_name)
-    for words, cmd in [
-        (["session", "new", "--window", window], "session.new"),
-        (["session", "rename", "x", "--target", sid], "session.rename"),
-    ]:
-        result = cli(*words)
-        assert (result.returncode, result.stdout) == (1, ""), (result.argv, result.returncode, result.stdout)
-        assert result.stderr == f"error: {NOT_AVAILABLE.format(cmd=cmd)}\n", result.stderr
+    result = cli("session", "convert", "--companion", "--target", sid)
+    assert (result.returncode, result.stdout) == (1, ""), (result.argv, result.returncode, result.stdout)
+    assert result.stderr == f"error: {NOT_AVAILABLE.format(cmd='session.companion.convert')}\n", result.stderr
+    dismissed = cli("window", "remote", "dismiss", window)
+    assert (dismissed.returncode, dismissed.stdout, dismissed.stderr) == (0, "0 dismissed\n", ""), dismissed.argv
     assert sid in session_ids(_tree(viewer, window))
 
 
