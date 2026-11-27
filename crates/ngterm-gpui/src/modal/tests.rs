@@ -281,7 +281,15 @@ fn published(cx: &mut VisualTestContext, id: &str) -> Option<(gpui_kit::Role, St
     tree.nodes
         .iter()
         .find(|(_, node)| node.author_id() == Some(id))
-        .map(|(_, node)| (node.role(), node.label().unwrap_or_default().to_owned()))
+        .map(|(_, node)| {
+            // a label's text is its value, which AccessKit names it after
+            let text = if node.role() == gpui_kit::Role::Label {
+                node.value()
+            } else {
+                node.label()
+            };
+            (node.role(), text.unwrap_or_default().to_owned())
+        })
 }
 
 /// A screen reader reads an alert's heading and body, as `VoiceOver` reads an `NSAlert`'s, not only its buttons.
