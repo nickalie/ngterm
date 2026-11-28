@@ -684,6 +684,24 @@ fn a_new_session_whose_machine_disconnects_while_unlisted_answers_without_waitin
     });
 }
 
+/// A lost connection keeps the catalog, so only the connection's own end stops the relist.
+#[test]
+fn a_new_session_whose_connection_is_lost_while_unlisted_answers_without_waiting_out_the_budget() {
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        let answered = create_shown(&actor, &peer, vec![listing(true)]).await;
+        let listings = tree_execs(&actor);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let started = tokio::time::Instant::now();
+        actor.transport.drop_connections("m1");
+        settle().await;
+        answered.await.unwrap().expect("created");
+        assert!(started.elapsed() <= PAUSE, "it stops at once");
+        assert_eq!(tree_execs(&actor), listings, "no listing after the loss");
+    });
+}
+
 /// A listing that began before a newer one is kept does not count, though it holds the session.
 #[test]
 fn a_new_session_lists_again_when_a_newer_listing_without_it_is_kept() {
