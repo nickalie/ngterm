@@ -67,7 +67,7 @@ use std::time::Duration;
 use ngterm_core::model::StatusKeystroke;
 use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::origin::OriginForm;
-use ngterm_core::remote::origin_replies::{NOT_ATTACHABLE, READY_BUDGET, SESSION_NOUN, unattached};
+use ngterm_core::remote::origin_replies::{NOT_ATTACHABLE, PAUSE, READY_BUDGET, SESSION_NOUN, unattached};
 use ngterm_core::remote::peer::origin_pane_identity as pane_identity;
 use ngterm_core::remote::tree::{INVALID_REMOTE_SESSION, is_plain};
 use ngterm_proto::{ControlRemoteTree, ControlResult, RemotePeer, Response};
@@ -1345,13 +1345,14 @@ async fn catalog_action<T: Transport>(
 }
 
 /// New Session's answer once the catalog applied it: the created row once the catalog shows it attachable, with the
-/// machine listed again so that its panes show.
+/// machine listed again until a listing holds it, within [`READY_BUDGET`] in all, so that its panes show.
 async fn created_in_catalog<T: Transport>(
     state: &Rc<State<T>>,
     link: &OnMachine<T::Connection>,
     machine_id: &str,
     reply: Option<Box<Response<ControlResult>>>,
 ) -> Result<RemoteSession, MobileError> {
+    let deadline = tokio::time::Instant::now() + READY_BUDGET;
     let id = reply
         .and_then(|reply| reply.result)
         .and_then(|result| result.id)
@@ -1373,19 +1374,46 @@ async fn created_in_catalog<T: Transport>(
                 NOT_ATTACHABLE,
             )))
         })?;
-    // panes are shown from the listing, so it must hold the session the catalog made
-    let listing = state.begin_listing();
-    if let Ok(tree) = sessions::list(&*link.connection, &link.host).await {
-        listed(state, link, machine_id, tree, listing.began);
-    } else {
+    // an ended session has no pane to show, and no listing would hold it
+    if !row.ended && !listed_until_held(state, link, machine_id, &row.id, deadline).await {
         note!(
             WARN,
             tag::SESSIONS,
-            "listing after new session failed",
+            "no listing after new session held it",
             machine = machine_id
         );
     }
     Ok(row)
+}
+
+/// Lists `machine_id` every [`PAUSE`] until a listing holds `session_id` or `deadline` passes: whether one did.
+/// Panes are shown from the listing, and the machine lists a session only once each of its panes' daemons runs,
+/// which can be after its catalog shows the session.
+async fn listed_until_held<T: Transport>(
+    state: &Rc<State<T>>,
+    link: &OnMachine<T::Connection>,
+    machine_id: &str,
+    session_id: &str,
+    deadline: tokio::time::Instant,
+) -> bool {
+    loop {
+        let listing = state.begin_listing();
+        let answer = tokio::time::timeout_at(deadline, sessions::list(&*link.connection, &link.host)).await;
+        if let Ok(Ok(tree)) = answer {
+            let held = tree
+                .apps()
+                .any(|app| app.sessions.iter().any(|listed| listed.id == session_id));
+            listed(state, link, machine_id, tree, listing.began);
+            if held {
+                return true;
+            }
+        }
+        drop(listing);
+        if tokio::time::Instant::now() + PAUSE >= deadline {
+            return false;
+        }
+        tokio::time::sleep(PAUSE).await;
+    }
 }
 
 /// Opens the presentation stream of `session_id`, a session of `machine_id`'s last listing, on the machine's

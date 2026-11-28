@@ -8,7 +8,7 @@ use ngterm_core::catalog::frames::{self, CatalogChange, CatalogFrame, CatalogHel
 use ngterm_core::live::daemon_name;
 use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::origin::OriginShell;
-use ngterm_core::remote::origin_replies::rename_session_arguments;
+use ngterm_core::remote::origin_replies::{READY_BUDGET, rename_session_arguments};
 use ngterm_core::remote::ssh::{catalog_tail, control_tail, control_tail_with_operands, tree_tail};
 use ngterm_proto::CatalogVersions;
 use serde_json::{Value, json};
@@ -529,15 +529,17 @@ fn new_session_carries_an_operation_id_and_answers_with_the_row_the_catalog_show
     });
 }
 
-/// New Session through `actor`'s catalog, whose machine then answers a listing with `listing`: the created row and
-/// the answer to a show of its pane.
+/// New Session through `actor`'s catalog, whose machine then answers its listings with `listings` in turn: the
+/// created row and the answer to a show of its pane.
 async fn create_and_show(
     actor: &Actor,
     peer: &ChannelPeer,
-    listing: Script,
+    listings: Vec<Script>,
 ) -> (RemoteSession, Result<(), MobileError>) {
     let created = uuid_string(id(7));
-    actor.transport.script(&tree_tail(OriginShell::Posix), listing);
+    actor
+        .transport
+        .script_sequence(&tree_tail(OriginShell::Posix), listings);
     let answered = post_create(actor, Some("build"));
     let (op_id, _, op) = operation(actor).await;
     answer(
@@ -572,9 +574,67 @@ fn a_new_session_the_catalog_made_shows_its_pane() {
     local(async {
         let actor = Actor::start();
         let peer = following(&actor).await;
-        let (row, shown) = create_and_show(&actor, &peer, listing_with(&uuid_string(id(7)), "build")).await;
+        let (row, shown) = create_and_show(&actor, &peer, vec![listing_with(&uuid_string(id(7)), "build")]).await;
         assert_eq!(row.name, "build");
         assert_eq!(shown, Ok(()), "the new session's pane shows");
+    });
+}
+
+/// The machine lists a session only once each of its panes' daemons runs, which can be after the catalog shows it.
+#[test]
+fn a_new_session_the_machine_lists_after_the_catalog_shows_it_shows_its_pane() {
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        let listings = vec![listing(true), listing_with(&uuid_string(id(7)), "build")];
+        let (row, shown) = create_and_show(&actor, &peer, listings).await;
+        assert_eq!(row.name, "build");
+        assert_eq!(shown, Ok(()), "the new session's pane shows");
+    });
+}
+
+#[test]
+fn a_new_session_that_ended_at_once_answers_with_no_listing() {
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        let tail = tree_tail(OriginShell::Posix);
+        actor.transport.script(&tail, Script::failing(1, "boom"));
+        let listings = || {
+            actor
+                .transport
+                .execs()
+                .iter()
+                .filter(|exec| exec.command == tail)
+                .count()
+        };
+        let before = listings();
+        let answered = post_create(&actor, Some("build"));
+        let (op_id, _, op) = operation(&actor).await;
+        let created = uuid_string(id(7));
+        answer(
+            op,
+            &json!({"ok": true, "result": {"id": created, "receipt": receipt(&op_id, "applied", Some(5))}}),
+        )
+        .await;
+        let added = CatalogFrame::Delta {
+            epoch: EPOCH.to_owned(),
+            rev: 5,
+            change: CatalogChange::SessionAdded {
+                session: ended(7, "build"),
+                workspace: id(9),
+                index: 2,
+            },
+        };
+        let started = tokio::time::Instant::now();
+        send(&peer, &added).await;
+        let row = answered.await.unwrap().expect("created");
+        assert!(row.ended, "{row:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "it does not wait for a listing"
+        );
+        assert_eq!(listings(), before, "no listing");
     });
 }
 
@@ -583,7 +643,21 @@ fn a_new_session_whose_listing_fails_still_answers_with_its_row() {
     local(async {
         let actor = Actor::start();
         let peer = following(&actor).await;
-        let (row, shown) = create_and_show(&actor, &peer, Script::failing(1, "boom")).await;
+        let listings = || {
+            let tail = tree_tail(OriginShell::Posix);
+            actor
+                .transport
+                .execs()
+                .iter()
+                .filter(|exec| exec.command == tail)
+                .count()
+        };
+        let before = listings();
+        let started = tokio::time::Instant::now();
+        let (row, shown) = create_and_show(&actor, &peer, vec![Script::failing(1, "boom")]).await;
+        assert!(started.elapsed() <= READY_BUDGET, "it answers within the budget");
+        let commands: Vec<String> = actor.transport.execs().into_iter().map(|exec| exec.command).collect();
+        assert!(listings() - before > 1, "it lists again: {commands:#?}");
         assert_eq!(row.name, "build", "the catalog made it");
         assert!(shown.is_err(), "no listing holds its pane");
         assert_eq!(
