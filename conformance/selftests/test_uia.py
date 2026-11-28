@@ -257,3 +257,73 @@ def test_nodes_compare_by_runtime_id():
     assert first == again and hash(first) == hash(again)
     assert first != other
     assert list(other.ancestors()) == [first]
+
+
+class _Element:
+    """A UIA element whose cached subtree is itself alone."""
+
+    def __init__(self, props):
+        self.props = props
+
+    def BuildUpdatedCache(self, request):  # noqa: N802 (UIA's name)
+        return self
+
+    def GetCachedPropertyValue(self, prop):  # noqa: N802
+        return self.props.get(prop)
+
+    def GetCachedChildren(self):  # noqa: N802
+        return None
+
+
+class _Desktop:
+    """UI Automation where a stalled window of another process holds a search of the desktop's children: after
+    UIA's minute it answers with no window at all. Opening a window by its handle asks that window alone."""
+
+    def __init__(self, windows):
+        self.windows = windows
+
+    def GetRootElement(self):  # noqa: N802
+        return self
+
+    def FindAllBuildCache(self, scope, condition, request):  # noqa: N802
+        return None
+
+    def ElementFromHandle(self, hwnd):  # noqa: N802
+        return self.windows[hwnd]
+
+
+class _Windows(_User32):
+    """user32's top-level windows: (hwnd, pid, visible) in z-order."""
+
+    def __init__(self, listed, foreground):
+        super().__init__()
+        self.listed, self.foreground = listed, foreground
+
+    def EnumWindows(self, callback, lparam):  # noqa: N802
+        for hwnd, _, _ in self.listed:
+            if not callback(hwnd, lparam):
+                break
+        return True
+
+    def GetWindowThreadProcessId(self, hwnd, pid):  # noqa: N802
+        pid._obj.value = next(owner for listed, owner, _ in self.listed if listed == hwnd)
+        return 1
+
+    def IsWindowVisible(self, hwnd):  # noqa: N802
+        return next(visible for listed, _, visible in self.listed if listed == hwnd)
+
+    def GetForegroundWindow(self):  # noqa: N802
+        return self.foreground
+
+
+def test_the_app_windows_read_while_another_process_stalls_the_desktop_search():
+    """Another app's window that stalls UIA (as on a runner right after a title bar drag) does not hide the app's
+    own windows: the driver reads them, foreground first, and no window of another process and no hidden one."""
+    window = {uia.RUNTIME_ID: (42, 0x30), uia.CONTROL_TYPE: 50032, uia.NAME: "home"}
+    popup = {uia.RUNTIME_ID: (42, 0x40), uia.CONTROL_TYPE: 50009, uia.NAME: "System"}
+    driver = _bare_driver(_com_error=OSError, _request=None,
+                          automation=_Desktop({0x30: _Element(window), 0x40: _Element(popup)}))  # fmt: skip
+    driver.user32 = _Windows([(0x10, 2, True), (0x20, 1, False), (0x30, 1, True), (0x40, 1, True)], foreground=0x40)
+    assert [hwnd for _, hwnd in driver._windows()] == [0x40, 0x30]
+    found = driver.window(timeout=0.2)
+    assert (found.role, found.name, found.handle.hwnd) == ("window", "home", 0x30)

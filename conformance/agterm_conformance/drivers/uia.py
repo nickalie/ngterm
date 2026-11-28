@@ -32,7 +32,6 @@ MENU_ITEM_CONTROL_TYPE = 50011
 # UIA property ids (UIAutomationClient.h); read from the cache a window's subtree is built with.
 RUNTIME_ID = 30000
 BOUNDING_RECTANGLE = 30001
-PROCESS_ID = 30002
 CONTROL_TYPE = 30003
 NAME = 30005
 IS_ENABLED = 30010
@@ -62,7 +61,6 @@ INVOKE_PATTERN = 10000
 SELECTION_ITEM_PATTERN = 10010
 TOGGLE_PATTERN = 10015
 EXPAND_COLLAPSE_PATTERN = 10005
-TREE_SCOPE_CHILDREN = 2
 TREE_SCOPE_SUBTREE = 7
 TOGGLE_ON = 1
 EXPAND_COLLAPSE_COLLAPSED = 0
@@ -131,6 +129,10 @@ class _INPUTUNION(ctypes.Union):
 class INPUT(ctypes.Structure):
     _anonymous_ = ("u",)
     _fields_ = [("type", ctypes.c_uint32), ("u", _INPUTUNION)]
+
+
+# EnumWindows' callback (hwnd, lparam) -> BOOL; CFUNCTYPE stands in off Windows, for the host-free self-tests.
+ENUM_WINDOWS_PROC = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
 
 
 def virtual_key(key: str) -> int:
@@ -288,6 +290,9 @@ def _bindings() -> tuple[Any, Any, Any]:
     user32.SendInput.argtypes = [ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int]
     user32.SendInput.restype = ctypes.c_uint
     user32.GetForegroundWindow.restype = ctypes.c_void_p
+    user32.EnumWindows.argtypes = [ENUM_WINDOWS_PROC, ctypes.c_void_p]
+    user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
     for name in ("SetForegroundWindow", "IsIconic", "BringWindowToTop"):
         getattr(user32, name).argtypes = [ctypes.c_void_p]
     user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -308,9 +313,6 @@ class UiaDriver(Driver):
             self._request.AddProperty(prop)
         self._request.TreeScope = TREE_SCOPE_SUBTREE
         self._request.TreeFilter = self.automation.RawViewCondition
-        self._windows_request = self.automation.CreateCacheRequest()
-        self._windows_request.AddProperty(NATIVE_WINDOW_HANDLE)
-        self._pid_condition = self.automation.CreatePropertyCondition(PROCESS_ID, pid)
         self._menu_path: tuple[str, ...] | None = None
         self._menu_depth = 0
         self._menu_hwnd = 0
@@ -330,16 +332,25 @@ class UiaDriver(Driver):
             raise ReadFailed(f"uia pid {self.pid}: {error}") from error
 
     def _windows(self) -> list[tuple[Any, int]]:
-        """The app's top-level windows, foreground first, as (element, hwnd)."""
-        root = self.automation.GetRootElement()
-        found = root.FindAllBuildCache(TREE_SCOPE_CHILDREN, self._pid_condition, self._windows_request)
-        windows = []
-        for index in range(found.Length if found else 0):
-            element = found.GetElement(index)
-            windows.append((element, int(element.GetCachedPropertyValue(NATIVE_WINDOW_HANDLE) or 0)))
+        """The app's visible top-level windows, foreground first, as (element, hwnd).
+
+        user32 lists them and UIA opens each by its handle. A UIA search of the desktop's children asks every
+        process's windows: one window of another app that stalls (as on a runner right after a title bar drag) holds
+        that search for UIA's minute, and then it answers with no window at all.
+        """
+        hwnds: list[int] = []
+
+        def listed(hwnd: Any, _: Any) -> bool:
+            owner = ctypes.c_ulong()
+            self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == self.pid and self.user32.IsWindowVisible(hwnd):
+                hwnds.append(int(hwnd or 0))
+            return True
+
+        self.user32.EnumWindows(ENUM_WINDOWS_PROC(listed), 0)
         foreground = self.user32.GetForegroundWindow() or 0
-        windows.sort(key=lambda window: window[1] != foreground)
-        return windows
+        hwnds.sort(key=lambda hwnd: hwnd != foreground)
+        return [(self.automation.ElementFromHandle(hwnd), hwnd) for hwnd in hwnds]
 
     def _props(self, element: Any) -> dict[int, Any]:
         return {prop: plain(element.GetCachedPropertyValue(prop)) for prop in CACHED_PROPERTIES}
