@@ -284,6 +284,11 @@ class AtspiDriver(Driver):
             self._menu_pending = before
             self._menu_depth += 1
 
+    def _menu_closed(self, item):
+        # GPUI's accesskit handler only queues the press: the popup stays open and takes the keys until the app runs it.
+        scope = self._menu_scope
+        return self._read(lambda: all(handle != scope for handle in self.walk() if handle.get_role_name() == 'menu'))
+
     def _reveal(self, scope, item, attempts=40):
         # A menu taller than its room scrolls, and a press lands at the item's centre: wheel the
         # menu under the pointer until the item lies inside it, as a person scrolls to it.

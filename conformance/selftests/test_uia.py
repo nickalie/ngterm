@@ -321,7 +321,7 @@ def test_the_app_windows_read_while_another_process_stalls_the_desktop_search():
     own windows: the driver reads them, foreground first, and no window of another process and no hidden one."""
     window = {uia.RUNTIME_ID: (42, 0x30), uia.CONTROL_TYPE: 50032, uia.NAME: "home"}
     popup = {uia.RUNTIME_ID: (42, 0x40), uia.CONTROL_TYPE: 50009, uia.NAME: "System"}
-    driver = _bare_driver(_com_error=OSError, _request=None,
+    driver = _bare_driver(_com_error=OSError, _request=None, _windows_request=None, _pid_condition=None,
                           automation=_Desktop({0x30: _Element(window), 0x40: _Element(popup)}))  # fmt: skip
     driver.user32 = _Windows([(0x10, 2, True), (0x20, 1, False), (0x30, 1, True), (0x40, 1, True)], foreground=0x40)
     assert [hwnd for _, hwnd in driver._windows()] == [0x40, 0x30]

@@ -691,3 +691,36 @@ def test_set_text_without_editable_text_types_over_the_selection():
     assert calls[-1] == ('chord', Chord('delete', frozenset()))
     with pytest.raises(DriverError, match='cannot set text'):
         driver._set_text(Element('label', 'text', handle=Handle()), 'x')
+
+
+def test_a_menu_command_returns_once_its_popup_is_closed():
+    """GPUI's accesskit handler only queues the press, and the popup takes the keys while it stays open: `menu`
+    returns once the popup that held the command is gone, so text typed next reaches the app."""
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    from agterm_conformance.drivers.base import Element
+    class Node:
+        def __init__(self, role, children=()):
+            self.role, self.children = role, list(children)
+        def get_role_name(self): return self.role
+        def get_child_count(self): return len(self.children)
+        def get_child_at_index(self, i): return self.children[i]
+        def clear_cache(self): pass
+    item = Node('menu item')
+    popup, other = Node('menu', [item]), Node('menu')
+    frame = Node('frame', [other, popup])
+    reads = []
+    driver = object.__new__(AtspiDriver)
+    driver.app, driver._native_error, driver.pid, driver.timeout = Node('application', [frame]), OSError, 7, 1.0
+    def menu_command(path):
+        driver._menu_scope = popup
+        return Element(None, 'menu-item', 'Open', handle=item)
+    def walk():
+        reads.append(len(reads))
+        if len(reads) == 3:
+            frame.children.remove(popup)
+        return AtspiDriver.walk(driver)
+    driver._menu_command, driver.walk = menu_command, walk
+    driver._press_element = lambda element: reads.clear()
+    driver.menu('File', 'Open')
+    assert len(reads) == 3, 'menu returned while the popup was still open'
+    assert frame.children == [other]
