@@ -73,6 +73,8 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::Background => super::background::dispatch(core, request),
         SessionCmd::Tint => super::tint::session(core, target, args),
         SessionCmd::Restore => super::restore::dispatch(core, request),
+        SessionCmd::Detach => super::detach::detach_sessions(core, request),
+        SessionCmd::Reattach => super::detach::reattach_session(core, request),
         SessionCmd::CompanionNew
         | SessionCmd::CompanionPage
         | SessionCmd::Page

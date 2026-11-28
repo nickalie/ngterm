@@ -227,6 +227,15 @@ pub struct AppStore {
     /// A remote window's store that took its first catalog snapshot: until then its saved view state is kept as it is,
     /// for the snapshot to apply. Not persisted.
     pub catalog_mirrored: bool,
+    /// The sessions a remote window hides here and leaves running on its server (upstream's
+    /// `catalogDetachedSessions`); a parent's companions are hidden with it. Saved in the window's view state.
+    pub catalog_detached_sessions: BTreeSet<Uuid>,
+    /// The workspaces a remote window hides here, every row in them included.
+    pub catalog_detached_workspaces: BTreeSet<Uuid>,
+    /// The view of each row a detach hides, so it comes back on reattach and is saved meanwhile.
+    pub(crate) catalog_hidden_views: std::collections::BTreeMap<Uuid, crate::remote::catalog::SessionView>,
+    /// Whether each workspace a detach hides was collapsed.
+    pub(crate) catalog_hidden_collapsed: HashMap<Uuid, bool>,
 }
 
 impl AppStore {

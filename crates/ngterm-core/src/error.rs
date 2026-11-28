@@ -12,6 +12,9 @@ pub enum Noun {
     Window,
     /// A Recent Closed entry (`recent.open`, upstream's `RecentClosedTarget`).
     RecentItem,
+    /// A remote window's hidden row or workspace (`session.reattach`, `workspace.reattach`).
+    DetachedSession,
+    DetachedWorkspace,
 }
 
 impl Noun {
@@ -23,6 +26,8 @@ impl Noun {
             Self::Workspace => "workspace",
             Self::Window => "window",
             Self::RecentItem => "recent item",
+            Self::DetachedSession => "detached session",
+            Self::DetachedWorkspace => "detached workspace",
         }
     }
 }

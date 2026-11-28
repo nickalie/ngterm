@@ -111,3 +111,41 @@ fn the_sessions_are_one_array_of_alternating_ids_and_views_as_upstream_writes_th
     let odd = serde_json::json!({"sessions": [upper]});
     assert!(serde_json::from_value::<RemoteWindowViewState>(odd).is_err());
 }
+
+#[test]
+fn an_older_view_state_file_decodes_with_nothing_detached() {
+    let state: RemoteWindowViewState = serde_json::from_str(r#"{"collapsedWorkspaces":[],"sessions":[]}"#).unwrap();
+    assert!(state.detached_sessions.is_empty());
+    assert!(state.detached_workspaces.is_empty());
+}
+
+#[test]
+fn the_capture_keeps_what_a_detach_hides_in_upper_case() {
+    let mut store = AppStore::new();
+    let shown = store.add_workspace("w");
+    let (hidden_row, hidden_workspace) = (Uuid::new_v4(), Uuid::new_v4());
+    store.catalog_detached_sessions.insert(hidden_row);
+    store.catalog_detached_workspaces.insert(hidden_workspace);
+    store.catalog_hidden_views.insert(
+        hidden_row,
+        SessionView {
+            font_size: Some(19.0),
+            ..SessionView::default()
+        },
+    );
+    store.catalog_hidden_collapsed.insert(hidden_workspace, true);
+    store.catalog_hidden_collapsed.insert(shown, false);
+
+    let state = RemoteWindowViewState::capture(&store);
+
+    assert_eq!(state.detached_sessions, vec![hidden_row]);
+    assert_eq!(state.detached_workspaces, vec![hidden_workspace]);
+    assert_eq!(state.collapsed_workspaces, vec![hidden_workspace]);
+    assert_eq!(
+        state.sessions.get(&hidden_row).and_then(|view| view.font_size),
+        Some(19.0)
+    );
+    let json = serde_json::to_value(&state).unwrap();
+    let upper = hidden_row.to_string().to_uppercase();
+    assert_eq!(json["detachedSessions"], serde_json::json!([upper]));
+}

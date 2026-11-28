@@ -1,5 +1,6 @@
 //! What a remote window keeps on this machine about how its server's sessions are shown (upstream's
-//! `RemoteWindowViewState.swift`): the selection, the collapsed workspaces, and each row's focus, font size and divider.
+//! `RemoteWindowViewState.swift`): the selection, the collapsed workspaces, each row's focus, font size and divider,
+//! and the sessions and workspaces it detached.
 //! The sessions themselves are the server's and are never saved here; the state is saved per window, in
 //! `remote/<id>.view.json` under the state directory.
 
@@ -69,6 +70,11 @@ pub struct RemoteWindowViewState {
     /// Written as Swift's `JSONEncoder` writes a `[UUID: SessionView]`: one array of alternating ids and views.
     #[serde(default, with = "pairs")]
     pub sessions: BTreeMap<Uuid, SessionView>,
+    /// Hidden here and left running on the server.
+    #[serde(default, serialize_with = "upper::slice")]
+    pub detached_sessions: Vec<Uuid>,
+    #[serde(default, serialize_with = "upper::slice")]
+    pub detached_workspaces: Vec<Uuid>,
 }
 
 impl RemoteWindowViewState {
@@ -90,9 +96,17 @@ impl RemoteWindowViewState {
         crate::persist::json::save_json(path, self)
     }
 
-    /// The view state of `store`'s rows (upstream's `capture`); a row whose view is the default is left out.
+    /// The view state of `store`'s rows (upstream's `capture`), keeping the views of the rows and workspaces its detach
+    /// hides; a row whose view is the default is left out.
     #[must_use]
     pub fn capture(store: &AppStore) -> Self {
+        let mut hidden_collapsed: Vec<Uuid> = store
+            .catalog_hidden_collapsed
+            .iter()
+            .filter(|(_, collapsed)| **collapsed)
+            .map(|(id, _)| *id)
+            .collect();
+        hidden_collapsed.sort_unstable();
         let mut state = Self {
             selected_session_id: store.selected_session_id(),
             collapsed_workspaces: store
@@ -100,8 +114,11 @@ impl RemoteWindowViewState {
                 .iter()
                 .filter(|workspace| !workspace.is_expanded)
                 .map(crate::model::Workspace::id)
+                .chain(hidden_collapsed)
                 .collect(),
-            sessions: BTreeMap::new(),
+            sessions: store.catalog_hidden_views.clone(),
+            detached_sessions: store.catalog_detached_sessions.iter().copied().collect(),
+            detached_workspaces: store.catalog_detached_workspaces.iter().copied().collect(),
         };
         for session in store.sessions() {
             let view = SessionView::of(session);

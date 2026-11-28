@@ -17,7 +17,7 @@ use super::stream::{CatalogState, CatalogStream};
 use super::view_state::RemoteWindowViewState;
 use super::{PROBE_DEADLINE, SILENCE_LIMIT, retry_delay};
 use crate::Core;
-use crate::catalog::frames::{self, CatalogFrame, CatalogHello, CatalogPane, CatalogSnapshot};
+use crate::catalog::frames::{self, CatalogFrame, CatalogHello, CatalogPane, CatalogSession, CatalogWorkspace};
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::live::lead::LeadAttachment;
@@ -314,6 +314,11 @@ fn unaddressable(line: &str) -> String {
     crate::command_restore::shell_quoted_line(&["/usr/bin/env", "/bin/sh", "-c", script.as_str()])
 }
 
+/// `ids` as the wire's sorted list, `None` when empty.
+fn wire_ids(ids: &std::collections::BTreeSet<Uuid>) -> Option<Vec<String>> {
+    (!ids.is_empty()).then(|| ids.iter().copied().map(uuid_string).collect())
+}
+
 /// The first row of `store`'s tree.
 fn first_row(store: &AppStore) -> Option<Uuid> {
     store.sessions().next().map(Session::id)
@@ -353,6 +358,10 @@ impl Core {
             .as_ref()
             .map(|persistence| RemoteWindowViewState::load(&persistence.remote_view_path(window)))
             .unwrap_or_default();
+        if let Some(store) = self.library.store_mut(window) {
+            store.catalog_detached_sessions = view.detached_sessions.iter().copied().collect();
+            store.catalog_detached_workspaces = view.detached_workspaces.iter().copied().collect();
+        }
         let now = (self.remote.clock)();
         self.remote.viewer.last_client += 1;
         let mut run = CatalogRun::new(window, self.remote.viewer.last_client, &host, view, now);
@@ -477,7 +486,7 @@ impl Core {
 
     /// Brings window `window`'s rows to its catalog (upstream's `RemoteCatalogMirror.reconcile`), starting and
     /// stopping the presentation streams of rows whose session ended or whose scratch came or went.
-    fn reconcile_catalog(&mut self, window: Uuid) {
+    pub(super) fn reconcile_catalog(&mut self, window: Uuid) {
         let Some(run) = self.remote.viewer.catalogs.get(&window) else {
             return;
         };
@@ -489,6 +498,22 @@ impl Core {
         let Some(store) = self.library.store_mut(window) else {
             return;
         };
+        let (shown, forgot) = super::detach::shown_catalog(&catalog, store, &view);
+        let kept: HashSet<Uuid> = shown
+            .iter()
+            .flat_map(|workspace| workspace.sessions.iter().map(CatalogSession::id))
+            .collect();
+        let leaving: Vec<(Uuid, bool)> = store
+            .sessions()
+            .map(Session::id)
+            .filter(|id| !kept.contains(id))
+            .map(|id| (id, false))
+            .collect();
+        // a leaving row's stream ends before the row is torn down (upstream's `catalogRowRemoved`)
+        self.follow_remote_rows(leaving);
+        let Some(store) = self.library.store_mut(window) else {
+            return;
+        };
         let presented: HashMap<Uuid, bool> = store
             .sessions()
             .map(|session| (session.id(), session.presents_catalog()))
@@ -497,7 +522,7 @@ impl Core {
             host: &host,
             leads: Vec::new(),
         };
-        mirror_rows(store, &catalog, &view, &mut commands);
+        mirror_rows(store, &shown, catalog.versions.protocol, &view, &mut commands);
         if let Some(run) = self.remote.viewer.catalogs.get_mut(&window)
             && let Some((created, baseline)) = run.pending_selection
             && store.session(created).is_some()
@@ -521,6 +546,9 @@ impl Core {
             self.live.leads.begin(identity, lead, false);
         }
         self.follow_remote_rows(streams);
+        if forgot {
+            self.save_window_checked(window);
+        }
     }
 
     /// Parks row `session`'s remote window scratch whose current attach ended while the catalog still lists it (upstream's
@@ -596,8 +624,14 @@ impl Core {
             catalog_id: source.catalog_id.map(uuid_string),
             state: state.map(str::to_owned),
             reason: reason.flatten().map(str::to_owned),
-            detached_sessions: None,
-            detached_workspaces: None,
+            detached_sessions: self
+                .library
+                .store(window)
+                .and_then(|store| wire_ids(&store.catalog_detached_sessions)),
+            detached_workspaces: self
+                .library
+                .store(window)
+                .and_then(|store| wire_ids(&store.catalog_detached_workspaces)),
             operations: self.remote_operations(window),
         })
     }
@@ -621,22 +655,34 @@ impl Core {
     }
 }
 
-/// Brings `store`'s rows to `catalog`, restoring `view` on each row it creates and keeping a selection that still
-/// names a row, else taking the saved one, else the first row.
+/// Brings `store`'s rows to `shown`, the catalog without what the window detached: a row it creates gets back the view
+/// its detach kept, else `view`'s, and a selection that still names a row is kept, else the saved one is taken, else
+/// the first row.
 fn mirror_rows(
     store: &mut AppStore,
-    catalog: &CatalogSnapshot,
+    shown: &[CatalogWorkspace],
+    protocol: i64,
     view: &RemoteWindowViewState,
     commands: &mut RowCommands<'_>,
 ) {
-    let collapsed: HashSet<Uuid> = view.collapsed_workspaces.iter().copied().collect();
-    store.prepare_catalog_workspaces(&catalog.workspaces, &collapsed);
+    let mut collapsed: HashSet<Uuid> = view.collapsed_workspaces.iter().copied().collect();
+    for (id, hidden_collapsed) in &store.catalog_hidden_collapsed {
+        if *hidden_collapsed {
+            collapsed.insert(*id);
+        } else {
+            collapsed.remove(id);
+        }
+    }
+    store.prepare_catalog_workspaces(shown, &collapsed);
+    for workspace in shown {
+        store.catalog_hidden_collapsed.remove(&workspace.id);
+    }
     let mut context = CatalogRowContext {
         host: commands.host,
-        protocol: catalog.versions.protocol,
+        protocol,
         commands,
     };
-    for workspace in &catalog.workspaces {
+    for workspace in shown {
         for (index, entry) in workspace.sessions.iter().enumerate() {
             if store.session(entry.id()).is_some() {
                 store.move_catalog_session(entry.id(), workspace.id, index);
@@ -646,12 +692,16 @@ fn mirror_rows(
             let Some(id) = store.insert_catalog_session(entry, workspace.id, index, &mut context) else {
                 continue;
             };
+            let kept = store.catalog_hidden_views.remove(&id);
             if let Some(session) = store.session_mut(id) {
-                view.apply(session);
+                match kept {
+                    Some(kept) => kept.apply(session),
+                    None => view.apply(session),
+                }
             }
         }
     }
-    store.finish_catalog_workspaces(&catalog.workspaces);
+    store.finish_catalog_workspaces(shown);
     store.catalog_mirrored = true;
     let selected = store.selected_session_id().filter(|id| store.session(*id).is_some());
     if selected.is_none() {

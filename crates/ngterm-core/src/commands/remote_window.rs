@@ -10,8 +10,9 @@ use uuid::Uuid;
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
+use crate::error::Noun;
 use crate::remote::catalog::request::{self, STRUCTURAL_COMMANDS};
-use crate::resolve::Resolver;
+use crate::resolve::{ACTIVE, Resolver, TargetResolution, resolution_error, resolve, session_ids, trimmed};
 
 /// The commands that make shells or rows on this machine, which a remote window shows only from its server
 /// (upstream's `localOnlyCommands`), with the page rows a remote window does not show yet.
@@ -40,6 +41,11 @@ pub(crate) enum Route {
 /// a target that does not resolve, whose own dispatch names the error.
 pub(crate) fn route(core: &Core, request: &Request) -> Option<Route> {
     let cmd = request.cmd;
+    if cmd == Command::Session(SessionCmd::Close)
+        && let Some(target) = close_target(request)
+    {
+        return close_route(core, request, target);
+    }
     let structural = STRUCTURAL_COMMANDS.contains(&cmd);
     if !structural && !LOCAL_ONLY_COMMANDS.contains(&cmd) {
         return None;
@@ -53,13 +59,57 @@ pub(crate) fn route(core: &Core, request: &Request) -> Option<Route> {
             "{cmd} is not available in a remote window"
         ))));
     }
-    let store = core.library().store(window)?;
-    let catalog: Vec<Uuid> = core
-        .remote
-        .viewer
-        .catalogs
-        .get(&window)
-        .and_then(|run| run.stream.catalog())
+    send_route(core, request, window)
+}
+
+/// A close's id or prefix, `None` for `active`.
+fn close_target(request: &Request) -> Option<&str> {
+    let args = request.args.as_ref();
+    let first = args
+        .and_then(|args| args.targets.as_ref())
+        .and_then(|targets| targets.first());
+    first
+        .map(String::as_str)
+        .or(request.target.as_deref())
+        .filter(|target| !target.eq_ignore_ascii_case(ACTIVE))
+}
+
+/// A close by id (upstream's `closeRoute`), resolved once over local rows and remote windows' whole catalogs, so a
+/// detached row is reachable and a prefix it shares with a row elsewhere stays ambiguous. A `--window` that does not
+/// resolve is left to the local dispatch's error.
+fn close_route(core: &Core, request: &Request, target: &str) -> Option<Route> {
+    let library = core.library();
+    let scope = match trimmed(request.args.as_ref().and_then(|args| args.window.as_deref())) {
+        Some(window) => Some(Resolver::new(library).placement_window(Some(window)).ok().flatten()?),
+        None => None,
+    };
+    let mut candidates: Vec<(Uuid, Uuid)> = Vec::new();
+    for window in library.open_ids() {
+        if scope.is_some_and(|scope| scope != window) {
+            continue;
+        }
+        let ids = if library.is_remote_window(window) {
+            catalog_sessions(core, window)
+        } else {
+            library.store(window).map(session_ids).unwrap_or_default()
+        };
+        candidates.extend(ids.into_iter().map(|id| (id, window)));
+    }
+    let ids: Vec<Uuid> = candidates.iter().map(|(id, _)| *id).collect();
+    let resolution = resolve(target, &ids, None);
+    let TargetResolution::Resolved(id) = resolution else {
+        return Some(Route::Refused(resolution_error(Noun::Session, target, resolution)));
+    };
+    let window = candidates.iter().find(|(candidate, _)| *candidate == id)?.1;
+    if !library.is_remote_window(window) {
+        return None;
+    }
+    send_route(core, request, window)
+}
+
+/// Every session the catalog of remote window `window` lists, detached ones included.
+fn catalog_sessions(core: &Core, window: Uuid) -> Vec<Uuid> {
+    core.window_catalog(window)
         .map(|catalog| {
             catalog
                 .workspaces
@@ -72,7 +122,13 @@ pub(crate) fn route(core: &Core, request: &Request) -> Option<Route> {
                 })
                 .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// `request` read as an operation for remote window `window`'s server.
+fn send_route(core: &Core, request: &Request, window: Uuid) -> Option<Route> {
+    let store = core.library().store(window)?;
+    let catalog = catalog_sessions(core, window);
     Some(match request::parse(request, store, &catalog) {
         Ok((operation, select)) => Route::Send {
             window,

@@ -13,6 +13,7 @@ pub(crate) mod companions;
 pub(crate) mod config;
 pub(crate) mod dashboard;
 pub(crate) mod debug;
+pub(crate) mod detach;
 pub(crate) mod font;
 pub(crate) mod headless;
 pub(crate) mod hooks;

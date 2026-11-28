@@ -1025,25 +1025,6 @@ mod tests {
         Command::Recent(RecentCmd::Clear),
     ];
 
-    /// v0.42's commands are registered ahead of their handlers and refused by name until those land.
-    #[test]
-    fn registered_v042_commands_refuse_until_their_feature_handlers_land() {
-        for name in [
-            "session.detach",
-            "session.reattach",
-            "workspace.detach",
-            "workspace.reattach",
-        ] {
-            let response = core().dispatch(&Request::new(name.parse().unwrap()));
-            assert!(!response.ok, "{name}");
-            assert_eq!(
-                response.error.as_deref(),
-                Some(format!("{name} is not supported by this host").as_str())
-            );
-            assert!(response.result.is_none(), "{name}");
-        }
-    }
-
     /// Upstream's `aMacAppRefusesAnOperationIdOnAnyCommand`: the refusal comes before the command runs.
     #[test]
     fn an_operation_id_is_refused_before_the_command_runs() {

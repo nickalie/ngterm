@@ -1143,20 +1143,23 @@ fn the_v042_leaves_reach_the_app_and_print_its_refusal() -> TestResult {
     let dir = short_dir()?;
     let socket = dir.path().join("ngterm.sock");
     let _server = serve_core(&socket)?;
+    // detach and reattach have their handlers, which resolve the row: this core has none active and none detached
     let leaves: [(&[&str], &str); 4] = [
-        (&["session", "detach"], "session.detach"),
-        (&["session", "reattach", "--target", "ab12"], "session.reattach"),
-        (&["workspace", "detach"], "workspace.detach"),
-        (&["workspace", "reattach", "--target", "ab12"], "workspace.reattach"),
+        (&["session", "detach"], "no such session: active"),
+        (
+            &["session", "reattach", "--target", "ab12"],
+            "no such detached session: ab12",
+        ),
+        (&["workspace", "detach"], "no such workspace: active"),
+        (
+            &["workspace", "reattach", "--target", "ab12"],
+            "no such detached workspace: ab12",
+        ),
     ];
-    for (argv, command) in leaves {
+    for (argv, error) in leaves {
         assert_eq!(
             outcome(&run_on(dir.path(), &socket, argv)?),
-            (
-                Some(1),
-                String::new(),
-                format!("error: {command} is not supported by this host\n")
-            ),
+            (Some(1), String::new(), format!("error: {error}\n")),
             "{argv:?}"
         );
     }

@@ -85,27 +85,6 @@ def test_help_lists_the_v042_subcommands_and_options(cli):
         assert re.search(rf"^  {option}\s", options, re.MULTILINE), options
 
 
-@pytest.mark.parametrize(
-    ("argv", "command"),
-    [
-        pytest.param(["session", "detach"], "session.detach", id="session-detach"),
-        pytest.param(["session", "reattach", "--target", "SESSION"], "session.reattach", id="session-reattach"),
-        pytest.param(["workspace", "detach"], "workspace.detach", id="workspace-detach"),
-        pytest.param(["workspace", "reattach", "--target", "WORKSPACE"], "workspace.reattach",
-                     id="workspace-reattach"),
-    ],
-)
-def test_a_command_registered_ahead_of_its_feature_is_refused_by_name(cli, ctl, row, argv, command):
-    argv = [row.get(word, word) for word in argv]
-    before = _holds(ctl)
-    refusal = f"{command} is not supported by this host"
-    _refused(cli(*argv), refusal)
-    raw = cli(*argv, "--json")
-    assert (raw.returncode, raw.stderr) == (1, ""), raw
-    assert raw.json() == {"ok": False, "error": refusal}
-    assert _holds(ctl) == before
-
-
 def test_the_catalog_commands_are_the_headless_servers_alone(cli, ctl, row):
     before = _holds(ctl)
     _refused(cli("catalog", "op", "op-1"), "catalog.op is served only by ngterm-headless")

@@ -1132,3 +1132,6 @@ fn a_closed_local_item_reopens_in_a_local_window_while_a_remote_one_is_frontmost
 
 #[path = "remote_window_actions.rs"]
 mod actions;
+
+#[path = "remote_window_detach.rs"]
+mod detach;
