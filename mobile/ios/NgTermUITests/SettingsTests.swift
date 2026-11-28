@@ -1,14 +1,17 @@
 import XCTest
 
 /// Settings on the fake core, with the machine `split` signing in with the app's key: a setting changed sticks, the
-/// connection timeout sticks and a new machine's form names it, every notification switch turns off and stays off, a
-/// rotated key's public half offers to switch the machine to it, and Settings and that page are audited.
+/// connection timeout sticks and a new machine's form names it, a machine's own timeout outside 3 to 60 s is refused
+/// and one inside it is kept until it is cleared, every notification switch turns off and stays off, a rotated key's
+/// public half offers to switch the machine to it, and Settings and that page are audited.
 internal final class SettingsTests: XCTestCase {
     // how many swipes a row far down the form may take to come into view
     private static let swipes = 12
     // how long an element is watched for, at most, before an audit: this many reads, this far apart
     private static let settleReads = 20
     private static let settleBeat: TimeInterval = 0.5
+    // how long a row is held for its menu
+    private static let longPress: TimeInterval = 1
 
     // the app past its first run, Settings open
     @MainActor
@@ -80,20 +83,88 @@ internal final class SettingsTests: XCTestCase {
         let timeout = app.sliders["connect-timeout"]
         scroll(to: timeout, in: app)
         XCTAssertEqual(timeout.value as? String, "10 seconds")
-        timeout.adjust(toNormalizedSliderPosition: 1)
-        XCTAssertEqual(timeout.value as? String, "60 seconds")
+        // the left end: on an iPad a move to the right end landed on 59 s now and then
+        timeout.adjust(toNormalizedSliderPosition: 0)
+        XCTAssertEqual(timeout.value as? String, "3 seconds")
 
         app.buttons["settings-done"].tap()
         app.buttons["settings"].tap()
         scroll(to: timeout, in: app)
-        XCTAssertEqual(timeout.value as? String, "60 seconds", "the timeout, again")
+        XCTAssertEqual(timeout.value as? String, "3 seconds", "the timeout, again")
         app.buttons["settings-done"].tap()
 
         app.buttons["add-machine"].tap()
         let own = app.textFields["machine-timeout"]
         FormScroll.scroll(to: own, in: app.collectionViews["machine-form"], swipes: Self.swipes)
-        XCTAssertEqual(own.placeholderValue, "60 s from Settings")
+        XCTAssertEqual(own.placeholderValue, "3 s from Settings")
         XCTAssertEqual(own.label, "Connection timeout", "VoiceOver names the field, not the hint")
+    }
+
+    @MainActor
+    internal func testAMachinesOwnTimeoutIsCheckedKeptAndCleared() throws {
+        let app = FakeApp.launch(withKey: true, for: self)
+        FakeApp.showMachines(in: app)
+        app.buttons["add-machine"].tap()
+        E2EMachine.fill("machine-host", with: "build-01.lan", in: app)
+        E2EMachine.fill("machine-user", with: "nick", in: app)
+        // Return closes the keyboard, so the form scrolls to the timeout with nothing over it
+        app.textFields["machine-user"].typeText("\n")
+        let form = app.collectionViews["machine-form"]
+        let own = app.textFields["machine-timeout"]
+        let problem = FakeApp.element(containing: "Enter 3 to 60 seconds, or leave it empty.", in: app)
+        // scrolled to once: the number pad has no Return, and a scroll under it would close it
+        FormScroll.scroll(to: own, in: form, swipes: Self.swipes)
+        for wrong in ["2", "61"] {
+            E2EMachine.fill("machine-timeout", with: wrong, in: app)
+            app.buttons["machine-save"].tap()
+            FakeApp.expect(problem, "the problem under a timeout of \(wrong)")
+            XCTAssertTrue(form.exists, "Save took a timeout of \(wrong)")
+        }
+        // the number pad closes, so the audit measures no row against it: a phone's with a drag of the form; an iPad's
+        // stays for a tap outside it, so the user field takes the focus and its Return lets it go
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            let user = app.textFields["machine-user"]
+            user.tap()
+            user.typeText("\n")
+        } else {
+            form.swipeDown()
+        }
+        FakeApp.settle(form, in: app)
+        FakeApp.attachScreen("the problem under a timeout of 61")
+        try FakeApp.auditForm(app, page: form)
+
+        FormScroll.scroll(to: own, in: form, swipes: Self.swipes)
+        E2EMachine.fill("machine-timeout", with: "45", in: app)
+        FakeApp.expectGone(problem, "the problem under a timeout of 45")
+        app.buttons["machine-save"].tap()
+        let trust = app.buttons["trust-host-key"]
+        FakeApp.expect(trust, "host key sheet")
+        trust.tap()
+        FakeApp.expectRow("build-01.lan", reads: "Connected", in: app)
+
+        editMachine("build-01.lan", in: app)
+        XCTAssertEqual(own.value as? String, "45", "the machine's own timeout")
+        E2EMachine.fill("machine-timeout", with: String(repeating: XCUIKeyboardKey.delete.rawValue, count: 2), in: app)
+        app.buttons["machine-save"].tap()
+        FakeApp.expectGone(form, "the form, after Save,")
+        FakeApp.expectRow("build-01.lan", reads: "Connected", in: app)
+
+        editMachine("build-01.lan", in: app)
+        XCTAssertEqual(own.placeholderValue, "10 s from Settings")
+        XCTAssertEqual(own.value as? String, own.placeholderValue, "a cleared timeout takes Settings'")
+    }
+
+    // the form of the machine `title`, from its row's menu, scrolled to its timeout field
+    @MainActor
+    private func editMachine(_ title: String, in app: XCUIApplication) {
+        let row = app.descendants(matching: .any)["machine-row-\(title)"].firstMatch
+        row.press(forDuration: Self.longPress)
+        let edit = app.buttons["Edit"]
+        FakeApp.expect(edit, "Edit in the menu of \(title)")
+        edit.tap()
+        let own = app.textFields["machine-timeout"]
+        FakeApp.expect(own, "the timeout field of \(title)")
+        FormScroll.scroll(to: own, in: app.collectionViews["machine-form"], swipes: Self.swipes)
     }
 
     @MainActor
