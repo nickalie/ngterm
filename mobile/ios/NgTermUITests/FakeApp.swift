@@ -327,10 +327,7 @@ internal enum FakeApp {
     internal static func auditSheet(_ app: XCUIApplication, page: XCUIElement) throws {
         let shown = page.frame
         try performAudit(of: app, for: .all) { issue in
-            if issue.auditType == .contrast, let element = issue.element, !shown.contains(element.frame) {
-                return true
-            }
-            return isSetAside(issue, in: app, isSheet: true)
+            issue.isCut(by: shown, clipsAtFoot: false) || isSetAside(issue, in: app, isSheet: true)
         }
     }
 
@@ -344,16 +341,14 @@ internal enum FakeApp {
     /// Text cut at the page's edge has its contrast measured against what lies past the edge, as
     /// ``auditSheet(_:page:)`` says. Text that reaches the page's foot (an iPad's sheet scrolled to its end shows the
     /// last footer flush with it) runs past the foot at the audit's larger text, which reports it clipped: that is the
-    /// page's scroll edge, not the text's own frame. Every text of the form wraps with no line limit, and the user
-    /// scrolls to read the rest (the same golden shows it).
+    /// page's scroll edge, not the text's own frame, and the user scrolls to read the rest. An iPhone's pages do not
+    /// show this, so the audit sets that clipping aside only on an iPad.
     @MainActor
     internal static func auditForm(_ app: XCUIApplication, page: XCUIElement) throws {
         let shown = page.frame
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
         try performAudit(of: app, for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
-            if let element = issue.element, issue.auditType.isCutAtFoot(element.frame, by: shown) {
-                return true
-            }
-            return isSetAside(issue, in: app, isSheet: true)
+            issue.isCut(by: shown, clipsAtFoot: isPad) || isSetAside(issue, in: app, isSheet: true)
         }
     }
 
@@ -442,22 +437,26 @@ internal enum FakeApp {
     }
 }
 
-extension XCUIAccessibilityAuditType {
-    // a point's slack for the frames' rounding
+extension XCUIAccessibilityAuditIssue {
+    // a point's slack for the frames' rounding at a page's foot
     private static let footSlack: CGFloat = 1
 
-    // whether the page `shown` cuts the text at `frame` at its foot: its contrast once it runs past the page, its
-    // clipping once it reaches the foot
-    internal func isCutAtFoot(_ frame: CGRect, by shown: CGRect) -> Bool {
-        switch self {
+    // whether the page `shown` cuts this issue's text: its contrast once it runs past any edge of the page, and when
+    // `clipsAtFoot`, its clipping once it reaches the page's foot
+    @MainActor
+    internal func isCut(by shown: CGRect, clipsAtFoot: Bool) -> Bool {
+        guard let frame = element?.frame else {
+            return false
+        }
+        switch auditType {
         case .contrast:
-            !shown.contains(frame)
+            return !shown.contains(frame)
 
         case .textClipped:
-            frame.maxY >= shown.maxY - Self.footSlack
+            return clipsAtFoot && frame.maxY >= shown.maxY - Self.footSlack
 
         default:
-            false
+            return false
         }
     }
 }

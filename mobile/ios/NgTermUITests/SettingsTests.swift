@@ -10,8 +10,6 @@ internal final class SettingsTests: XCTestCase {
     // how long an element is watched for, at most, before an audit: this many reads, this far apart
     private static let settleReads = 20
     private static let settleBeat: TimeInterval = 0.5
-    // how long a row is held for its menu
-    private static let longPress: TimeInterval = 1
 
     // the app past its first run, Settings open
     @MainActor
@@ -142,29 +140,16 @@ internal final class SettingsTests: XCTestCase {
         trust.tap()
         FakeApp.expectRow("build-01.lan", reads: "Connected", in: app)
 
-        editMachine("build-01.lan", in: app)
+        MachineMenu.edit("build-01.lan", in: app)
         XCTAssertEqual(own.value as? String, "45", "the machine's own timeout")
         E2EMachine.fill("machine-timeout", with: String(repeating: XCUIKeyboardKey.delete.rawValue, count: 2), in: app)
         app.buttons["machine-save"].tap()
         FakeApp.expectGone(form, "the form, after Save,")
         FakeApp.expectRow("build-01.lan", reads: "Connected", in: app)
 
-        editMachine("build-01.lan", in: app)
+        MachineMenu.edit("build-01.lan", in: app)
         XCTAssertEqual(own.placeholderValue, "10 s from Settings")
         XCTAssertEqual(own.value as? String, own.placeholderValue, "a cleared timeout takes Settings'")
-    }
-
-    // the form of the machine `title`, from its row's menu, scrolled to its timeout field
-    @MainActor
-    private func editMachine(_ title: String, in app: XCUIApplication) {
-        let row = app.descendants(matching: .any)["machine-row-\(title)"].firstMatch
-        row.press(forDuration: Self.longPress)
-        let edit = app.buttons["Edit"]
-        FakeApp.expect(edit, "Edit in the menu of \(title)")
-        edit.tap()
-        let own = app.textFields["machine-timeout"]
-        FakeApp.expect(own, "the timeout field of \(title)")
-        FormScroll.scroll(to: own, in: app.collectionViews["machine-form"], swipes: Self.swipes)
     }
 
     @MainActor

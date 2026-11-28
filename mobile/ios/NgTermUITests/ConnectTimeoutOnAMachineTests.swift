@@ -25,7 +25,6 @@ internal final class ConnectTimeoutOnAMachineTests: XCTestCase {
     private static let pageWait: TimeInterval = 5
     private static let tries = 3
     private static let swipes = 12
-    private static let longPress: TimeInterval = 1
     // past this a test fails: on a simulator that answers a minute late, waits counted in reads take hours
     private static let timeLimit: TimeInterval = 1_200
 
@@ -84,11 +83,11 @@ internal final class ConnectTimeoutOnAMachineTests: XCTestCase {
         shot("3-settings-relaunched", app)
         app.buttons["settings-done"].tap()
 
-        let own = openEdit(Self.ownLabel, in: app)
+        let own = MachineMenu.edit(Self.ownLabel, in: app)
         XCTAssertEqual(own.value as? String, "\(Self.ownSeconds)", "the machine's own timeout, relaunched")
         shot("4-own-relaunched", app)
         app.buttons["Cancel"].tap()
-        let none = openEdit(Self.settingsLabel, in: app)
+        let none = MachineMenu.edit(Self.settingsLabel, in: app)
         XCTAssertEqual(none.placeholderValue, "\(Self.settingsSeconds) s from Settings")
         XCTAssertEqual(none.value as? String, none.placeholderValue, "a machine with no timeout of its own, relaunched")
         shot("5-none-relaunched", app)
@@ -124,7 +123,8 @@ internal final class ConnectTimeoutOnAMachineTests: XCTestCase {
         FakeApp.expect(app.navigationBars["Settings"], "Settings")
     }
 
-    // the slider at its left end: an XCTest move lands only near a position inside the slider, but sure at its ends
+    // the slider at its left end: an XCTest move lands only near its position, and on an iPad even the right end
+    // landed on 59 s now and then
     @MainActor
     private func setTimeoutToTheFewest(in app: XCUIApplication) {
         let slider = app.sliders["connect-timeout"]
@@ -158,22 +158,6 @@ internal final class ConnectTimeoutOnAMachineTests: XCTestCase {
         }
         app.buttons["machine-save"].tap()
         FakeApp.expectGone(app.collectionViews["machine-form"], "the form of \(label), after Save,")
-    }
-
-    // the form of the machine `label`, from its row's menu; its timeout field
-    @MainActor
-    private func openEdit(_ label: String, in app: XCUIApplication) -> XCUIElement {
-        FakeApp.showMachines(in: app)
-        let row = app.descendants(matching: .any)["machine-row-\(label)"].firstMatch
-        FakeApp.expect(row, "the row of \(label)")
-        row.press(forDuration: Self.longPress)
-        let edit = app.buttons["Edit"]
-        FakeApp.expect(edit, "Edit in the menu of \(label)")
-        edit.tap()
-        let field = app.textFields["machine-timeout"]
-        FakeApp.expect(field, "the timeout field of \(label)")
-        FormScroll.scroll(to: field, in: app.collectionViews["machine-form"], swipes: Self.swipes)
-        return field
     }
 
     // waits for a connection `port` took after `since` to close, and asserts it closed `seconds` after it was taken
