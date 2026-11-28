@@ -12,7 +12,6 @@ them.
 
 import os
 import stat
-import subprocess
 import sys
 from pathlib import Path
 
@@ -154,15 +153,10 @@ def test_an_action_whose_master_cannot_come_up_is_refused_and_never_sent(
     cli = _cli(adapter, viewer)
     path = _control_path(remote_origin.client.invocations()[-1])
     assert path and _is_socket(path), remote_origin.client.invocations()
-    ssh = os.fspath(remote_origin.client.bin / "ssh")
     made = None
     try:
         with remote_origin.machine.unanswered():
-            stopped = subprocess.run(
-                [ssh, "-O", "stop", "-o", f"{CONTROL_PATH}{path}", ORIGIN_HOST],
-                env={"PATH": "/usr/bin:/bin", "HOME": os.fspath(remote_origin.client.directory)},
-                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, check=False,
-            )
+            stopped = remote_origin.client.stop_master(ORIGIN_HOST, path)
             assert stopped.returncode == 0, stopped
             wait_until(lambda: not _is_socket(path))
 

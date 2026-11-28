@@ -297,6 +297,18 @@ class SshClient:
         )
         self.calls.unlink(missing_ok=True)
 
+    def stop_master(self, host: str, control_path: str) -> subprocess.CompletedProcess[str]:
+        """`ssh -O stop` on the master at `control_path`: it takes no new channels, its open ones run on."""
+        return subprocess.run(
+            [os.fspath(self.bin / "ssh"), "-O", "stop", "-o", f"ControlPath={control_path}", host],
+            env={"PATH": LOGIN_PATH, "HOME": os.fspath(self.directory)},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
     def invocations(self) -> list[list[str]]:
         try:
             lines = self.calls.read_text().splitlines()

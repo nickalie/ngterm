@@ -66,6 +66,24 @@ def test_the_ssh_stand_in_reads_only_its_own_config(tmp_path):
     assert "/usr/bin/ssh -F " in wrapper and str(client.config) in wrapper, wrapper
 
 
+
+def test_stop_master_runs_ssh_o_stop_through_the_stand_in_with_the_clients_home(tmp_path):
+    keygen = subprocess.run(["sh", "-c", "command -v ssh-keygen"], capture_output=True, text=True).stdout.strip()
+    if not keygen:
+        pytest.skip("no ssh-keygen on this machine")
+    system_ssh = tmp_path / "system-ssh"
+    system_ssh.write_text('#!/bin/sh\nprintf \'%s\\n\' "$HOME" "$@"\nexit 3\n')
+    system_ssh.chmod(0o755)
+    client = SshClient(tmp_path, str(system_ssh), keygen)
+
+    stopped = client.stop_master("box", "/tmp/pool/box.sock")
+
+    assert stopped.returncode == 3
+    assert stopped.stdout.splitlines() == [
+        str(client.directory), "-F", str(client.config), "-O", "stop", "-o", "ControlPath=/tmp/pool/box.sock", "box",
+    ]
+    assert client.invocations() == [["-O", "stop", "-o", "ControlPath=/tmp/pool/box.sock", "box"]]
+
 def _machine(tmp_path, sessions, daemons):
     state = {
         "running": True,
