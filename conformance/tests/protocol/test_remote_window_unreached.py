@@ -187,9 +187,9 @@ def test_an_app_with_windows_is_refused_for_good(viewer, stand_in, opened):
         "a remote window needs ngterm-headless"
     )
     assert remote == {"host": "app-host", "state": "refused", "reason": reason}, remote
-    launches = len(stand_in.invocations())
+    launches = len(_calls(stand_in, "app-host", ""))
     time.sleep(QUIET)
-    assert len(stand_in.invocations()) == launches, stand_in.invocations()[launches:]
+    assert len(_calls(stand_in, "app-host", "")) == launches, stand_in.invocations()
     assert_error(viewer.request("workspace.new", window=window), "app-host is not connected")
 
 

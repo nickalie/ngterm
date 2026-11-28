@@ -1562,7 +1562,8 @@ cargo test -p ngterm-gpui --no-default-features && cargo test -p ngterm-gpui   #
 python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance
 .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py conformance/selftests/test_client.py \
   conformance/selftests/test_windows_launch.py conformance/selftests/test_uia.py \
-  conformance/selftests/test_read_written.py   # pipe, launch, UIA mappings, renamed-file reads
+  conformance/selftests/test_read_written.py conformance/selftests/test_ssh_stand_in.py
+  # pipe, launch, UIA mappings, renamed-file reads, the ssh.exe stand-in
 conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 ```
 

@@ -38,3 +38,19 @@ def test_answers_set_later_reach_the_next_call(tmp_path):
     stand_in.answer()
     assert _ssh(stand_in, "box", "version").returncode == 255
     assert len(stand_in.invocations()) == 2
+
+
+def test_answers_reach_the_next_call_when_a_running_call_holds_them_open_for_a_moment(tmp_path, monkeypatch):
+    stand_in = SshStandIn(tmp_path)
+    replace = os.replace
+    held = iter([True, True])
+
+    def replace_while_held(source, target):
+        # Windows refuses to replace a file that another process has open
+        if next(held, False):
+            raise PermissionError(13, "The process cannot access the file", os.fspath(target))
+        replace(source, target)
+
+    monkeypatch.setattr(os, "replace", replace_while_held)
+    stand_in.answer(("version", "late\n", 0))
+    assert _ssh(stand_in, "box", "version").stdout == "late\n"

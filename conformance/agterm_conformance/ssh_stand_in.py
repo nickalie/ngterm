@@ -13,6 +13,7 @@ import json
 import os
 import stat
 import sys
+import time
 from pathlib import Path
 
 # The stand-in's body: `{answers}` and `{calls}` are filled in.
@@ -35,6 +36,9 @@ for answer in answers:
 sys.stderr.write(f"ssh: connect to host {{host}} port 22: Connection refused\\r\\n")
 sys.exit(255)
 """
+
+# How long `answer` waits for the calls that have the answers open to close them.
+_REPLACE_PATIENCE = 2.0
 
 
 class SshStandIn:
@@ -62,8 +66,16 @@ class SshStandIn:
         rules = [{"contains": contains, "stdout": stdout, "status": status} for contains, stdout, status in answers]
         temporary = self.answers.with_name(f".{self.answers.name}.tmp")
         temporary.write_text(json.dumps(rules), encoding="utf-8")
-        # a call never reads a half-written file
-        os.replace(temporary, self.answers)
+        # a call never reads a half-written file; on Windows a call that has the file open blocks the replace
+        deadline = time.monotonic() + _REPLACE_PATIENCE
+        while True:
+            try:
+                os.replace(temporary, self.answers)
+                return
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
 
     def invocations(self) -> list[list[str]]:
         try:
