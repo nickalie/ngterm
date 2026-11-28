@@ -201,6 +201,23 @@ def _wait(condition, timeout: float = 5.0) -> None:
         time.sleep(0.02)
 
 
+def _process_state(pid: int) -> str:
+    """The one-letter state /proc gives process `pid` (`T` stopped)."""
+    return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="reads process states from /proc")
+def test_an_unanswered_sshd_is_stopped_in_the_block_and_runs_again_after_it(origin):
+    assert origin.machine is not None
+    pid = origin.machine._process.pid
+    with origin.machine.unanswered():
+        _wait(lambda: _process_state(pid) == "T")
+    _wait(lambda: _process_state(pid) != "T")
+    with pytest.raises(RuntimeError), origin.machine.unanswered():
+        raise RuntimeError("a failing block")
+    _wait(lambda: _process_state(pid) != "T")
+
+
 def test_the_proxy_carries_bytes_and_severing_cuts_open_links_but_not_later_ones():
     listener = _listen()
     accepted: list[socket.socket] = []

@@ -17,13 +17,15 @@ agent, no connection sharing and nothing read from the account's own files.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
@@ -168,6 +170,17 @@ class LoopbackMachine:
             last = f"sshd for {self.alias} did not answer on {self.port}:\n{self.log_text()}"
             self.stop()
         raise RuntimeError(last)
+
+    @contextlib.contextmanager
+    def unanswered(self) -> Iterator[None]:
+        """Inside the block sshd answers no new login, as a host that stopped answering: its listener is stopped
+        (SIGSTOP). A connection already open runs in a process of its own and carries on."""
+        assert self._process is not None, f"sshd for {self.alias} has not started"
+        os.kill(self._process.pid, signal.SIGSTOP)
+        try:
+            yield
+        finally:
+            os.kill(self._process.pid, signal.SIGCONT)
 
     def stop(self) -> None:
         process, self._process = self._process, None
