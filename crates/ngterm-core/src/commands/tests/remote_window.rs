@@ -332,10 +332,9 @@ fn a_server_that_advertises_a_catalog_gets_the_stream_opened_with_hello() {
     let link = link.0.borrow();
     let tail = crate::remote::ssh::catalog_tail(crate::remote::origin::OriginShell::Posix);
     let script = link.argv.last().unwrap();
-    assert!(
-        script.contains(&crate::command_restore::shell_quoted_line(&[tail.as_str()])),
-        "{script}"
-    );
+    // a pooled stream waits for its master in a shell that runs ssh with the tail; with no pool it is ssh's own
+    let quoted = crate::command_restore::shell_quoted_line(&[tail.as_str()]);
+    assert!(*script == tail || script.contains(&quoted), "{script}");
     assert_eq!(link.key.unwrap().session, remote.window);
     assert_eq!(link.sent, vec![json!({"kind": "hello", "hello": {"version": 1}})]);
     assert_eq!(remote.state(), CatalogState::Connecting);
