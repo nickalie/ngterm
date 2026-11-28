@@ -5,14 +5,14 @@ close ends that master. An action whose master cannot come up is answered "no co
 next action once the host answers starts a new master and runs.
 
 The test counts the window's ssh in the private ssh client's call log (`SshClient.calls`) and the TCP connections open
-through the proxy in front of the origin's sshd. Windows' OpenSSH shares no connections, so the cases are POSIX only.
+through the proxy in front of the origin's sshd. Windows' OpenSSH shares no connections; the Windows build claims no
+`posix-command-line`, so Windows skips the cases as unsupported.
 The remote window is upstream's v0.42.0 feature; only the Rust build claims `live-any-shell`, so the reference skips
 them.
 """
 
 import os
 import stat
-import sys
 from pathlib import Path
 
 import pytest
@@ -21,17 +21,11 @@ from agterm_conformance.plugin import Cli, Ctl
 from agterm_conformance.remote_origin import ORIGIN_HOST
 from agterm_conformance.wait import wait_until
 
-if sys.platform == "win32":
-    pytestmark = [
-        pytest.mark.skip(reason="Windows' OpenSSH shares no connections"),
-        pytest.mark.parametrize("remote_origin", ["headless"], indirect=True),
-    ]
-else:
-    pytestmark = [
-        pytest.mark.requires("posix-command-line", reason="the private sshd uses a POSIX shell"),
-        pytest.mark.requires("live-any-shell", reason="ngterm-headless runs every session Live, in any login shell"),
-        pytest.mark.parametrize("remote_origin", ["headless"], indirect=True),
-    ]
+pytestmark = [
+    pytest.mark.requires("posix-command-line", reason="the private sshd uses a POSIX shell"),
+    pytest.mark.requires("live-any-shell", reason="ngterm-headless runs every session Live, in any login shell"),
+    pytest.mark.parametrize("remote_origin", ["headless"], indirect=True),
+]
 
 # The window's first snapshot comes after an ssh `version` probe and an ssh catalog stream.
 CONNECT = 60.0
