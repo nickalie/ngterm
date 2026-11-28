@@ -192,7 +192,7 @@ internal enum FakeApp {
                 form.swipeUp()
             }
             settle(form, in: app)
-            try auditForm(app)
+            try auditForm(app, page: form)
         }
         app.buttons["machine-save"].tap()
     }
@@ -334,25 +334,23 @@ internal enum FakeApp {
         }
     }
 
-    /// Audits the machine form for everything but Dynamic Type, setting aside what ``audit(_:)`` does.
+    /// Audits the form `page` for everything but Dynamic Type, setting aside what ``audit(_:)`` does, and the contrast
+    /// and the clipping of text the page cuts at its edge: on an iPad's sheet a form's last rows can run past its foot.
     ///
     /// The form is a list, which lets go of the rows the audit's larger text pushes off the screen: it then reports
     /// them as not scaling, and measures their contrast while the list lays them out again. Every font of the form is a
     /// Dynamic Type style, and its golden at an accessibility text size (MachinesSnapshotTests) shows them scaling.
-    @MainActor
-    internal static func auditForm(_ app: XCUIApplication) throws {
-        try performAudit(of: app, for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
-            isSetAside(issue, in: app, isSheet: true)
-        }
-    }
-
-    /// Audits the form `page` as ``auditForm(_:)`` does, setting aside too the contrast of text the page cuts at its
-    /// edge, as ``auditSheet(_:page:)`` does: on an iPad's sheet a form's row can run past the sheet's foot.
+    ///
+    /// Text cut at the page's edge has its contrast measured against what lies past the edge, as
+    /// ``auditSheet(_:page:)`` says. Text that reaches the page's foot (an iPad's sheet scrolled to its end shows the
+    /// last footer flush with it) runs past the foot at the audit's larger text, which reports it clipped: that is the
+    /// page's scroll edge, not the text's own frame. Every text of the form wraps with no line limit, and the user
+    /// scrolls to read the rest (the same golden shows it).
     @MainActor
     internal static func auditForm(_ app: XCUIApplication, page: XCUIElement) throws {
         let shown = page.frame
         try performAudit(of: app, for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
-            if issue.auditType == .contrast, let element = issue.element, !shown.contains(element.frame) {
+            if let element = issue.element, issue.auditType.isCutAtFoot(element.frame, by: shown) {
                 return true
             }
             return isSetAside(issue, in: app, isSheet: true)
@@ -441,5 +439,25 @@ internal enum FakeApp {
             return false
         }
         return app.navigationBars.allElementsBoundByIndex.contains { bar in bar.frame.contains(element.frame) }
+    }
+}
+
+extension XCUIAccessibilityAuditType {
+    // a point's slack for the frames' rounding
+    private static let footSlack: CGFloat = 1
+
+    // whether the page `shown` cuts the text at `frame` at its foot: its contrast once it runs past the page, its
+    // clipping once it reaches the foot
+    internal func isCutAtFoot(_ frame: CGRect, by shown: CGRect) -> Bool {
+        switch self {
+        case .contrast:
+            !shown.contains(frame)
+
+        case .textClipped:
+            frame.maxY >= shown.maxY - Self.footSlack
+
+        default:
+            false
+        }
     }
 }
