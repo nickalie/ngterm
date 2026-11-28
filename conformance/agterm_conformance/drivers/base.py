@@ -241,6 +241,11 @@ class Driver(ABC):
             raise ValueError("menu needs a path")
         item = self._wait(lambda: self._menu_command(path), f"menu command {' > '.join(path)!r}", timeout)
         self._press_element(item)
+        self._wait(lambda: self._menu_closed(item), f"closed menu of {' > '.join(path)!r}", timeout)
+
+    def _menu_closed(self, item: Element) -> bool:
+        """Whether the menu that held the pressed `item` is gone, so input that follows reaches the app, not it."""
+        return True
 
     @action
     def tab(self, name: str, timeout: float | None = None) -> Element:

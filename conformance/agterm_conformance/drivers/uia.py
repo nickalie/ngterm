@@ -394,6 +394,11 @@ class UiaDriver(Driver):
     def _menu_item(self, name: str) -> Element | None:
         return next((el for el in self._all_elements() if el.role == "menu-item" and el.name == name), None)
 
+    def _menu_closed(self, item: Element) -> bool:
+        # UIA's Invoke only queues the app's action: until the app runs it, its menu stays open and takes the keys.
+        held = {node for node in item.handle.ancestors() if node.props.get(CONTROL_TYPE) == MENU_CONTROL_TYPE}
+        return not held & set(self._nodes())
+
     def _menus(self, hwnd: int) -> set[Node]:
         return {node for node in self._nodes()
                 if node.hwnd == hwnd and node.props.get(CONTROL_TYPE) == MENU_CONTROL_TYPE}

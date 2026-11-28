@@ -327,3 +327,19 @@ def test_the_app_windows_read_while_another_process_stalls_the_desktop_search():
     assert [hwnd for _, hwnd in driver._windows()] == [0x40, 0x30]
     found = driver.window(timeout=0.2)
     assert (found.role, found.name, found.handle.hwnd) == ("window", "home", 0x30)
+
+
+def test_a_menu_command_returns_once_its_menu_is_closed():
+    """Invoke only queues the app's action, and the menu takes the keys while it stays open: `menu` returns once the
+    menu that held the command is gone, so text typed next reaches the app."""
+    menu = uia.Node(element=object(), runtime_id=(1,), props={uia.CONTROL_TYPE: uia.MENU_CONTROL_TYPE}, hwnd=7)
+    item = uia.Node(element=object(), runtime_id=(2,), props={uia.CONTROL_TYPE: uia.MENU_ITEM_CONTROL_TYPE}, hwnd=7,
+                    parent=menu)  # fmt: skip
+    trees = [[menu, item], [menu, item], []]
+    pressed = []
+    driver = _bare_driver(_menu_command=lambda path: uia.Element(None, "menu-item", "Open", handle=item),
+                          _press_element=lambda element: pressed.append(element.name),
+                          _nodes=lambda: trees.pop(0) if len(trees) > 1 else trees[0])  # fmt: skip
+    driver.menu("File", "Open")
+    assert pressed == ["Open"]
+    assert trees == [[]], "menu returned while the menu was still open"
