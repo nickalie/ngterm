@@ -300,14 +300,14 @@ pub fn attach_command(
 ///
 /// # Errors
 ///
-/// A name that is not one of the endpoint's peer's daemons, or an endpoint path with control characters.
+/// A name that is not one of the endpoint's peer's pane or scratch daemons, or an endpoint path with control characters.
 pub fn attach_tail(
     endpoint: &ControlLiveEndpoint,
     daemon: &str,
     lead: Option<&LeadAttachment>,
 ) -> Result<String, InvocationError> {
     let peer = endpoint.peer();
-    if !peer::is_daemon_name(peer, daemon) {
+    if !peer::is_daemon_name(peer, daemon) && !peer::is_scratch_daemon_name(peer, daemon) {
         return Err(InvocationError::InvalidSession);
     }
     if !is_path(&endpoint.executable) || !is_path(&endpoint.socket_directory) {
@@ -897,6 +897,11 @@ mod tests {
         assert_eq!(
             attach_tail(&endpoint, "notes", None),
             Err(InvocationError::InvalidSession)
+        );
+        let scratch = crate::live::scratch_daemon_name(Uuid::from_u128(0x42));
+        assert_eq!(
+            attach_tail(&endpoint, &scratch, None).unwrap(),
+            format!("{cleared}{rest}").replace("'ngterm-0000", "'ngterm-scratch-0000")
         );
         let hostile = ControlLiveEndpoint {
             peer: None,

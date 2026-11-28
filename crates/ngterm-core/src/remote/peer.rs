@@ -46,6 +46,9 @@ pub mod agterm {
     pub const PATH_DIRECTORIES: &str = "/usr/local/bin:/opt/homebrew/bin";
     /// The prefix of its pane daemons' names, followed by 32 lower-case hex digits.
     pub const DAEMON_PREFIX: &str = "agterm-";
+    /// The prefix of its server scratch daemons' names (upstream's `scratchNamePrefix`), followed by 32 lower-case hex
+    /// digits.
+    pub const SCRATCH_PREFIX: &str = "agterm-scratch-";
     /// The attach variables its zmx reads (upstream's `ZmxSupport`, `attachCommand`).
     pub const SESSION_VARIABLE: &str = "ZMX_SESSION";
     pub const SESSION_PREFIX_VARIABLE: &str = "ZMX_SESSION_PREFIX";
@@ -237,6 +240,15 @@ pub fn is_daemon_name(peer: RemotePeer, name: &str) -> bool {
     match peer {
         RemotePeer::Ngterm => crate::live::is_daemon_name(name),
         RemotePeer::Agterm => name.strip_prefix(agterm::DAEMON_PREFIX).is_some_and(is_hex_identity),
+    }
+}
+
+/// Whether `name` is one of `peer`'s server scratch daemons: its scratch prefix and 32 lower-case hex digits.
+#[must_use]
+pub fn is_scratch_daemon_name(peer: RemotePeer, name: &str) -> bool {
+    match peer {
+        RemotePeer::Ngterm => crate::live::is_scratch_daemon_name(name),
+        RemotePeer::Agterm => name.strip_prefix(agterm::SCRATCH_PREFIX).is_some_and(is_hex_identity),
     }
 }
 
@@ -507,6 +519,20 @@ mod tests {
         assert_eq!(origin_pane_identity(&ngterm), Some(identity));
         assert_eq!(origin_pane_identity(&agterm), Some(identity));
         assert_eq!(origin_pane_identity("agterm-notes"), None);
+    }
+
+    #[test]
+    fn each_peer_knows_only_its_own_scratch_daemon_names() {
+        let identity = Uuid::from_u128(0x42);
+        let ngterm = crate::live::scratch_daemon_name(identity);
+        let agterm = format!("agterm-scratch-{}", identity.simple());
+        assert!(is_scratch_daemon_name(RemotePeer::Ngterm, &ngterm));
+        assert!(!is_scratch_daemon_name(RemotePeer::Ngterm, &agterm));
+        assert!(is_scratch_daemon_name(RemotePeer::Agterm, &agterm));
+        assert!(!is_scratch_daemon_name(RemotePeer::Agterm, &ngterm));
+        assert!(!is_scratch_daemon_name(RemotePeer::Agterm, "agterm-scratch-notes"));
+        assert!(!is_daemon_name(RemotePeer::Agterm, &agterm));
+        assert_eq!(origin_pane_identity(&agterm), None);
     }
 
     #[test]

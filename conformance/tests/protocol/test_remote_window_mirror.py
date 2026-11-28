@@ -5,8 +5,9 @@ connects again once it answers, and a second open of the server answers the wind
 that makes or changes rows in the remote window runs on the server, and the window shows its outcome once the catalog
 brings it; a command that would make a shell or a row on this machine is refused there, and every one of them runs as
 before in a local window. The CLI cases give the actions as a user does: a made row is selected when it arrives, an
-action while the server is not connected is refused and never sent later, and a reply lost in flight reads `unknown`
-until `window remote dismiss` clears it.
+action while the server is not connected is refused and never sent later, a reply lost in flight reads `unknown`
+until `window remote dismiss` clears it, and a scratch shown in the window is the server's scratch, typed into from
+either side.
 
 The remote window is upstream's v0.42.0 feature, and test_remote_window.py keeps its since("0.42.0") cases. These cases
 need a Live origin in any login shell, which only the Rust build claims (`live-any-shell`), so the reference skips them.
@@ -458,6 +459,38 @@ def test_a_scratch_shown_or_hidden_in_a_remote_window_runs_on_the_server(adapter
                 lambda tree, served, shown=shown: find_session(served, made)["scratch"] is shown
                 and find_session(tree, made)["scratch"] is shown,
             )
+    finally:
+        _close_on_origin(origin, made)
+    _settled(viewer, window, origin, lambda tree, _: made not in session_ids(tree))
+
+
+def _scratch_text(cli, sid, *where):
+    result = cli("session", "text", "--all", "--pane", "scratch", "--target", sid, *where, "--json")
+    return result.json()["result"]["text"] if result.returncode == 0 else ""
+
+
+@pytest.mark.covers("cli:session scratch", "cli:session type", "cli:session text", "session.type", "session.text")
+def test_a_scratch_in_a_remote_window_is_the_servers_scratch_both_ways(adapter, remote_origin, remote_viewer, mirror):
+    origin, viewer = Ctl(remote_origin.instance), remote_viewer
+    window, _ = mirror
+    cli = _cli(adapter, viewer, window)
+    server_cli = Cli(adapter.ctl_path, remote_origin.instance, adapter.ctl_name)
+    made = None
+    try:
+        made = _made(cli("session", "new", "--window", window, "--name", "shared", "--no-select", "--json"))
+        _settled(viewer, window, origin, lambda tree, served: made in session_ids(tree) and made in session_ids(served))
+        _done(cli("session", "scratch", "on", "--target", made, "--window", window))
+        _settled(
+            viewer, window, origin,
+            lambda tree, served: find_session(served, made)["scratch"] and find_session(tree, made)["scratch"],
+        )
+        # printf joins the halves, so only the command's output matches, never its echo.
+        _done(server_cli("session", "type", "--pane", "scratch", "--target", made, "printf '%s%s\\n' FROM- SERVER\n"))
+        wait_until(lambda: "FROM-SERVER" in _scratch_text(cli, made, "--window", window), timeout=CONNECT)
+        _done(cli("session", "type", "--pane", "scratch", "--target", made, "--window", window,
+                  "printf '%s%s\\n' FROM- VIEWER\n"))
+        wait_until(lambda: "FROM-VIEWER" in _scratch_text(server_cli, made), timeout=CONNECT)
+        wait_until(lambda: "FROM-VIEWER" in _scratch_text(cli, made, "--window", window), timeout=CONNECT)
     finally:
         _close_on_origin(origin, made)
     _settled(viewer, window, origin, lambda tree, _: made not in session_ids(tree))

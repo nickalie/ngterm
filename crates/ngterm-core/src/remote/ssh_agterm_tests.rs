@@ -175,6 +175,21 @@ fn a_daemon_name_must_be_its_own_peers() {
         attach_tail(&ngterm, &agterm_daemon(), None),
         Err(InvocationError::InvalidSession)
     );
+    let agterm_scratch = format!("agterm-scratch-{}", Uuid::from_u128(0x42).simple());
+    let ngterm_scratch = crate::live::scratch_daemon_name(Uuid::from_u128(0x42));
+    assert!(
+        attach_tail(&agterm_endpoint(), &agterm_scratch, None)
+            .unwrap()
+            .contains(&format!("'attach' '{agterm_scratch}'"))
+    );
+    assert_eq!(
+        attach_tail(&agterm_endpoint(), &ngterm_scratch, None),
+        Err(InvocationError::InvalidSession)
+    );
+    assert_eq!(
+        attach_tail(&ngterm, &agterm_scratch, None),
+        Err(InvocationError::InvalidSession)
+    );
     let mut hostile = agterm_endpoint();
     hostile.socket_directory = "/tmp/x\n".to_owned();
     assert_eq!(
