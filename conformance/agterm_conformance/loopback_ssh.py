@@ -34,6 +34,8 @@ SSHD_DIRECTORIES = ("/usr/sbin", "/usr/local/sbin", "/usr/bin", "/sbin")
 READY_TIMEOUT = 15.0
 # the PATH sshd gives a login
 LOGIN_PATH = "/usr/bin:/bin"
+# the PATH the viewer side runs its ssh stand-in with
+CLIENT_PATH = "/usr/bin:/bin"
 
 
 def find_program(name: str, extra: tuple[str, ...] = ()) -> str | None:
@@ -289,7 +291,7 @@ class SshClient:
         the host's cold start of ssh, sshd and the account's shell."""
         subprocess.run(
             [os.fspath(self.bin / "ssh"), "-T", "-o", "BatchMode=yes", machine.alias, "true"],
-            env={"PATH": "/usr/bin:/bin", "HOME": os.fspath(self.directory)},
+            env={"PATH": CLIENT_PATH, "HOME": os.fspath(self.directory)},
             stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=120,
@@ -301,7 +303,7 @@ class SshClient:
         """`ssh -O stop` on the master at `control_path`: it takes no new channels, its open ones run on."""
         return subprocess.run(
             [os.fspath(self.bin / "ssh"), "-O", "stop", "-o", f"ControlPath={control_path}", host],
-            env={"PATH": LOGIN_PATH, "HOME": os.fspath(self.directory)},
+            env={"PATH": CLIENT_PATH, "HOME": os.fspath(self.directory)},
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
