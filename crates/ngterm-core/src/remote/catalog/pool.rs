@@ -259,7 +259,6 @@ impl SshConnectionPool {
         self.state().slots.iter().map(|slot| slot.users.len()).collect()
     }
 
-    /// Waits for the master checks the leases started.
     /// The callers waiting on a start in progress, for a test that must know they share it.
     #[cfg(test)]
     pub(crate) fn waiting(&self) -> usize {
@@ -271,6 +270,7 @@ impl SshConnectionPool {
             .sum()
     }
 
+    /// Waits for the master checks the leases started.
     pub fn settle(&self) {
         let handles = std::mem::take(&mut self.state().background);
         for handle in handles {
