@@ -2,9 +2,7 @@
 
 use ngterm_proto::ControlLiveEndpoint;
 
-use super::{
-    PaneLabel, attach_pane_command, pooled, pooled_attach_pane_command, present_command, waiting_for_connection,
-};
+use super::{PaneLabel, attach_pane_command, pooled, present_command, waiting_for_connection};
 use crate::live::daemon_name;
 use crate::live::lead::LeadAttachment;
 use crate::remote::peer::RemotePeer;
@@ -89,6 +87,7 @@ mod run {
     use std::process::{Command, Stdio};
 
     use super::*;
+    use crate::remote::ssh::pooled_attach_pane_command;
 
     /// Runs `script` with an `ssh` whose master check exits `check` and whose attach prints `attached`; its output and
     /// status.
