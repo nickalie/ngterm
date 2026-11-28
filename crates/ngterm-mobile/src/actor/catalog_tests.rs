@@ -8,7 +8,7 @@ use ngterm_core::catalog::frames::{self, CatalogChange, CatalogFrame, CatalogHel
 use ngterm_core::live::daemon_name;
 use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::origin::OriginShell;
-use ngterm_core::remote::origin_replies::{READY_BUDGET, rename_session_arguments};
+use ngterm_core::remote::origin_replies::{PAUSE, READY_BUDGET, rename_session_arguments};
 use ngterm_core::remote::ssh::{catalog_tail, control_tail, control_tail_with_operands, tree_tail};
 use ngterm_proto::CatalogVersions;
 use serde_json::{Value, json};
@@ -529,14 +529,13 @@ fn new_session_carries_an_operation_id_and_answers_with_the_row_the_catalog_show
     });
 }
 
-/// New Session through `actor`'s catalog, whose machine then answers its listings with `listings` in turn: the
-/// created row and the answer to a show of its pane.
-async fn create_and_show(
+/// New Session through `actor`'s catalog, whose machine then answers its listings with `listings` in turn (no
+/// listings: the test answers them by hand), up to the catalog's showing the created session: the pending answer.
+async fn create_shown(
     actor: &Actor,
     peer: &ChannelPeer,
     listings: Vec<Script>,
-) -> (RemoteSession, Result<(), MobileError>) {
-    let created = uuid_string(id(7));
+) -> oneshot::Receiver<Result<RemoteSession, MobileError>> {
     actor
         .transport
         .script_sequence(&tree_tail(OriginShell::Posix), listings);
@@ -544,7 +543,7 @@ async fn create_and_show(
     let (op_id, _, op) = operation(actor).await;
     answer(
         op,
-        &json!({"ok": true, "result": {"id": created, "receipt": receipt(&op_id, "applied", Some(5))}}),
+        &json!({"ok": true, "result": {"id": uuid_string(id(7)), "receipt": receipt(&op_id, "applied", Some(5))}}),
     )
     .await;
     let added = CatalogFrame::Delta {
@@ -557,16 +556,62 @@ async fn create_and_show(
         },
     };
     send(peer, &added).await;
-    let row = answered.await.unwrap().expect("created");
+    answered
+}
+
+/// The answer to a show of the pane of the session [`create_shown`] made.
+async fn show_made_pane(actor: &Actor) -> Result<(), MobileError> {
     let (reply, shown) = oneshot::channel();
     actor.post(Command::ShowPane {
         machine_id: "m1".to_owned(),
-        session_id: created,
+        session_id: uuid_string(id(7)),
         pane_id: uuid_string(made_pane()),
         size: SIZE,
         reply,
     });
-    (row, shown.await.unwrap().map(drop))
+    shown.await.unwrap().map(drop)
+}
+
+/// New Session through `actor`'s catalog, whose machine then answers its listings with `listings` in turn: the
+/// created row and the answer to a show of its pane.
+async fn create_and_show(
+    actor: &Actor,
+    peer: &ChannelPeer,
+    listings: Vec<Script>,
+) -> (RemoteSession, Result<(), MobileError>) {
+    let row = create_shown(actor, peer, listings)
+        .await
+        .await
+        .unwrap()
+        .expect("created");
+    (row, show_made_pane(actor).await)
+}
+
+/// How many listings `actor`'s machine ran so far.
+fn tree_execs(actor: &Actor) -> usize {
+    let tail = tree_tail(OriginShell::Posix);
+    actor
+        .transport
+        .execs()
+        .iter()
+        .filter(|exec| exec.command == tail)
+        .count()
+}
+
+/// `peer`, a listing's channel, answers with `script`.
+async fn reply(peer: ChannelPeer, script: Script) {
+    assert!(peer.data(script.stdout).await);
+    peer.end(script.end).await;
+    settle().await;
+}
+
+/// The one listing opened since the last call.
+async fn opened_listing(actor: &Actor) -> ChannelPeer {
+    let mut opened = opened(actor).await;
+    assert_eq!(opened.len(), 1, "one listing opened");
+    let opened = opened.remove(0);
+    assert_eq!(opened.command, tree_tail(OriginShell::Posix));
+    opened.peer
 }
 
 #[test]
@@ -590,6 +635,112 @@ fn a_new_session_the_machine_lists_after_the_catalog_shows_it_shows_its_pane() {
         let (row, shown) = create_and_show(&actor, &peer, listings).await;
         assert_eq!(row.name, "build");
         assert_eq!(shown, Ok(()), "the new session's pane shows");
+    });
+}
+
+#[test]
+fn a_new_session_that_ends_or_goes_while_unlisted_answers_without_waiting_out_the_budget() {
+    let changes = [
+        CatalogChange::SessionChanged(ended(7, "build").fields),
+        CatalogChange::SessionRemoved(id(7)),
+    ];
+    for change in changes {
+        local(async {
+            let actor = Actor::start();
+            let peer = following(&actor).await;
+            let answered = create_shown(&actor, &peer, vec![listing(true)]).await;
+            let listings = tree_execs(&actor);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let started = tokio::time::Instant::now();
+            let delta = CatalogFrame::Delta {
+                epoch: EPOCH.to_owned(),
+                rev: 6,
+                change: change.clone(),
+            };
+            send(&peer, &delta).await;
+            answered.await.unwrap().expect("created");
+            assert!(started.elapsed() <= PAUSE, "{change:?}: it stops at once");
+            assert_eq!(tree_execs(&actor), listings, "{change:?}: no listing after it goes");
+        });
+    }
+}
+
+#[test]
+fn a_new_session_whose_machine_disconnects_while_unlisted_answers_without_waiting_out_the_budget() {
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        let answered = create_shown(&actor, &peer, vec![listing(true)]).await;
+        let listings = tree_execs(&actor);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let started = tokio::time::Instant::now();
+        actor.post(Command::Disconnect {
+            machine_id: "m1".to_owned(),
+        });
+        settle().await;
+        answered.await.unwrap().expect("created");
+        assert!(started.elapsed() <= PAUSE, "it stops at once");
+        assert_eq!(tree_execs(&actor), listings, "no listing after the disconnect");
+    });
+}
+
+/// A listing that began before a newer one is kept does not count, though it holds the session.
+#[test]
+fn a_new_session_lists_again_when_a_newer_listing_without_it_is_kept() {
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        let answered = create_shown(&actor, &peer, Vec::new()).await;
+        let older = opened_listing(&actor).await;
+        let (sent, _listed) = oneshot::channel();
+        actor.post(Command::ListSessions {
+            machine_id: "m1".to_owned(),
+            reply: sent,
+        });
+        let newer = opened_listing(&actor).await;
+        reply(newer, listing(true)).await;
+        let made = uuid_string(id(7));
+        reply(older, listing_with(&made, "build")).await;
+        tokio::time::sleep(PAUSE).await;
+        reply(opened_listing(&actor).await, listing_with(&made, "build")).await;
+        answered.await.unwrap().expect("created");
+        assert_eq!(show_made_pane(&actor).await, Ok(()), "the new session's pane shows");
+    });
+}
+
+/// A catalog that shows the session late in the budget still leaves its first listing the time to answer.
+#[test]
+fn a_new_session_the_catalog_shows_late_still_gets_a_whole_listing() {
+    local(async {
+        let actor = Actor::start();
+        let peer = following(&actor).await;
+        actor
+            .transport
+            .script_sequence(&tree_tail(OriginShell::Posix), Vec::new());
+        let answered = post_create(&actor, Some("build"));
+        let (op_id, _, op) = operation(&actor).await;
+        let made = uuid_string(id(7));
+        answer(
+            op,
+            &json!({"ok": true, "result": {"id": made, "receipt": receipt(&op_id, "applied", Some(5))}}),
+        )
+        .await;
+        tokio::time::sleep(READY_BUDGET.saturating_sub(Duration::from_millis(100))).await;
+        let added = CatalogFrame::Delta {
+            epoch: EPOCH.to_owned(),
+            rev: 5,
+            change: CatalogChange::SessionAdded {
+                session: terminal(7, "build", None),
+                workspace: id(9),
+                index: 2,
+            },
+        };
+        send(&peer, &added).await;
+        let listing = opened_listing(&actor).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        reply(listing, listing_with(&made, "build")).await;
+        answered.await.unwrap().expect("created");
+        assert_eq!(show_made_pane(&actor).await, Ok(()), "the new session's pane shows");
     });
 }
 

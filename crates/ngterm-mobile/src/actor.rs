@@ -1345,7 +1345,8 @@ async fn catalog_action<T: Transport>(
 }
 
 /// New Session's answer once the catalog applied it: the created row once the catalog shows it attachable, with the
-/// machine listed again until a listing holds it, within [`READY_BUDGET`] in all, so that its panes show.
+/// machine listed again until a listing holds it, so that its panes show. The relists stop at [`READY_BUDGET`] from
+/// the start, past one whole listing.
 async fn created_in_catalog<T: Transport>(
     state: &Rc<State<T>>,
     link: &OnMachine<T::Connection>,
@@ -1375,7 +1376,7 @@ async fn created_in_catalog<T: Transport>(
             )))
         })?;
     // an ended session has no pane to show, and no listing would hold it
-    if !row.ended && !listed_until_held(state, link, machine_id, &row.id, deadline).await {
+    if !row.ended && listed_until_held(state, link, machine_id, &row.id, deadline).await == Relisted::NotHeld {
         note!(
             WARN,
             tag::SESSIONS,
@@ -1386,34 +1387,77 @@ async fn created_in_catalog<T: Transport>(
     Ok(row)
 }
 
-/// Lists `machine_id` every [`PAUSE`] until a listing holds `session_id` or `deadline` passes: whether one did.
-/// Panes are shown from the listing, and the machine lists a session only once each of its panes' daemons runs,
-/// which can be after its catalog shows the session.
+/// How [`listed_until_held`] ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Relisted {
+    Held,
+    /// The session ended or left the catalog, or the machine's connection went: no listing is to wait for.
+    Gone,
+    NotHeld,
+}
+
+/// Lists `machine_id` every [`PAUSE`] until its kept listing holds `session_id`, or `deadline` passes, or the session
+/// or the connection goes. Panes are shown from the kept listing, and the machine lists a session only once each of
+/// its panes' daemons runs, which can be after its catalog shows the session. The first listing is not cut at
+/// `deadline`, as a slow catalog can leave it no time.
 async fn listed_until_held<T: Transport>(
     state: &Rc<State<T>>,
     link: &OnMachine<T::Connection>,
     machine_id: &str,
     session_id: &str,
     deadline: tokio::time::Instant,
-) -> bool {
+) -> Relisted {
+    let mut first = true;
     loop {
+        if relist_is_moot(state, link, machine_id, session_id) {
+            return Relisted::Gone;
+        }
         let listing = state.begin_listing();
-        let answer = tokio::time::timeout_at(deadline, sessions::list(&*link.connection, &link.host)).await;
+        let list = sessions::list(&*link.connection, &link.host);
+        let answer = if std::mem::take(&mut first) {
+            Ok(list.await)
+        } else {
+            tokio::time::timeout_at(deadline, list).await
+        };
         if let Ok(Ok(tree)) = answer {
-            let held = tree
-                .apps()
-                .any(|app| app.sessions.iter().any(|listed| listed.id == session_id));
             listed(state, link, machine_id, tree, listing.began);
-            if held {
-                return true;
+            if kept_listing_holds(state, machine_id, session_id) {
+                return Relisted::Held;
             }
         }
         drop(listing);
         if tokio::time::Instant::now() + PAUSE >= deadline {
-            return false;
+            return Relisted::NotHeld;
         }
         tokio::time::sleep(PAUSE).await;
     }
+}
+
+/// Whether no listing of `machine_id` can show `session_id` any more: its connection went, or its catalog no longer
+/// holds the session as an attachable terminal.
+fn relist_is_moot<T: Transport>(
+    state: &State<T>,
+    link: &OnMachine<T::Connection>,
+    machine_id: &str,
+    session_id: &str,
+) -> bool {
+    !state.is_current(machine_id, &link.connection)
+        || !catalogs::holds(state, machine_id, session_id)
+        || catalogs::attach_refusal(state, machine_id, session_id).is_some()
+}
+
+/// Whether `machine_id`'s kept listing itself holds `session_id`, not only through the catalog as
+/// [`State::listing_of`] finds it.
+fn kept_listing_holds<T: Transport>(state: &State<T>, machine_id: &str, session_id: &str) -> bool {
+    state
+        .listings
+        .borrow()
+        .get(machine_id)
+        .and_then(|kept| kept.tree.as_ref())
+        .is_some_and(|tree| {
+            tree.apps()
+                .any(|app| app.sessions.iter().any(|listed| listed.id == session_id))
+        })
 }
 
 /// Opens the presentation stream of `session_id`, a session of `machine_id`'s last listing, on the machine's
