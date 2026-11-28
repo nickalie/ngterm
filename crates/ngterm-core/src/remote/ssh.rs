@@ -550,12 +550,78 @@ pub fn pooled(mut argv: Vec<String>, control_path: &str) -> Vec<String> {
     argv
 }
 
+/// `ssh -O check` on the master at `path`.
+#[must_use]
+pub fn check_command(host: &str, path: &str) -> Vec<String> {
+    control_operation("check", host, path)
+}
+
+/// `ssh -O exit` on the master at `path`.
+#[must_use]
+pub fn exit_command(host: &str, path: &str) -> Vec<String> {
+    control_operation("exit", host, path)
+}
+
+fn control_operation(operation: &str, host: &str, path: &str) -> Vec<String> {
+    let destination = peer::ssh_destination(host);
+    [
+        "ssh",
+        "-O",
+        operation,
+        "-o",
+        &format!("ControlPath={path}"),
+        destination,
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// Starts a background master at `path`. Its stdio goes nowhere, or the master would keep the runner's pipes open for
+/// as long as it lives. It runs only after a failed check, so a socket at `path` is a dead master's: left there, `ssh
+/// -M` finds the path taken and connects without sharing. A channel joining the master keeps the master's keep-alive,
+/// never its own, so the master gets the keep-alive when the user's config sets none.
+#[must_use]
+pub fn start_command(host: &str, path: &str) -> Vec<String> {
+    let control_path = format!("ControlPath={path}");
+    let connect_timeout = format!("ConnectTimeout={}", super::connect_timeout::seconds(host));
+    let host = peer::ssh_destination(host);
+    let options = [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        connect_timeout.as_str(),
+        "-o",
+        "ControlPersist=60",
+        "-o",
+        control_path.as_str(),
+    ];
+    let log = format!("{path}.log");
+    let mut master = vec!["ssh", "-f", "-N", "-M", "-E", log.as_str()];
+    master.extend(options);
+    let ssh = format!("{} $ka {}", shell_quoted_line(&master), shell_quoted_line(&[host]));
+    // -N rides into the check: a `Match sessiontype` block answers the master's own session type
+    let mut probe = vec!["ssh", "-G", "-N"];
+    probe.extend(options);
+    probe.push(host);
+    let keep_alive = format!(
+        "ka=; {} 2>/dev/null | grep -qx {} && ka={}",
+        shell_quoted_line(&probe),
+        shell_quoted_line(&[NO_KEEP_ALIVE]),
+        shell_quoted_line(&[KEEP_ALIVE.join(" ")])
+    );
+    let script = format!(
+        "rm -f {}; {keep_alive}; exec {ssh} </dev/null >/dev/null 2>&1",
+        shell_quoted_line(&[path])
+    );
+    ["/bin/sh", "-c", script.as_str()].map(str::to_owned).to_vec()
+}
+
 /// Shell that defines `ngterm_connection_wait` (upstream's `connectionWait`), for a command the app cannot hold back
 /// until the pool has its master up: it polls the master for 15 s and returns 255, ssh's own failure, when none came
 /// up, so the caller fails into its reconnect path rather than open a connection of its own.
 #[must_use]
 pub fn connection_wait(host: &str, control_path: &str) -> String {
-    let check = shell_quoted_line(&super::catalog::pool::check_command(host, control_path));
+    let check = shell_quoted_line(&check_command(host, control_path));
     format!(
         "ngterm_connection_wait() {{ i=0; while ! {check} 2>/dev/null; do i=$((i+1)); \
          [ \"$i\" -ge 75 ] && return {SSH_LOST}; sleep 0.2; done; }}"
@@ -563,12 +629,12 @@ pub fn connection_wait(host: &str, control_path: &str) -> String {
 }
 
 /// `argv` run once the master at `control_path` answers (upstream's `waitingForConnection`); without one it says so
-/// and exits 255, so a stream's own retry asks again.
+/// on stderr, as its stdout is a framed stream, and exits 255, so the stream's lost path and retry run.
 #[must_use]
 pub fn waiting_for_connection(argv: &[String], host: &str, control_path: &str) -> Vec<String> {
     let failed = shell_quoted_line(&[format!("ngterm: no connection to {host}").as_str()]);
     let script = format!(
-        "{}; ngterm_connection_wait || {{ printf '%s\\n' {failed}; exit {SSH_LOST}; }}; exec {}",
+        "{}; ngterm_connection_wait || {{ printf '%s\\n' {failed} >&2; exit {SSH_LOST}; }}; exec {}",
         connection_wait(host, control_path),
         shell_quoted_line(argv)
     );

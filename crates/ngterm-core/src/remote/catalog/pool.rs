@@ -10,19 +10,18 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use uuid::Uuid;
 
-use crate::command_restore::shell_quoted_line;
 use crate::pane_env::uuid_string;
 use crate::remote::client::{LinkKey, PresentationLink, PresentationTransport};
 use crate::remote::ssh;
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner, validate};
 use crate::remote::viewer::{Answer, run_off_thread};
-use crate::remote::viewer_run::{KEEP_ALIVE, NO_KEEP_ALIVE};
 
 /// How many channels one master carries.
 pub const CHANNELS_PER_CONNECTION: usize = 8;
@@ -61,11 +60,13 @@ struct Slot {
 struct Start {
     done: Mutex<Option<bool>>,
     finished: Condvar,
+    waiters: AtomicUsize,
 }
 
 impl Start {
     fn wait(&self) -> bool {
         let mut done = self.done.lock().unwrap_or_else(PoisonError::into_inner);
+        self.waiters.fetch_add(1, Ordering::SeqCst);
         loop {
             if let Some(started) = *done {
                 return started;
@@ -221,17 +222,17 @@ impl SshConnectionPool {
     fn check_or_start(&self, path: &str) -> bool {
         let host = &self.shared.host;
         let run = |argv: Vec<String>| self.shared.runner.run(&argv, COMMAND_DEADLINE).status == 0;
-        if run(check_command(host, path)) {
+        if run(ssh::check_command(host, path)) {
             return !self.state().closed;
         }
         if self.state().closed {
             return false;
         }
-        let started = run(start_command(host, path));
+        let started = run(ssh::start_command(host, path));
         if self.state().closed {
             // the pool closed while this master was starting; its exit command already ran and missed it
             if started {
-                run(exit_command(host, path));
+                run(ssh::exit_command(host, path));
             }
             return false;
         }
@@ -246,7 +247,7 @@ impl SshConnectionPool {
         let commands = state
             .slots
             .iter()
-            .map(|slot| exit_command(&self.shared.host, &slot.path))
+            .map(|slot| ssh::exit_command(&self.shared.host, &slot.path))
             .collect();
         state.slots.clear();
         commands
@@ -259,6 +260,17 @@ impl SshConnectionPool {
     }
 
     /// Waits for the master checks the leases started.
+    /// The callers waiting on a start in progress, for a test that must know they share it.
+    #[cfg(test)]
+    pub(crate) fn waiting(&self) -> usize {
+        self.state()
+            .slots
+            .iter()
+            .filter_map(|slot| slot.preparing.as_ref())
+            .map(|start| start.waiters.load(Ordering::SeqCst))
+            .sum()
+    }
+
     pub fn settle(&self) {
         let handles = std::mem::take(&mut self.state().background);
         for handle in handles {
@@ -334,72 +346,6 @@ pub(crate) fn run_pooled_off_thread(
             *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
         });
     spawned.is_ok().then_some(answer)
-}
-
-/// `ssh -O check` on the master at `path`.
-#[must_use]
-pub fn check_command(host: &str, path: &str) -> Vec<String> {
-    control_operation("check", host, path)
-}
-
-/// `ssh -O exit` on the master at `path`.
-#[must_use]
-pub fn exit_command(host: &str, path: &str) -> Vec<String> {
-    control_operation("exit", host, path)
-}
-
-fn control_operation(operation: &str, host: &str, path: &str) -> Vec<String> {
-    let destination = crate::remote::peer::ssh_destination(host);
-    [
-        "ssh",
-        "-O",
-        operation,
-        "-o",
-        &format!("ControlPath={path}"),
-        destination,
-    ]
-    .map(str::to_owned)
-    .to_vec()
-}
-
-/// Starts a background master at `path`. Its stdio goes nowhere, or the master would keep the runner's pipes open for
-/// as long as it lives. It runs only after a failed check, so a socket at `path` is a dead master's: left there, `ssh
-/// -M` finds the path taken and connects without sharing. A channel joining the master keeps the master's keep-alive,
-/// never its own, so the master gets the keep-alive when the user's config sets none.
-#[must_use]
-pub fn start_command(host: &str, path: &str) -> Vec<String> {
-    let control_path = format!("ControlPath={path}");
-    let connect_timeout = format!("ConnectTimeout={}", crate::remote::connect_timeout::seconds(host));
-    let host = crate::remote::peer::ssh_destination(host);
-    let options = [
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        connect_timeout.as_str(),
-        "-o",
-        "ControlPersist=60",
-        "-o",
-        control_path.as_str(),
-    ];
-    let log = format!("{path}.log");
-    let mut master = vec!["ssh", "-f", "-N", "-M", "-E", log.as_str()];
-    master.extend(options);
-    let ssh = format!("{} $ka {}", shell_quoted_line(&master), shell_quoted_line(&[host]));
-    // -N rides into the check: a `Match sessiontype` block answers the master's own session type
-    let mut probe = vec!["ssh", "-G", "-N"];
-    probe.extend(options);
-    probe.push(host);
-    let keep_alive = format!(
-        "ka=; {} 2>/dev/null | grep -qx {} && ka={}",
-        shell_quoted_line(&probe),
-        shell_quoted_line(&[NO_KEEP_ALIVE]),
-        shell_quoted_line(&[KEEP_ALIVE.join(" ")])
-    );
-    let script = format!(
-        "rm -f {}; {keep_alive}; exec {ssh} </dev/null >/dev/null 2>&1",
-        shell_quoted_line(&[path])
-    );
-    ["/bin/sh", "-c", script.as_str()].map(str::to_owned).to_vec()
 }
 
 /// Where the pools' master sockets live (upstream's `sshPoolRoot`): under `/tmp`, as a socket path caps near 104

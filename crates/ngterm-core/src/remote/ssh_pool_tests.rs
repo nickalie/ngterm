@@ -91,7 +91,7 @@ mod run {
 
     /// Runs `script` with an `ssh` whose master check exits `check` and whose attach prints `attached`; its output and
     /// status.
-    fn run(argv: &[&str], check: i32) -> (String, Option<i32>) {
+    fn run(argv: &[&str], check: i32) -> (String, String, Option<i32>) {
         let bin = tempfile::tempdir().unwrap();
         let ssh = bin.path().join("ssh");
         std::fs::write(
@@ -110,6 +110,7 @@ mod run {
             .unwrap();
         (
             String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
             output.status.code(),
         )
     }
@@ -126,7 +127,7 @@ mod run {
         )
         .unwrap();
 
-        let (output, status) = run(&["/bin/sh", "-c", &line], 0);
+        let (output, _, status) = run(&["/bin/sh", "-c", &line], 0);
 
         assert!(output.contains("attached"), "{output}");
         assert_eq!(status, Some(0));
@@ -142,9 +143,10 @@ mod run {
         let line = waiting_for_connection(&["ssh".to_owned(), "box".to_owned()], "buildbox", "/tmp/p-0");
         let script = line[2].replace("-ge 75", "-ge 1");
 
-        let (output, status) = run(&["/bin/sh", "-c", &script], 255);
+        let (output, errors, status) = run(&["/bin/sh", "-c", &script], 255);
 
-        assert_eq!(output, "ngterm: no connection to buildbox\n");
+        assert_eq!(output, "", "stdout is the stream's frames");
+        assert_eq!(errors, "ngterm: no connection to buildbox\n");
         assert_eq!(status, Some(255));
     }
 }

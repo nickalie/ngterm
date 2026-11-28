@@ -97,7 +97,7 @@ impl RemoteWindowViewState {
     }
 
     /// The view state of `store`'s rows (upstream's `capture`), keeping the views of the rows and workspaces its detach
-    /// hides; a row whose view is the default is left out.
+    /// hides; a shown row whose view is the default is left out, and a hidden row keeps its view, defaults included.
     #[must_use]
     pub fn capture(store: &AppStore) -> Self {
         let mut hidden_collapsed: Vec<Uuid> = store

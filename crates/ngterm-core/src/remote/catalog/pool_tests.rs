@@ -6,7 +6,8 @@ use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use super::{CHANNELS_PER_CONNECTION, SshConnectionPool, exit_command, hash, start_command};
+use super::{CHANNELS_PER_CONNECTION, SshConnectionPool, hash};
+use crate::remote::ssh::{exit_command, start_command};
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
 
 #[derive(Default)]
@@ -39,6 +40,14 @@ impl Fake {
 
     fn starts(&self) -> usize {
         self.masters().ran.iter().filter(|argv| argv[0] == "/bin/sh").count()
+    }
+
+    fn checks(&self) -> usize {
+        self.masters()
+            .ran
+            .iter()
+            .filter(|argv| argv.iter().any(|word| word == "check"))
+            .count()
     }
 
     /// Waits until a held check or start waits.
@@ -95,6 +104,19 @@ impl RemoteCommandRunner for Fake {
             stdout: String::new(),
             stderr: String::new(),
         }
+    }
+}
+
+/// Waits until `count` callers wait on starts in progress.
+fn until_waiting(pool: &SshConnectionPool, count: usize) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while pool.waiting() < count {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{} of {count} callers wait",
+            pool.waiting()
+        );
+        std::thread::yield_now();
     }
 }
 
@@ -155,17 +177,24 @@ fn retain_releases_only_the_absent_users_of_its_kind() {
 
 #[test]
 fn a_cold_open_starts_each_connection_once_however_many_users_arrive() {
-    let fake = Fake::with(|_| {});
+    let fake = Fake::with(|masters| masters.hold_starts = true);
     let pool = pool(&fake);
 
     for index in 0..20 {
         pool.lease(&format!("pane:{index}"));
         pool.lease(&format!("present:{index}"));
     }
+    until_waiting(&pool, 35);
+    fake.open_gate();
     pool.settle();
 
     assert_eq!(pool.load(), vec![8, 8, 8, 8, 8]);
     assert_eq!(fake.starts(), 5);
+    assert_eq!(
+        fake.checks(),
+        5,
+        "a user arriving during a start runs no check of its own"
+    );
 }
 
 #[test]
@@ -181,13 +210,14 @@ fn callers_arriving_during_a_start_share_it() {
             std::thread::spawn(move || pool.ready(&path))
         })
         .collect();
-    std::thread::sleep(Duration::from_millis(20));
+    until_waiting(&pool, 2);
     fake.open_gate();
     let results: Vec<bool> = waiters.into_iter().map(|waiter| waiter.join().unwrap()).collect();
     pool.settle();
 
     assert_eq!(results, vec![true, true]);
     assert_eq!(fake.starts(), 1);
+    assert_eq!(fake.checks(), 1);
 }
 
 #[test]

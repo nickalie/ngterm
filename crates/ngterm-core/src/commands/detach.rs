@@ -5,10 +5,9 @@
 use ngterm_proto::{ControlResult, Request};
 use uuid::Uuid;
 
-use super::args_of;
+use super::{args_of, with_affected, with_id};
 use crate::Core;
 use crate::error::{ControlError, Noun};
-use crate::pane_env::uuid_string;
 use crate::remote::catalog::DetachedKind;
 use crate::remote::catalog::actions::remote_window_only;
 use crate::resolve::{ACTIVE, Resolver, TargetResolution, resolution_error, resolve, trimmed};
@@ -40,7 +39,7 @@ pub(crate) fn detach_sessions(core: &mut Core, request: &Request) -> Result<Cont
         .filter(|window| core.remote.viewer.catalogs.contains_key(window))
         .ok_or_else(|| ControlError::rejected(remote_window_only("session.detach")))?;
     core.detach_sessions(window, &ids);
-    Ok(ControlResult::affected(i64::try_from(ids.len()).unwrap_or(i64::MAX)))
+    Ok(with_affected(ids.len()))
 }
 
 /// `session.reattach`: a detached session's id or unique prefix.
@@ -49,7 +48,7 @@ pub(crate) fn reattach_session(core: &mut Core, request: &Request) -> Result<Con
         .ok_or_else(|| ControlError::rejected("session.reattach requires a detached session's id"))?;
     let (window, id) = resolve_detached(core, request, target, DetachedKind::Session)?;
     core.reattach_session(window, id).map_err(ControlError::rejected)?;
-    Ok(ControlResult::id(uuid_string(id)))
+    Ok(with_id(id))
 }
 
 /// `workspace.detach`: the target workspace (default `active`) of a remote window.
@@ -69,7 +68,7 @@ pub(crate) fn reattach_workspace(core: &mut Core, request: &Request) -> Result<O
         .ok_or_else(|| ControlError::rejected("workspace.reattach requires a detached workspace's id"))?;
     let (window, id) = resolve_detached(core, request, target, DetachedKind::Workspace)?;
     core.reattach_workspace(window, id).map_err(ControlError::rejected)?;
-    Ok(Some(ControlResult::id(uuid_string(id))))
+    Ok(Some(with_id(id)))
 }
 
 /// A reattach's id or prefix; a hidden row is never `active`.
