@@ -67,7 +67,8 @@ vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
 A remote attach test takes `remote_origin` and `remote_viewer` (`agterm_conformance/remote_origin.py`). The origin is
 another instance of the build with Live on or, parametrized indirectly with `"headless"`, the staged
 `ngterm-headless`, behind an `sshd` of the harness's own on 127.0.0.1. The viewer's ssh reaches it as
-`remote_origin.host` and reads nothing of the account's ssh setup; `remote_origin.sever()` cuts the open links.
+`remote_origin.host` and reads nothing of the account's ssh setup; `remote_origin.sever()` cuts the open links,
+and `remote_origin.machine.unanswered()` is a block in which sshd answers no new login while open links carry on.
 The origin puts its private CLI first on the login PATH, before directories that the viewer appends.
 Without OpenSSH's server or the staged `ngterm-headless`, the tests skip with a reason.
 A CLI installed on sshd's bare PATH also stops the tests. Under `CI`, these cases end the run with exit 2.
