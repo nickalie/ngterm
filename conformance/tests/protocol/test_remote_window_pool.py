@@ -21,12 +21,17 @@ from agterm_conformance.plugin import Cli, Ctl
 from agterm_conformance.remote_origin import ORIGIN_HOST
 from agterm_conformance.wait import wait_until
 
-pytestmark = [
-    pytest.mark.skipif(sys.platform == "win32", reason="Windows' OpenSSH shares no connections"),
-    pytest.mark.requires("posix-command-line", reason="the private sshd uses a POSIX shell"),
-    pytest.mark.requires("live-any-shell", reason="ngterm-headless runs every session Live, in any login shell"),
-    pytest.mark.parametrize("remote_origin", ["headless"], indirect=True),
-]
+if sys.platform == "win32":
+    pytestmark = [
+        pytest.mark.skip(reason="Windows' OpenSSH shares no connections"),
+        pytest.mark.parametrize("remote_origin", ["headless"], indirect=True),
+    ]
+else:
+    pytestmark = [
+        pytest.mark.requires("posix-command-line", reason="the private sshd uses a POSIX shell"),
+        pytest.mark.requires("live-any-shell", reason="ngterm-headless runs every session Live, in any login shell"),
+        pytest.mark.parametrize("remote_origin", ["headless"], indirect=True),
+    ]
 
 # The window's first snapshot comes after an ssh `version` probe and an ssh catalog stream.
 CONNECT = 60.0
