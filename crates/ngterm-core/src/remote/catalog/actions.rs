@@ -15,6 +15,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::operation::{RemoteOperation, RemoteOperationTarget};
+use super::pool::{NOT_SENT, SshConnectionPool, run_pooled_off_thread};
 use super::stream::{CatalogState, CatalogStream};
 use crate::catalog::frames::CatalogSnapshot;
 use crate::catalog::operations::{CatalogPosition, outcome};
@@ -23,7 +24,7 @@ use crate::remote::origin_replies::COMPANION_DEADLINE;
 use crate::remote::peer::RemotePeer;
 use crate::remote::ssh;
 use crate::remote::tree::RemoteCommandRunner;
-use crate::remote::viewer::{Answer, run_off_thread, take_answer};
+use crate::remote::viewer::{Answer, take_answer};
 
 /// What the window's connection offers an action: its server, whether the stream is up, and the catalog it shows.
 #[derive(Clone, Copy)]
@@ -158,6 +159,8 @@ pub(crate) struct RemoteActions {
     stopped: bool,
     changed: bool,
     replies: HashMap<String, Response>,
+    /// The window's shared ssh connections, which each command rides.
+    pub(crate) pool: Option<SshConnectionPool>,
 }
 
 impl std::fmt::Debug for RemoteActions {
@@ -185,6 +188,13 @@ pub(crate) fn not_connected(host: &str) -> String {
 }
 
 impl RemoteActions {
+    pub(crate) fn with_pool(pool: Option<SshConnectionPool>) -> Self {
+        Self {
+            pool,
+            ..Self::default()
+        }
+    }
+
     /// Every operation still pending or unknown, oldest first.
     pub(crate) fn marks(&self) -> Vec<RemoteOperationMark> {
         let mut entries: Vec<(&String, &Entry)> = self.entries.iter().collect();
@@ -310,7 +320,7 @@ impl RemoteActions {
             prepared.sent.epoch.clone(),
         ]);
         let answer = command(link.host, &words, &operation.operands())
-            .and_then(|argv| run_off_thread(runner, argv, COMPANION_DEADLINE))
+            .and_then(|argv| run_pooled_off_thread(self.pool.as_ref(), &[], runner, argv, COMPANION_DEADLINE))
             .ok_or_else(|| format!("no connection to {}", link.host))?;
         self.next_order += 1;
         self.entries.insert(
@@ -339,6 +349,7 @@ impl RemoteActions {
         let sends = std::mem::take(&mut self.sends);
         for send in sends {
             match take_answer(&send.answer) {
+                Some(result) if result.status == NOT_SENT => finished.extend(self.not_sent(link, send)),
                 Some(result) => finished.extend(self.answered(link, runner, send, &result.stdout)),
                 None => self.sends.push(send),
             }
@@ -390,6 +401,23 @@ impl RemoteActions {
             asker: send.asker,
             response,
             created,
+        })
+    }
+
+    /// A send whose master never came up: it was never sent, so it leaves no mark (upstream's `notSent`).
+    fn not_sent(&mut self, link: Link<'_>, send: Outgoing) -> Option<Finished> {
+        let operation = self.entries.remove(&send.op_id)?.operation;
+        self.changed = true;
+        let response = Response::failure(format!("no connection to {}", link.host));
+        if send.asker == Asker::Control {
+            self.replies.insert(send.op_id.clone(), response.clone());
+        }
+        Some(Finished {
+            op_id: send.op_id,
+            operation,
+            asker: send.asker,
+            response,
+            created: None,
         })
     }
 
@@ -568,7 +596,7 @@ impl RemoteActions {
                 rev.as_str(),
             ];
             let answer = command(link.host, &words, &[] as &[String])
-                .and_then(|argv| run_off_thread(runner, argv, COMPANION_DEADLINE));
+                .and_then(|argv| run_pooled_off_thread(self.pool.as_ref(), &[], runner, argv, COMPANION_DEADLINE));
             if let Some(answer) = answer {
                 self.lookup = Some((op_id, answer));
             }

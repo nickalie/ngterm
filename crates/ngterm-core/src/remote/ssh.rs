@@ -445,7 +445,30 @@ pub fn attach_pane_command(
     label: PaneLabel<'_>,
     lead: Option<&LeadAttachment>,
 ) -> Result<String, InvocationError> {
-    let argv = attach_command(host, endpoint, daemon, lead)?;
+    pooled_attach_pane_command(host, endpoint, daemon, label, lead, None)
+}
+
+/// [`attach_pane_command`] riding the shared connection at `control_path` (upstream's `attachPaneCommand(controlPath:)`):
+/// the pane waits for that master and, when none comes up, fails as a lost connection (255) into its reconnect path,
+/// never opening a connection of its own. Without a path, or on Windows, which shares no connections, it is
+/// [`attach_pane_command`].
+///
+/// # Errors
+///
+/// As [`attach_command`].
+pub fn pooled_attach_pane_command(
+    host: &str,
+    endpoint: &ControlLiveEndpoint,
+    daemon: &str,
+    label: PaneLabel<'_>,
+    lead: Option<&LeadAttachment>,
+    control_path: Option<&str>,
+) -> Result<String, InvocationError> {
+    let control_path = control_path.filter(|_| !cfg!(windows));
+    let mut argv = attach_command(host, endpoint, daemon, lead)?;
+    if let Some(path) = control_path {
+        argv = pooled(argv, path);
+    }
     let report = format!(
         "ngterm: {} ({}) on {host} disconnected, exit",
         label.session, label.pane
@@ -462,12 +485,13 @@ pub fn attach_pane_command(
         }
         .line());
     }
-    Ok(posix_pane_command(&argv, &report, lost.as_ref()))
+    let wait = control_path.map(|path| (host, path));
+    Ok(posix_pane_command(&argv, &report, lost.as_ref(), wait))
 }
 
 /// [`attach_pane_command`]'s `/bin/sh` script. Its escapes are `printf`'s, so the command line holds no control
-/// character.
-fn posix_pane_command(argv: &[String], report: &str, lost: Option<&LostLink>) -> String {
+/// character. With `wait`, the host and control path of a shared connection, the attach runs once that master answers.
+fn posix_pane_command(argv: &[String], report: &str, lost: Option<&LostLink>, wait: Option<(&str, &str)>) -> String {
     // $ka is unquoted on purpose: four words or none
     let keep_alive = format!(
         "ka=; {} 2>/dev/null | grep -qx {} && ka={}",
@@ -483,14 +507,22 @@ fn posix_pane_command(argv: &[String], report: &str, lost: Option<&LostLink>) ->
     );
     // the pane exits with ssh's status, not printf's zero, or a failed connection reads as a clean one
     let report = format!("printf '%s %s\\n' {} \"$status\"", shell_quoted_line(&[report]));
+    let prelude = wait.map_or_else(String::new, |(host, path)| format!("{}; ", connection_wait(host, path)));
+    // a pooled pane waits for its master; one that never came up is a lost connection, so 255
+    let attach = if wait.is_some() {
+        format!("if ngterm_connection_wait; then {attach}; status=$?; else status={SSH_LOST}; fi")
+    } else {
+        format!("{attach}; status=$?")
+    };
+    let keep_alive = format!("{prelude}{keep_alive}");
     let script = match lost {
-        None => format!("{keep_alive}; {attach}; status=$?; {report}; exit \"$status\""),
+        None => format!("{keep_alive}; {attach}; {report}; exit \"$status\""),
         Some(lost) => {
             let bar = shell_quoted_line(&[lost.bar.as_str()]);
             let title = shell_quoted_line(&[lost.title.as_str()]);
             let reset = LOST_RESET.replace('\x1b', "\\033");
             format!(
-                "{keep_alive}; {attach}; status=$?; if [ \"$status\" -eq {SSH_LOST} ]; then \
+                "{keep_alive}; {attach}; if [ \"$status\" -eq {SSH_LOST} ]; then \
                  printf '{reset}\\r\\n\\033[30;43m %s \\033[K\\033[0m\\n' {bar}; printf '\\033]2;%s\\007' {title}; \
                  printf '\\033[?25l'; stty -echo 2>/dev/null; cat >/dev/null; else {report}; fi; exit \"$status\""
             )
@@ -498,6 +530,49 @@ fn posix_pane_command(argv: &[String], report: &str, lost: Option<&LostLink>) ->
     };
     // `env` takes the exec a terminal runs its command under, and a plain `sh` beneath it reads no login profile
     shell_quoted_line(&["/usr/bin/env", "/bin/sh", "-c", script.as_str()])
+}
+
+/// `argv`, one ssh invocation built on [`ssh_arguments`], riding the shared connection at `control_path` (upstream's
+/// `sshArguments(controlPath:)`): it joins that master, or becomes one when none answers, and the master outlives it
+/// for a minute.
+#[must_use]
+pub fn pooled(mut argv: Vec<String>, control_path: &str) -> Vec<String> {
+    let at = argv.len().saturating_sub(2);
+    let options = [
+        "-o".to_owned(),
+        "ControlMaster=auto".to_owned(),
+        "-o".to_owned(),
+        format!("ControlPath={control_path}"),
+        "-o".to_owned(),
+        "ControlPersist=60".to_owned(),
+    ];
+    argv.splice(at..at, options);
+    argv
+}
+
+/// Shell that defines `ngterm_connection_wait` (upstream's `connectionWait`), for a command the app cannot hold back
+/// until the pool has its master up: it polls the master for 15 s and returns 255, ssh's own failure, when none came
+/// up, so the caller fails into its reconnect path rather than open a connection of its own.
+#[must_use]
+pub fn connection_wait(host: &str, control_path: &str) -> String {
+    let check = shell_quoted_line(&super::catalog::pool::check_command(host, control_path));
+    format!(
+        "ngterm_connection_wait() {{ i=0; while ! {check} 2>/dev/null; do i=$((i+1)); \
+         [ \"$i\" -ge 75 ] && return {SSH_LOST}; sleep 0.2; done; }}"
+    )
+}
+
+/// `argv` run once the master at `control_path` answers (upstream's `waitingForConnection`); without one it says so
+/// and exits 255, so a stream's own retry asks again.
+#[must_use]
+pub fn waiting_for_connection(argv: &[String], host: &str, control_path: &str) -> Vec<String> {
+    let failed = shell_quoted_line(&[format!("ngterm: no connection to {host}").as_str()]);
+    let script = format!(
+        "{}; ngterm_connection_wait || {{ printf '%s\\n' {failed}; exit {SSH_LOST}; }}; exec {}",
+        connection_wait(host, control_path),
+        shell_quoted_line(argv)
+    );
+    ["/bin/sh", "-c", script.as_str()].map(str::to_owned).to_vec()
 }
 
 /// One ssh invocation that only proves the host answers again, before a waiting pane is attached anew (upstream's
@@ -1619,3 +1694,7 @@ mod tests {
 #[cfg(test)]
 #[path = "ssh_agterm_tests.rs"]
 mod agterm_tests;
+
+#[cfg(test)]
+#[path = "ssh_pool_tests.rs"]
+mod pool_tests;

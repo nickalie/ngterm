@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use ngterm_proto::EventKind;
 use uuid::Uuid;
 
+use super::catalog::pool::{PooledTransport, SshConnectionPool, pane_user, present_user, run_pooled_off_thread};
 use super::client::{ClientEffect, LinkKey, PresentationClient, PresentationTransport};
 use super::frames::{
     Body, PresentationAsk, PresentationAskAnswer, PresentationAskRef, PresentationHud, PresentationNotify,
@@ -39,6 +40,19 @@ const POLL: Duration = Duration::from_millis(100);
 
 /// The answer slot of a command run off the main thread.
 pub(crate) type Answer = Arc<Mutex<Option<RemoteCommandResult>>>;
+
+/// The transport row `session`'s stream rides over `pool`.
+fn row_transport<'a>(
+    pool: &'a SshConnectionPool,
+    session: Uuid,
+    inner: &'a dyn PresentationTransport,
+) -> PooledTransport<'a> {
+    PooledTransport {
+        pool,
+        user: present_user(session),
+        inner,
+    }
+}
 
 /// Runs `argv` on a thread of its own through `runner`; the slot fills when it is done. `None` when no thread starts.
 pub(crate) fn run_off_thread(
@@ -127,6 +141,8 @@ struct Probe {
 pub(crate) struct ViewerRuntime {
     clients: HashMap<Uuid, PresentationClient>,
     pub(super) transport: Option<Rc<dyn PresentationTransport>>,
+    /// Where remote windows' shared ssh connections keep their sockets; `None` runs them without a pool.
+    pub(crate) ssh_pool_root: Option<std::path::PathBuf>,
     pub(crate) reconnects: ReconnectBook,
     probes: Vec<Probe>,
     replicas: HashMap<Uuid, Vec<ReplicaOverlay>>,
@@ -166,6 +182,15 @@ pub(crate) struct ViewerRuntime {
     pub(crate) catalogs: HashMap<Uuid, super::catalog::run::CatalogRun>,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.
     pub(super) last_client: u64,
+}
+
+impl ViewerRuntime {
+    pub(super) fn with_pool_root(ssh_pool_root: Option<std::path::PathBuf>) -> Self {
+        Self {
+            ssh_pool_root,
+            ..Self::default()
+        }
+    }
 }
 
 impl std::fmt::Debug for ViewerRuntime {
@@ -264,10 +289,14 @@ impl Core {
             let Some(transport) = self.remote.viewer.transport.clone() else {
                 break;
             };
+            let pool = self.catalog_pool(session);
             let Some(client) = self.remote.viewer.clients.get_mut(&session) else {
                 continue;
             };
-            let effects = client.tick(transport.as_ref(), now);
+            let effects = match &pool {
+                Some(pool) => client.tick(&row_transport(pool, session, transport.as_ref()), now),
+                None => client.tick(transport.as_ref(), now),
+            };
             self.apply_client_effects(session, effects);
         }
         self.tick_catalogs(now);
@@ -477,7 +506,11 @@ impl Core {
             tracing::debug!(%session, "no presentation transport installed");
             return;
         };
-        let effects = client.start(transport.as_ref(), Instant::now());
+        // a catalog row's stream rides its window's shared connections (upstream's `PooledTransport`)
+        let effects = match self.catalog_pool(session) {
+            Some(pool) => client.start(&row_transport(&pool, session, transport.as_ref()), Instant::now()),
+            None => client.start(transport.as_ref(), Instant::now()),
+        };
         self.remote.viewer.clients.insert(session, client);
         self.apply_client_effects(session, effects);
     }
@@ -485,6 +518,9 @@ impl Core {
     pub(crate) fn stop_remote_presentation(&mut self, session: Uuid) {
         if let Some(mut client) = self.remote.viewer.clients.remove(&session) {
             client.stop();
+        }
+        if let Some(pool) = self.catalog_pool(session) {
+            pool.release(&present_user(session));
         }
         self.modals.drop_replica_picks(session);
     }
@@ -1063,9 +1099,14 @@ impl Core {
                 .filter(|entry| self.waiting_surface(pane, entry.session))
                 .and_then(|entry| {
                     let argv = super::ssh::probe_command(&entry.host).ok()?;
-                    Some((argv, super::connect_timeout::after_connect(&entry.host, PROBE_DEADLINE)))
+                    let deadline = super::connect_timeout::after_connect(&entry.host, PROBE_DEADLINE);
+                    Some((argv, deadline, entry.session))
                 });
-            let answer = argv.and_then(|(argv, deadline)| run_off_thread(&self.remote.runner, argv, deadline));
+            // a catalog pane reconnects through its pool, whose master comes back once for all its panes
+            let answer = argv.and_then(|(argv, deadline, session)| {
+                let pool = self.catalog_pool(session);
+                run_pooled_off_thread(pool.as_ref(), &[], &self.remote.runner, argv, deadline)
+            });
             match answer {
                 Some(answer) => self.remote.viewer.probes.push(Probe { pane, answer }),
                 None => self.remote.viewer.reconnects.cancel(pane),
@@ -1169,8 +1210,17 @@ impl Core {
             session: &origin.session_name,
             pane: role.wire_name(),
         };
-        let Ok(command) = super::ssh::attach_pane_command(&origin.host, &origin.endpoint, daemon, label, Some(&lead))
-        else {
+        // a catalog pane's attach rides its window's pool (upstream's `PaneLead.catalogChannel`)
+        let channel = self.catalog_pool(session).map(|pool| pool.lease(&pane_user(pane)));
+        let attach = super::ssh::pooled_attach_pane_command(
+            &origin.host,
+            &origin.endpoint,
+            daemon,
+            label,
+            Some(&lead),
+            channel.as_deref(),
+        );
+        let Ok(command) = attach else {
             return false;
         };
         let env = crate::attach_bridge::launch_nonce(&origin.endpoint, &lead)

@@ -40,9 +40,22 @@ struct Runner {
     created: Mutex<Option<Uuid>>,
     lose: AtomicBool,
     refuse: Mutex<Option<String>>,
+    /// No shared connection's master comes up.
+    masters_down: AtomicBool,
+}
+
+/// Whether `argv` checks, starts or ends a shared connection's master rather than run a command on the server.
+fn master_command(argv: &[String]) -> bool {
+    argv.first().is_some_and(|word| word == "/bin/sh") || argv.get(1).is_some_and(|word| word == "-O")
 }
 
 impl Runner {
+    /// The commands run on the server so far; the shared connections' own commands are left out.
+    fn remote_runs(&self) -> Vec<Vec<String>> {
+        let runs = self.runs.lock().unwrap();
+        runs.iter().filter(|argv| !master_command(argv)).cloned().collect()
+    }
+
     /// The remote lines run so far, quotes left out.
     fn lines(&self) -> Vec<String> {
         let runs = self.runs.lock().unwrap();
@@ -74,6 +87,13 @@ impl Runner {
 impl RemoteCommandRunner for Runner {
     fn run(&self, argv: &[String], _deadline: Duration) -> RemoteCommandResult {
         self.runs.lock().unwrap().push(argv.to_vec());
+        if master_command(argv) && self.masters_down.load(Ordering::SeqCst) {
+            return RemoteCommandResult {
+                status: 255,
+                stdout: String::new(),
+                stderr: String::new(),
+            };
+        }
         let line = argv
             .last()
             .map_or_else(String::new, |line| line.replace(['\'', '\\'], ""));
@@ -146,6 +166,7 @@ impl Remote {
             created: Mutex::new(None),
             lose: AtomicBool::new(false),
             refuse: Mutex::new(None),
+            masters_down: AtomicBool::new(false),
         });
         fixture.core.set_remote_runner(runner.clone());
         let transport = Rc::new(Transport::default());
@@ -304,16 +325,16 @@ fn opening_a_remote_window_needs_a_host_ssh_can_be_given() {
 #[test]
 fn a_server_that_advertises_a_catalog_gets_the_stream_opened_with_hello() {
     let remote = Remote::opened(&server_version());
-    let runs = remote.runner.runs.lock().unwrap().clone();
+    let runs = remote.runner.remote_runs();
     assert_eq!(runs.len(), 1);
     assert!(runs[0].last().unwrap().contains("version"), "{runs:?}");
     let link = remote.link();
     let link = link.0.borrow();
-    assert_eq!(
-        link.argv.last(),
-        Some(&crate::remote::ssh::catalog_tail(
-            crate::remote::origin::OriginShell::Posix
-        ))
+    let tail = crate::remote::ssh::catalog_tail(crate::remote::origin::OriginShell::Posix);
+    let script = link.argv.last().unwrap();
+    assert!(
+        script.contains(&crate::command_restore::shell_quoted_line(&[tail.as_str()])),
+        "{script}"
     );
     assert_eq!(link.key.unwrap().session, remote.window);
     assert_eq!(link.sent, vec![json!({"kind": "hello", "hello": {"version": 1}})]);
@@ -355,7 +376,7 @@ fn an_origin_with_no_catalog_is_refused_and_no_stream_is_opened() {
         .fixture
         .core
         .remote_tick(Instant::now() + Duration::from_secs(120));
-    assert_eq!(remote.runner.runs.lock().unwrap().len(), 1);
+    assert_eq!(remote.runner.remote_runs().len(), 1);
 }
 
 #[test]
@@ -387,7 +408,13 @@ fn an_unreachable_server_stays_disconnected_and_retries_after_the_backoff() {
     *remote.runner.version.lock().unwrap() = answer(&server_version());
     remote.fixture.core.remote_tick(Instant::now() + Duration::from_secs(2));
     remote.settle();
-    assert_eq!(remote.runner.runs.lock().unwrap().len(), 2);
+    let expected = if remote.fixture.core.remote.viewer.ssh_pool_root.is_some() {
+        // with no master up, the first probe was never sent
+        1
+    } else {
+        2
+    };
+    assert_eq!(remote.runner.remote_runs().len(), expected);
     assert_eq!(remote.streams().len(), 1, "the retry's probe opened the stream");
 }
 
@@ -1135,3 +1162,8 @@ mod actions;
 
 #[path = "remote_window_detach.rs"]
 mod detach;
+
+// Windows' OpenSSH shares no connections, so a Windows viewer has no pool
+#[cfg(unix)]
+#[path = "remote_window_pool.rs"]
+mod pool;

@@ -215,7 +215,7 @@ impl Default for PresentationRuntime {
             published: HashMap::new(),
             huds: HashMap::new(),
             runner: Arc::new(ProcessRemoteRunner),
-            viewer: viewer::ViewerRuntime::default(),
+            viewer: viewer::ViewerRuntime::with_pool_root(catalog::pool::default_root()),
             remotes: remotes::RemotesState::default(),
             page_serve: page_serve::PageServeRuntime::default(),
             respawns: respawn::OriginRespawns::default(),

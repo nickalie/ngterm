@@ -13,6 +13,7 @@ use ngterm_proto::{ControlRemoteWindow, ControlResult, Request, Response, Versio
 use uuid::Uuid;
 
 use super::actions::RemoteActions;
+use super::pool::{SshConnectionPool, pane_user, run_pooled_off_thread};
 use super::stream::{CatalogState, CatalogStream};
 use super::view_state::RemoteWindowViewState;
 use super::{PROBE_DEADLINE, SILENCE_LIMIT, retry_delay};
@@ -37,6 +38,11 @@ const OPEN_POLL: Duration = Duration::from_millis(50);
 /// How many looks it takes before answering anyway: 20 s, the probe's deadline with room to spare.
 const OPEN_POLLS: u32 = 400;
 
+/// The pool user the catalog stream and the `version` probe's master hold.
+const CATALOG_USER: &str = "catalog";
+/// How long a closing window's `ssh -O exit` may take.
+const POOL_EXIT_DEADLINE: Duration = Duration::from_secs(5);
+
 const OPEN_REQUIRES_HOST: &str = "window.remote.open requires a host";
 const NOT_A_HOST: &str = "window.remote.open: not a host ssh can be given";
 
@@ -53,6 +59,8 @@ pub(crate) struct CatalogRun {
     probe: Option<Answer>,
     last_frame: Instant,
     pub(crate) actions: RemoteActions,
+    /// The window's shared ssh connections; `None` on Windows.
+    pub(crate) pool: Option<SshConnectionPool>,
     /// A created row to select once the catalog brings it, unless the selection moved from the baseline.
     pub(crate) pending_selection: Option<(Uuid, Option<Uuid>)>,
 }
@@ -73,7 +81,14 @@ impl CatalogRun {
         self.client
     }
 
-    fn new(window: Uuid, client: u64, host: &str, view: RemoteWindowViewState, now: Instant) -> Self {
+    fn new(
+        window: Uuid,
+        client: u64,
+        host: &str,
+        view: RemoteWindowViewState,
+        pool: Option<SshConnectionPool>,
+        now: Instant,
+    ) -> Self {
         Self {
             window,
             client,
@@ -85,7 +100,8 @@ impl CatalogRun {
             retry_at: None,
             probe: None,
             last_frame: now,
-            actions: RemoteActions::default(),
+            actions: RemoteActions::with_pool(pool.clone()),
+            pool,
             pending_selection: None,
         }
     }
@@ -105,7 +121,10 @@ impl CatalogRun {
             self.stream.refuse(NOT_A_HOST.to_owned());
             return;
         };
-        match run_off_thread(runner, argv, PROBE_DEADLINE) {
+        // the stream's master comes up first, so the probe and everything the snapshot attaches share it; without one
+        // the attempt fails here rather than connect on its own
+        let first: Vec<String> = self.pool.iter().map(|pool| pool.lease(CATALOG_USER)).collect();
+        match run_pooled_off_thread(self.pool.as_ref(), &first, runner, argv, PROBE_DEADLINE) {
             Some(answer) => self.probe = Some(answer),
             None => self.lost(self.no_answer(), now),
         }
@@ -136,9 +155,13 @@ impl CatalogRun {
 
     /// Subscribes: the stream opens with this window's hello, which asks for no page rows.
     fn open(&mut self, transport: Option<&dyn PresentationTransport>, now: Instant) {
-        let (Some(transport), Ok(argv)) = (transport, ssh::catalog_command(self.stream.host())) else {
+        let (Some(transport), Ok(mut argv)) = (transport, ssh::catalog_command(self.stream.host())) else {
             return;
         };
+        if let Some(pool) = &self.pool {
+            let path = pool.lease(CATALOG_USER);
+            argv = ssh::waiting_for_connection(&ssh::pooled(argv, &path), self.stream.host(), &path);
+        }
         self.stream.subscribing();
         self.launch += 1;
         self.last_frame = now;
@@ -260,12 +283,28 @@ impl CatalogRun {
         self.drop_link();
         self.actions.stop();
     }
+
+    /// Ends the stream and every retry, and the window's shared connections with them: the window closed.
+    fn close(&mut self, runner: &Arc<dyn RemoteCommandRunner>) {
+        self.stop();
+        for command in self.pool.as_ref().map(SshConnectionPool::close).unwrap_or_default() {
+            let _ended = run_off_thread(runner, command, POOL_EXIT_DEADLINE);
+        }
+    }
 }
 
 /// The commands a remote window's panes run, and the leads their attaches register.
 struct RowCommands<'a> {
     host: &'a str,
     leads: Vec<(Uuid, LeadAttachment)>,
+    pool: Option<&'a SshConnectionPool>,
+}
+
+impl RowCommands<'_> {
+    /// The control path pane `pane`'s attach rides (its lease kept while the catalog lists it).
+    fn channel(&self, pane: &CatalogPane) -> Option<String> {
+        self.pool.map(|pool| pool.lease(&pane_user(pane.identity)))
+    }
 }
 
 impl CatalogRowCommands for RowCommands<'_> {
@@ -277,7 +316,16 @@ impl CatalogRowCommands for RowCommands<'_> {
             session: &pane.daemon,
             pane: "left",
         };
-        let Ok(command) = ssh::attach_pane_command(self.host, &pane.endpoint, &pane.daemon, label, Some(&lead)) else {
+        let path = self.channel(pane);
+        let attach = ssh::pooled_attach_pane_command(
+            self.host,
+            &pane.endpoint,
+            &pane.daemon,
+            label,
+            Some(&lead),
+            path.as_deref(),
+        );
+        let Ok(command) = attach else {
             tracing::error!(host = %self.host, pane = %pane.identity, "a remote window's server listed a pane ngterm cannot address");
             return unaddressable(&format!("ngterm: {} listed a pane ngterm cannot address", self.host));
         };
@@ -290,7 +338,8 @@ impl CatalogRowCommands for RowCommands<'_> {
             session: "scratch",
             pane: "left",
         };
-        ssh::attach_pane_command(self.host, &pane.endpoint, &pane.daemon, label, None)
+        let path = self.channel(pane);
+        ssh::pooled_attach_pane_command(self.host, &pane.endpoint, &pane.daemon, label, None, path.as_deref())
             .unwrap_or_else(|_| unaddressable(&format!("ngterm: {} listed a scratch ngterm cannot address", self.host)))
     }
 
@@ -339,7 +388,7 @@ impl Core {
             .collect();
         for window in gone {
             if let Some(mut run) = self.remote.viewer.catalogs.remove(&window) {
-                run.stop();
+                run.close(&self.remote.runner);
             }
         }
         for window in open {
@@ -362,12 +411,35 @@ impl Core {
             store.catalog_detached_sessions = view.detached_sessions.iter().copied().collect();
             store.catalog_detached_workspaces = view.detached_workspaces.iter().copied().collect();
         }
+        let pool = self.remote_window_pool(window, &host);
         let now = (self.remote.clock)();
         self.remote.viewer.last_client += 1;
-        let mut run = CatalogRun::new(window, self.remote.viewer.last_client, &host, view, now);
+        let mut run = CatalogRun::new(window, self.remote.viewer.last_client, &host, view, pool, now);
         run.connect(&self.remote.runner, now);
         self.remote.viewer.catalogs.insert(window, run);
         self.catalog_state_changed(window);
+    }
+
+    /// Window `window`'s shared ssh connections, keyed by the state directory and the window so two windows or two
+    /// state directories never share a master; `None` without a pool root, or one that cannot be made.
+    fn remote_window_pool(&self, window: Uuid, host: &str) -> Option<SshConnectionPool> {
+        let root = self.remote.viewer.ssh_pool_root.as_deref()?;
+        if !super::pool::prepare_root(root) {
+            tracing::warn!(root = %root.display(), "remote window runs without shared ssh connections");
+            return None;
+        }
+        let state = self
+            .persistence
+            .as_ref()
+            .map(|persistence| persistence.directory().display().to_string())
+            .unwrap_or_default();
+        let key = format!("{state}|{}", uuid_string(window));
+        Some(SshConnectionPool::new(
+            host,
+            root,
+            &key,
+            Arc::clone(&self.remote.runner),
+        ))
     }
 
     /// A line of a remote window's stream; false when `key` names no remote window's current client.
@@ -456,7 +528,7 @@ impl Core {
     /// Ends every remote window's stream (the quit path).
     pub(crate) fn shutdown_catalogs(&mut self) {
         for run in self.remote.viewer.catalogs.values_mut() {
-            run.stop();
+            run.close(&self.remote.runner);
         }
     }
 
@@ -473,7 +545,7 @@ impl Core {
     /// `window` goes.
     fn settle_duplicate_window(&mut self, window: Uuid, other: Uuid) {
         if let Some(mut run) = self.remote.viewer.catalogs.remove(&window) {
-            run.stop();
+            run.close(&self.remote.runner);
         }
         self.open_window(other);
         self.request_window(WindowRequest::Raise(other));
@@ -518,9 +590,16 @@ impl Core {
             .sessions()
             .map(|session| (session.id(), session.presents_catalog()))
             .collect();
+        let pool = self
+            .remote
+            .viewer
+            .catalogs
+            .get(&window)
+            .and_then(|run| run.pool.clone());
         let mut commands = RowCommands {
             host: &host,
             leads: Vec::new(),
+            pool: pool.as_ref(),
         };
         mirror_rows(store, &shown, catalog.versions.protocol, &view, &mut commands);
         if let Some(run) = self.remote.viewer.catalogs.get_mut(&window)
@@ -546,6 +625,19 @@ impl Core {
             self.live.leads.begin(identity, lead, false);
         }
         self.follow_remote_rows(streams);
+        // a pane the shown catalog dropped gives its channel back; the attaches above leased the ones it lists
+        if let Some(pool) = &pool {
+            let panes = shown
+                .iter()
+                .flat_map(|workspace| &workspace.sessions)
+                .flat_map(|session| {
+                    let scratch = session.fields.scratch.as_ref().map(|scratch| &scratch.pane);
+                    session.panes.iter().chain(scratch)
+                })
+                .map(|pane| pane_user(pane.identity))
+                .collect();
+            pool.retain(&panes, "pane:");
+        }
         if forgot {
             self.save_window_checked(window);
         }
@@ -582,6 +674,7 @@ impl Core {
         else {
             return false;
         };
+        let pool = self.catalog_pool(session);
         let Some(store) = self.library.store_for_session_mut(session) else {
             return false;
         };
@@ -594,9 +687,24 @@ impl Core {
         let mut commands = RowCommands {
             host: &host,
             leads: Vec::new(),
+            pool: pool.as_ref(),
         };
         store.replace_scratch_surface(session, commands.scratch(&listed));
         true
+    }
+
+    /// The shared ssh connections of the remote window holding catalog row `session` (upstream's `catalogPool`);
+    /// `None` for any other row.
+    pub(crate) fn catalog_pool(&self, session: Uuid) -> Option<SshConnectionPool> {
+        let found = self.library.held_session(session)?;
+        let catalog_owned = found
+            .remote_presentation()
+            .is_some_and(|state| state.binding.catalog_owned);
+        if !catalog_owned {
+            return None;
+        }
+        let window = self.library.window_id_for_session(session)?;
+        self.remote.viewer.catalogs.get(&window)?.pool.clone()
     }
 
     /// The scratch the catalog of row `session`'s remote window lists for it, with that window's host.

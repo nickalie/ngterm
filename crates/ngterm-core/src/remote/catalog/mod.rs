@@ -20,6 +20,7 @@ pub(crate) mod actions;
 pub mod detach;
 mod gestures;
 pub mod operation;
+pub mod pool;
 pub(crate) mod request;
 mod route;
 pub(crate) mod run;
